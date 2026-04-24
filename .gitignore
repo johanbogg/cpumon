@@ -1,0 +1,8 @@
+bin/
+obj/
+*.user
+.vs/
+*.pfx
+approved_clients.json
+client_auth.json
+cpumon_server.log

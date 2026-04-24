@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="cpumon.client/cpumon.client.csproj" />
+  <Project Path="cpumon.server/cpumon.server.csproj" />
+  <Project Path="cpumon.shared/cpumon.shared.csproj" />
+</Solution>
