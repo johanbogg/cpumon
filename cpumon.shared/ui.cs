@@ -1,0 +1,395 @@
+// "ui.cs"
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Management;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Net.Security;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using LibreHardwareMonitor.Hardware;
+using System.ServiceProcess;
+
+// ═══════════════════════════════════════════════════
+//  Theme & drawing helpers
+// ═══════════════════════════════════════════════════
+public static class Th
+{
+    public static readonly Color Bg = Color.FromArgb(18, 18, 22);
+    public static readonly Color TBg = Color.FromArgb(22, 22, 28);
+    public static readonly Color Card = Color.FromArgb(36, 36, 44);
+    public static readonly Color Brd = Color.FromArgb(55, 55, 65);
+    public static readonly Color Blu = Color.FromArgb(80, 160, 255);
+    public static readonly Color Grn = Color.FromArgb(80, 220, 140);
+    public static readonly Color Org = Color.FromArgb(255, 180, 60);
+    public static readonly Color Red = Color.FromArgb(255, 80, 80);
+    public static readonly Color Yel = Color.FromArgb(255, 220, 80);
+    public static readonly Color Dim = Color.FromArgb(140, 140, 155);
+    public static readonly Color Brt = Color.FromArgb(230, 230, 240);
+    public static readonly Color Cyan = Color.FromArgb(80, 220, 240);
+    public static readonly Color Mag = Color.FromArgb(200, 120, 255);
+
+    public static Color LdC(float p) => p switch { > 90 => Red, > 70 => Org, > 40 => Blu, _ => Grn };
+    public static Color TpC(float c) => c switch { > 90 => Red, > 75 => Org, > 55 => Blu, _ => Grn };
+
+    public static string F(float? v, string f, string s) =>
+        v.HasValue && v.Value > 0 ? v.Value.ToString(f, CultureInfo.InvariantCulture) + " " + s : "N/A";
+
+    public static string FF(float? m)
+    {
+        if (!m.HasValue || m <= 0) return "N/A";
+        return m.Value > 1000
+            ? (m.Value / 1000f).ToString("0.00", CultureInfo.InvariantCulture) + " GHz"
+            : m.Value.ToString("0", CultureInfo.InvariantCulture) + " MHz";
+    }
+
+    public static GraphicsPath RR(int x, int y, int w, int h, int r)
+    {
+        var p = new GraphicsPath();
+        int d = r * 2;
+        p.AddArc(x, y, d, d, 180, 90);
+        p.AddArc(x + w - d, y, d, d, 270, 90);
+        p.AddArc(x + w - d, y + h - d, d, d, 0, 90);
+        p.AddArc(x, y + h - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
+    }
+
+    public static (Label close, Label min) MkWB(Form f)
+    {
+        var close = new Label
+        {
+            Text = "✕", Font = new Font("Segoe UI", 12f, FontStyle.Bold), ForeColor = Dim,
+            Size = new Size(32, 32), TextAlign = ContentAlignment.MiddleCenter, Cursor = Cursors.Hand,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right, BackColor = Color.Transparent
+        };
+        close.MouseEnter += (_, _) => { close.ForeColor = Red; close.BackColor = Color.FromArgb(40, Red); };
+        close.MouseLeave += (_, _) => { close.ForeColor = Dim; close.BackColor = Color.Transparent; };
+
+        var min = new Label
+        {
+            Text = "─", Font = new Font("Segoe UI", 12f, FontStyle.Bold), ForeColor = Dim,
+            Size = new Size(32, 32), TextAlign = ContentAlignment.MiddleCenter, Cursor = Cursors.Hand,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right, BackColor = Color.Transparent
+        };
+        min.MouseEnter += (_, _) => { min.ForeColor = Brt; min.BackColor = Color.FromArgb(40, Brt); };
+        min.MouseLeave += (_, _) => { min.ForeColor = Dim; min.BackColor = Color.Transparent; };
+        min.Click += (_, _) => f.WindowState = FormWindowState.Minimized;
+
+        return (close, min);
+    }
+
+    public static void LB(Panel tp, Label c, Label m)
+    {
+        c.Location = new Point(tp.Width - c.Width - 4, (tp.Height - c.Height) / 2);
+        m.Location = new Point(c.Left - m.Width - 2, c.Top);
+    }
+}
+
+// ═══════════════════════════════════════════════════
+//  Remote Desktop Viewer (shown on server/PAW side)
+// ═══════════════════════════════════════════════════
+public sealed class RdpViewerDialog : Form
+{
+    readonly Action<ServerCommand> _sendCmd;
+    readonly Action? _onClose;
+    readonly string _rdpId;
+    readonly string _targetName;
+    readonly PictureBox _canvas;
+    readonly Label _statusLbl;
+    readonly TrackBar _fpsSlider, _qualitySlider;
+    Bitmap? _framebuffer;
+    readonly object _fbLock = new();
+    long _lastSeq;
+    int _remoteW, _remoteH;
+    long _frameCount;
+    readonly Stopwatch _fpsSw = Stopwatch.StartNew();
+    bool _inputEnabled = true;
+
+    public string RdpId => _rdpId;
+
+    public RdpViewerDialog(string targetName, string rdpId, Action<ServerCommand> sendCmd, Action? onClose = null)
+    {
+        _targetName = targetName;
+        _rdpId = rdpId;
+        _sendCmd = sendCmd;
+        _onClose = onClose;
+
+        Text = $"🖥 Remote Desktop — {targetName}";
+        Size = new Size(1040, 640);
+        MinimumSize = new Size(640, 400);
+        StartPosition = FormStartPosition.CenterScreen;
+        BackColor = Color.Black;
+        ForeColor = Th.Brt;
+        FormBorderStyle = FormBorderStyle.Sizable;
+        KeyPreview = true;
+        DoubleBuffered = true;
+
+        // Top bar
+        var top = new Panel { Dock = DockStyle.Top, Height = 36, BackColor = Th.TBg };
+        top.Controls.Add(new Label
+        {
+            Text = $"🖥 {targetName}", ForeColor = Th.Cyan,
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            AutoSize = true, Location = new Point(8, 8)
+        });
+
+        _statusLbl = new Label
+        {
+            Text = "Connecting...", ForeColor = Th.Dim,
+            Font = new Font("Segoe UI", 7.5f), AutoSize = true,
+            Location = new Point(200, 10)
+        };
+        top.Controls.Add(_statusLbl);
+
+        top.Controls.Add(new Label { Text = "FPS:", ForeColor = Th.Dim, Font = new Font("Segoe UI", 7.5f), AutoSize = true, Location = new Point(400, 10) });
+        _fpsSlider = new TrackBar { Minimum = 1, Maximum = 30, Value = Proto.RdpFpsDefault, TickFrequency = 5, SmallChange = 1, Size = new Size(100, 20), Location = new Point(430, 4), BackColor = Th.TBg };
+        _fpsSlider.ValueChanged += (_, _) => _sendCmd(new ServerCommand { Cmd = "rdp_set_fps", RdpId = _rdpId, RdpFps = _fpsSlider.Value });
+        top.Controls.Add(_fpsSlider);
+
+        top.Controls.Add(new Label { Text = "Q:", ForeColor = Th.Dim, Font = new Font("Segoe UI", 7.5f), AutoSize = true, Location = new Point(540, 10) });
+        _qualitySlider = new TrackBar { Minimum = 10, Maximum = 95, Value = Proto.RdpJpegQuality, TickFrequency = 10, SmallChange = 5, Size = new Size(100, 20), Location = new Point(558, 4), BackColor = Th.TBg };
+        _qualitySlider.ValueChanged += (_, _) => _sendCmd(new ServerCommand { Cmd = "rdp_set_quality", RdpId = _rdpId, RdpQuality = _qualitySlider.Value });
+        top.Controls.Add(_qualitySlider);
+
+        var inputChk = new CheckBox { Text = "Input", ForeColor = Th.Grn, Checked = true, AutoSize = true, Location = new Point(670, 8), FlatStyle = FlatStyle.Flat, BackColor = Th.TBg };
+        inputChk.CheckedChanged += (_, _) => _inputEnabled = inputChk.Checked;
+        top.Controls.Add(inputChk);
+
+        var refreshBtn = new Button
+        {
+            Text = "⟳ Full", ForeColor = Th.Blu, BackColor = Th.Card,
+            FlatStyle = FlatStyle.Flat, Size = new Size(60, 24), Location = new Point(740, 5), Cursor = Cursors.Hand,
+            Font = new Font("Segoe UI", 7.5f, FontStyle.Bold)
+        };
+        refreshBtn.FlatAppearance.BorderColor = Color.FromArgb(70, Th.Blu);
+        refreshBtn.Click += (_, _) => _sendCmd(new ServerCommand { Cmd = "rdp_refresh", RdpId = _rdpId });
+        top.Controls.Add(refreshBtn);
+
+        // Canvas
+        _canvas = new PictureBox
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.Black,
+            SizeMode = PictureBoxSizeMode.Zoom,
+            Cursor = Cursors.Cross
+        };
+        _canvas.MouseMove += OnMouseMove;
+        _canvas.MouseDown += OnMouseDown;
+        _canvas.MouseUp += OnMouseUp;
+        _canvas.MouseWheel += OnMouseWheel;
+
+        KeyDown += OnKeyDown;
+        KeyUp += OnKeyUp;
+
+        Controls.Add(_canvas);
+        Controls.Add(top);
+
+        FormClosed += (_, _) =>
+        {
+            _sendCmd(new ServerCommand { Cmd = "rdp_close", RdpId = _rdpId });
+            _onClose?.Invoke();
+            lock (_fbLock) { _framebuffer?.Dispose(); _framebuffer = null; }
+        };
+    }
+
+    // Convert viewer coordinates to remote screen coordinates
+    (int x, int y) ToRemote(int cx, int cy)
+    {
+        if (_remoteW == 0 || _remoteH == 0 || _canvas.Image == null) return (cx, cy);
+
+        // Calculate the actual drawn area within the PictureBox (Zoom mode)
+        float scaleX = (float)_canvas.Width / _remoteW;
+        float scaleY = (float)_canvas.Height / _remoteH;
+        float scale = Math.Min(scaleX, scaleY);
+
+        float drawnW = _remoteW * scale;
+        float drawnH = _remoteH * scale;
+        float offsetX = (_canvas.Width - drawnW) / 2f;
+        float offsetY = (_canvas.Height - drawnH) / 2f;
+
+        int rx = (int)((cx - offsetX) / scale);
+        int ry = (int)((cy - offsetY) / scale);
+
+        return (Math.Clamp(rx, 0, _remoteW - 1), Math.Clamp(ry, 0, _remoteH - 1));
+    }
+
+    void OnMouseMove(object? s, MouseEventArgs e)
+    {
+        if (!_inputEnabled || _remoteW == 0) return;
+        var (rx, ry) = ToRemote(e.X, e.Y);
+        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_move", X = rx, Y = ry } });
+    }
+
+    void OnMouseDown(object? s, MouseEventArgs e)
+    {
+        if (!_inputEnabled || _remoteW == 0) return;
+        _canvas.Focus();
+        var (rx, ry) = ToRemote(e.X, e.Y);
+        int btn = e.Button == MouseButtons.Right ? 1 : e.Button == MouseButtons.Middle ? 2 : 0;
+        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_down", X = rx, Y = ry, Button = btn } });
+    }
+
+    void OnMouseUp(object? s, MouseEventArgs e)
+    {
+        if (!_inputEnabled || _remoteW == 0) return;
+        var (rx, ry) = ToRemote(e.X, e.Y);
+        int btn = e.Button == MouseButtons.Right ? 1 : e.Button == MouseButtons.Middle ? 2 : 0;
+        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_up", X = rx, Y = ry, Button = btn } });
+    }
+
+    void OnMouseWheel(object? s, MouseEventArgs e)
+    {
+        if (!_inputEnabled || _remoteW == 0) return;
+        var (rx, ry) = ToRemote(e.X, e.Y);
+        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_wheel", X = rx, Y = ry, Delta = e.Delta } });
+    }
+
+    void OnKeyDown(object? s, KeyEventArgs e)
+    {
+        if (!_inputEnabled || _remoteW == 0) return;
+        e.Handled = true; e.SuppressKeyPress = true;
+        bool ext = IsExtended(e.KeyCode);
+        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "key_down", VirtualKey = (int)e.KeyCode, ScanCode = 0, Extended = ext } });
+    }
+
+    void OnKeyUp(object? s, KeyEventArgs e)
+    {
+        if (!_inputEnabled || _remoteW == 0) return;
+        e.Handled = true; e.SuppressKeyPress = true;
+        bool ext = IsExtended(e.KeyCode);
+        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "key_up", VirtualKey = (int)e.KeyCode, ScanCode = 0, Extended = ext } });
+    }
+
+    static bool IsExtended(Keys k) => k is Keys.RMenu or Keys.RControlKey or Keys.Insert or Keys.Delete or Keys.Home or Keys.End or Keys.PageUp or Keys.PageDown or Keys.Left or Keys.Right or Keys.Up or Keys.Down or Keys.NumLock or Keys.PrintScreen or Keys.Pause;
+
+    public void ReceiveFrame(RdpFrameData frame)
+    {
+        if (!IsHandleCreated || IsDisposed) return;
+        if (frame.Seq <= _lastSeq && !frame.IsFull) return;
+        _lastSeq = frame.Seq;
+
+        lock (_fbLock)
+        {
+            if (_framebuffer == null || _framebuffer.Width != frame.ScreenW || _framebuffer.Height != frame.ScreenH)
+            {
+                _framebuffer?.Dispose();
+                _framebuffer = new Bitmap(frame.ScreenW, frame.ScreenH, PixelFormat.Format24bppRgb);
+                using var g = Graphics.FromImage(_framebuffer);
+                g.Clear(Color.Black);
+            }
+
+            _remoteW = frame.ScreenW;
+            _remoteH = frame.ScreenH;
+
+            using var g2 = Graphics.FromImage(_framebuffer);
+            g2.CompositingMode = CompositingMode.SourceCopy;
+            g2.InterpolationMode = InterpolationMode.NearestNeighbor;
+
+            foreach (var tile in frame.Tiles)
+            {
+                try
+                {
+                    var data = Convert.FromBase64String(tile.Data);
+                    using var ms = new MemoryStream(data);
+                    using var img = Image.FromStream(ms);
+                    g2.DrawImage(img, tile.X, tile.Y, tile.W, tile.H);
+                }
+                catch { }
+            }
+        }
+
+        _frameCount++;
+
+        BeginInvoke(() =>
+        {
+            Bitmap? display;
+            lock (_fbLock)
+            {
+                if (_framebuffer == null) return;
+                display = (Bitmap)_framebuffer.Clone();
+            }
+
+            var old = _canvas.Image;
+            _canvas.Image = display;
+            old?.Dispose();
+
+            if (_fpsSw.ElapsedMilliseconds > 1000)
+            {
+                double fps = _frameCount * 1000.0 / _fpsSw.ElapsedMilliseconds;
+                _statusLbl.Text = $"{_remoteW}×{_remoteH} | {fps:0.0} fps | {frame.Tiles.Count} tiles";
+                _statusLbl.ForeColor = Th.Grn;
+                _frameCount = 0;
+                _fpsSw.Restart();
+            }
+        });
+    }
+}
+
+// ═══════════════════════════════════════════════════
+//  Terminal dialog (server side) — unchanged
+// ═══════════════════════════════════════════════════
+public sealed class TerminalDialog : Form
+{
+    readonly RemoteClient _client; readonly string _shell; readonly string _termId; readonly RichTextBox _output; readonly TextBox _input;
+    readonly List<string> _history = new(); int _histIdx = -1; readonly StringBuilder _buf = new(); readonly object _bufLock = new(); readonly System.Windows.Forms.Timer _flush; bool _dead;
+    public TerminalDialog(RemoteClient client, string shell) { _client = client; _shell = shell; _termId = Guid.NewGuid().ToString("N")[..12]; Text = $"{shell.ToUpper()} — {client.MachineName}"; Size = new Size(840, 560); MinimumSize = new Size(480, 300); StartPosition = FormStartPosition.CenterParent; BackColor = Color.FromArgb(12, 12, 16); ForeColor = Color.FromArgb(204, 204, 204); FormBorderStyle = FormBorderStyle.Sizable; KeyPreview = true; var top = new Panel { Dock = DockStyle.Top, Height = 30, BackColor = Color.FromArgb(22, 22, 28) }; top.Controls.Add(new Label { Text = $"🖥 {shell.ToUpper()} — {client.MachineName}", ForeColor = Th.Cyan, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold), AutoSize = true, Location = new Point(8, 6) }); _output = new RichTextBox { Dock = DockStyle.Fill, BackColor = Color.FromArgb(12, 12, 16), ForeColor = Color.FromArgb(204, 204, 204), Font = new Font("Consolas", 10f), ReadOnly = true, BorderStyle = BorderStyle.None, WordWrap = false, ScrollBars = RichTextBoxScrollBars.Both }; var inputBar = new Panel { Dock = DockStyle.Bottom, Height = 34, BackColor = Color.FromArgb(28, 28, 34) }; inputBar.Controls.Add(new Label { Text = "❯", ForeColor = Th.Grn, Font = new Font("Consolas", 11f, FontStyle.Bold), AutoSize = true, Location = new Point(8, 7) }); _input = new TextBox { BackColor = Color.FromArgb(28, 28, 34), ForeColor = Color.FromArgb(220, 220, 220), Font = new Font("Consolas", 10f), BorderStyle = BorderStyle.None, Location = new Point(26, 8), Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top }; _input.KeyDown += OnKey; inputBar.Resize += (_, _) => _input.Width = inputBar.Width - 34; _input.Width = inputBar.Width - 34; inputBar.Controls.Add(_input); Controls.Add(_output); Controls.Add(inputBar); Controls.Add(top); _client.Send(new ServerCommand { Cmd = "terminal_open", TermId = _termId, Shell = shell }); _client.TerminalDialogs[_termId] = this; _flush = new System.Windows.Forms.Timer { Interval = 50 }; _flush.Tick += (_, _) => FlushOutput(); _flush.Start(); FormClosed += (_, _) => { _flush.Stop(); _flush.Dispose(); _client.TerminalDialogs.TryRemove(_termId, out _); try { _client.Send(new ServerCommand { Cmd = "terminal_close", TermId = _termId }); } catch { } }; Shown += (_, _) => _input.Focus(); }
+    void OnKey(object? sender, KeyEventArgs e) { switch (e.KeyCode) { case Keys.Enter: e.SuppressKeyPress = true; string line = _input.Text; _input.Clear(); if (!string.IsNullOrEmpty(line)) { _history.Add(line); _histIdx = _history.Count; } if (_dead && line.Trim().Equals("reconnect", StringComparison.OrdinalIgnoreCase)) { _dead = false; _client.Send(new ServerCommand { Cmd = "terminal_open", TermId = _termId, Shell = _shell }); } else if (!_dead) { _client.Send(new ServerCommand { Cmd = "terminal_input", TermId = _termId, Input = line + "\n" }); } break; case Keys.Up: e.SuppressKeyPress = true; if (_history.Count > 0 && _histIdx > 0) { _histIdx--; _input.Text = _history[_histIdx]; _input.SelectionStart = _input.Text.Length; } break; case Keys.Down: e.SuppressKeyPress = true; if (_histIdx < _history.Count - 1) { _histIdx++; _input.Text = _history[_histIdx]; _input.SelectionStart = _input.Text.Length; } else { _histIdx = _history.Count; _input.Clear(); } break; case Keys.C when e.Control: e.SuppressKeyPress = true; _client.Send(new ServerCommand { Cmd = "terminal_input", TermId = _termId, Input = "\x03" }); break; case Keys.L when e.Control: e.SuppressKeyPress = true; _output.Clear(); break; } }
+    public void ReceiveOutput(string text) { lock (_bufLock) { _buf.Append(text); } }
+    public void ReceiveClosed() { _dead = true; ReceiveOutput("\r\n[Session ended — type 'reconnect' to restart]\r\n"); }
+    void FlushOutput() { string? text; lock (_bufLock) { if (_buf.Length == 0) return; text = _buf.ToString(); _buf.Clear(); } if (_output.TextLength > 200_000) { _output.Select(0, _output.TextLength - 150_000); _output.SelectedText = ""; } _output.AppendText(text); _output.ScrollToCaret(); }
+}
+
+// ═══════════════════════════════════════════════════
+//  File Browser Dialog (server side) — unchanged
+// ═══════════════════════════════════════════════════
+public sealed class FileBrowserDialog : Form
+{
+    readonly RemoteClient _client; readonly string _browserId; readonly ListView _fileList; readonly TextBox _pathBox; readonly Label _statusLabel; readonly ProgressBar _progressBar; string _currentPath = ""; readonly ImageList _icons;
+    public FileBrowserDialog(RemoteClient client) { _client = client; _browserId = Guid.NewGuid().ToString("N")[..12]; Text = $"📁 Files — {client.MachineName}"; Size = new Size(900, 600); MinimumSize = new Size(600, 400); StartPosition = FormStartPosition.CenterParent; BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable; _icons = new ImageList { ImageSize = new Size(16, 16), ColorDepth = ColorDepth.Depth32Bit }; _icons.Images.Add("folder", MkIco(Th.Yel, true)); _icons.Images.Add("file", MkIco(Th.Blu, false)); _icons.Images.Add("drive", MkIco(Th.Grn, true)); var toolbar = new Panel { Dock = DockStyle.Top, Height = 36, BackColor = Th.TBg }; var backBtn = MkBtn("◀ Up", Th.Blu); backBtn.Location = new Point(4, 4); backBtn.Size = new Size(60, 28); backBtn.Click += (_, _) => NavUp(); var rootBtn = MkBtn("🖥 Drives", Th.Grn); rootBtn.Location = new Point(68, 4); rootBtn.Size = new Size(80, 28); rootBtn.Click += (_, _) => Nav(""); _pathBox = new TextBox { BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 9.5f), BorderStyle = BorderStyle.FixedSingle, Location = new Point(156, 6), Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top }; _pathBox.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Nav(_pathBox.Text.Trim()); } }; var goBtn = MkBtn("Go", Th.Grn); goBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right; goBtn.Size = new Size(40, 28); goBtn.Click += (_, _) => Nav(_pathBox.Text.Trim()); toolbar.Controls.AddRange(new Control[] { backBtn, rootBtn, _pathBox, goBtn }); toolbar.Resize += (_, _) => { _pathBox.Width = toolbar.Width - 260; goBtn.Location = new Point(toolbar.Width - 80, 4); }; _fileList = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Segoe UI", 9f), BorderStyle = BorderStyle.None, SmallImageList = _icons, GridLines = true, MultiSelect = true }; _fileList.Columns.Add("Name", 320); _fileList.Columns.Add("Size", 100, HorizontalAlignment.Right); _fileList.Columns.Add("Modified", 160); _fileList.Columns.Add("Type", 80); _fileList.DoubleClick += (_, _) => OpenSel(); var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44, BackColor = Th.TBg }; var dlBtn = MkBtn("⬇ Download", Th.Grn); dlBtn.Location = new Point(8, 6); dlBtn.Size = new Size(100, 28); dlBtn.Click += (_, _) => DlSel(); var delBtn = MkBtn("🗑 Delete", Th.Red); delBtn.Location = new Point(116, 6); delBtn.Size = new Size(90, 28); delBtn.Click += (_, _) => DelSel(); var ulBtn = MkBtn("⬆ Upload", Th.Yel); ulBtn.Location = new Point(214, 6); ulBtn.Size = new Size(90, 28); ulBtn.Click += (_, _) => UploadFile(); _statusLabel = new Label { Text = "Loading...", ForeColor = Th.Dim, Font = new Font("Segoe UI", 8f), AutoSize = false, Location = new Point(312, 12), Size = new Size(400, 20), Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top }; _progressBar = new ProgressBar { Location = new Point(312, 34), Size = new Size(300, 6), Visible = false, Anchor = AnchorStyles.Left | AnchorStyles.Right }; bottom.Controls.AddRange(new Control[] { dlBtn, delBtn, ulBtn, _statusLabel, _progressBar }); Controls.Add(_fileList); Controls.Add(toolbar); Controls.Add(bottom); _client.FileBrowserDialogs[_browserId] = this; FormClosed += (_, _) => { _client.FileBrowserDialogs.TryRemove(_browserId, out _); _icons.Dispose(); }; Nav(""); }
+    void Nav(string path) { _currentPath = path; if (IsHandleCreated) BeginInvoke(() => { _pathBox.Text = path; _statusLabel.Text = "Loading..."; _fileList.Items.Clear(); }); _client.Send(new ServerCommand { Cmd = "file_list", Path = path, CmdId = _browserId }); }
+    void NavUp() { if (string.IsNullOrEmpty(_currentPath)) return; Nav(Path.GetDirectoryName(_currentPath) ?? ""); }
+    void OpenSel() { if (_fileList.SelectedItems.Count == 0) return; var nav = _fileList.SelectedItems[0].Tag as FileNavInfo; if (nav?.IsDirectory == true) Nav(nav.Path); }
+    void DlSel() { if (_fileList.SelectedItems.Count == 0) return; var nav = _fileList.SelectedItems[0].Tag as FileNavInfo; if (nav == null || nav.IsDirectory) return; using var sfd = new SaveFileDialog { FileName = Path.GetFileName(nav.Path) }; if (sfd.ShowDialog() != DialogResult.OK) return; string tid = Guid.NewGuid().ToString("N")[..12]; _client.ActiveDownloads[tid] = new FileDownloadState(tid, sfd.FileName); _statusLabel.Text = "Downloading..."; _progressBar.Value = 0; _progressBar.Visible = true; _client.Send(new ServerCommand { Cmd = "file_download", Path = nav.Path, TransferId = tid, CmdId = _browserId }); }
+    void DelSel() { var items = _fileList.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag as FileNavInfo).Where(n => n != null && !n.IsUp && !n.IsDrive).ToList(); if (items.Count == 0) return; if (MessageBox.Show($"Delete {items.Count} item(s)?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return; foreach (var nav in items) _client.Send(new ServerCommand { Cmd = "file_delete", Path = nav!.Path, Recursive = true, CmdId = _browserId }); Task.Delay(500).ContinueWith(_ => { if (IsHandleCreated) BeginInvoke(() => Nav(_currentPath)); }); }
+    void UploadFile() { if (string.IsNullOrEmpty(_currentPath)) { _statusLabel.Text = "Navigate to a folder first"; _statusLabel.ForeColor = Th.Org; return; } using var ofd = new OpenFileDialog { Title = "Upload file to remote" }; if (ofd.ShowDialog() != DialogResult.OK) return; string tid = Guid.NewGuid().ToString("N")[..12]; string dest = _currentPath; string src = ofd.FileName; _statusLabel.Text = "Uploading..."; _progressBar.Value = 0; _progressBar.Visible = true; Task.Run(() => { try { var fi = new FileInfo(src); long total = fi.Length; long offset = 0; var buf = new byte[Proto.FileChunkSize]; using var fs = fi.OpenRead(); while (true) { int n = fs.Read(buf, 0, buf.Length); bool last = n == 0 || offset + n >= total; _client.Send(new ServerCommand { Cmd = "file_upload_chunk", DestPath = dest, FileChunk = new FileChunkData { TransferId = tid, FileName = fi.Name, Data = n > 0 ? Convert.ToBase64String(buf, 0, n) : "", Offset = offset, TotalSize = total, IsLast = last } }); if (IsHandleCreated) { int pct = total > 0 ? (int)((offset + n) * 100 / total) : 0; BeginInvoke(() => { _progressBar.Value = Math.Min(pct, 100); _statusLabel.Text = $"Uploading: {pct}%"; _statusLabel.ForeColor = Th.Blu; }); } offset += n; if (last) break; Thread.Sleep(5); } if (IsHandleCreated) BeginInvoke(() => { _progressBar.Visible = false; _statusLabel.Text = $"Uploaded: {fi.Name}"; _statusLabel.ForeColor = Th.Grn; }); } catch (Exception ex) { if (IsHandleCreated) BeginInvoke(() => { _progressBar.Visible = false; _statusLabel.Text = $"Upload error: {ex.Message}"; _statusLabel.ForeColor = Th.Red; }); } }); }
+    public void ReceiveListing(FileListing listing) { if (!IsHandleCreated) return; BeginInvoke(() => { _currentPath = listing.Path; _pathBox.Text = listing.Path; _fileList.Items.Clear(); if (listing.Error != null) { _statusLabel.Text = $"Error: {listing.Error}"; _statusLabel.ForeColor = Th.Red; return; } _statusLabel.ForeColor = Th.Dim; if (listing.Drives != null) { foreach (var d in listing.Drives) { var item = new ListViewItem(d.Name, "drive"); item.SubItems.Add(d.Ready ? $"{d.FreeGB:0.0}/{d.TotalGB:0.0} GB" : ""); item.SubItems.Add(d.Label); item.SubItems.Add(d.Format); item.Tag = new FileNavInfo { Path = d.Name, IsDirectory = true, IsDrive = true }; item.ForeColor = d.Ready ? Th.Grn : Th.Dim; _fileList.Items.Add(item); } _statusLabel.Text = $"{listing.Drives.Count} drive(s)"; return; } if (!string.IsNullOrEmpty(listing.Path)) { var up = new ListViewItem("..", "folder"); up.SubItems.Add(""); up.SubItems.Add(""); up.SubItems.Add("DIR"); up.Tag = new FileNavInfo { Path = Path.GetDirectoryName(listing.Path) ?? "", IsDirectory = true, IsUp = true }; up.ForeColor = Th.Dim; _fileList.Items.Add(up); } foreach (var d in listing.Entries.Where(e => e.IsDirectory).OrderBy(e => e.Name)) { var item = new ListViewItem(d.Name, "folder"); item.SubItems.Add(""); item.SubItems.Add(DateTimeOffset.FromUnixTimeMilliseconds(d.ModifiedUtcMs).LocalDateTime.ToString("yyyy-MM-dd HH:mm")); item.SubItems.Add("DIR"); item.Tag = new FileNavInfo { Path = Path.Combine(listing.Path, d.Name), IsDirectory = true }; item.ForeColor = d.Hidden ? Th.Dim : Th.Yel; _fileList.Items.Add(item); } foreach (var f in listing.Entries.Where(e => !e.IsDirectory).OrderBy(e => e.Name)) { var item = new ListViewItem(f.Name, "file"); item.SubItems.Add(FmtSz(f.Size)); item.SubItems.Add(DateTimeOffset.FromUnixTimeMilliseconds(f.ModifiedUtcMs).LocalDateTime.ToString("yyyy-MM-dd HH:mm")); item.SubItems.Add(Path.GetExtension(f.Name).TrimStart('.').ToUpperInvariant()); item.Tag = new FileNavInfo { Path = Path.Combine(listing.Path, f.Name), IsDirectory = false, Size = f.Size }; item.ForeColor = f.Hidden ? Th.Dim : Th.Brt; _fileList.Items.Add(item); } int dc = listing.Entries.Count(e => e.IsDirectory); int fc = listing.Entries.Count(e => !e.IsDirectory); _statusLabel.Text = $"{dc} folder(s), {fc} file(s)"; }); }
+    public void ReceiveFileChunk(FileChunkData chunk) { if (!_client.ActiveDownloads.TryGetValue(chunk.TransferId, out var state)) return; if (chunk.Error != null) { state.Dispose(); _client.ActiveDownloads.TryRemove(chunk.TransferId, out _); if (IsHandleCreated) BeginInvoke(() => { _statusLabel.Text = $"Error: {chunk.Error}"; _statusLabel.ForeColor = Th.Red; _progressBar.Visible = false; }); return; } try { if (state.Stream == null) { state.Stream = new FileStream(state.LocalPath, FileMode.Create, FileAccess.Write); state.TotalSize = chunk.TotalSize; } if (!string.IsNullOrEmpty(chunk.Data)) { var d = Convert.FromBase64String(chunk.Data); state.Stream.Write(d, 0, d.Length); state.Received += d.Length; } if (IsHandleCreated) BeginInvoke(() => { int pct = state.TotalSize > 0 ? (int)(state.Received * 100 / state.TotalSize) : 0; _progressBar.Visible = true; _progressBar.Value = Math.Min(pct, 100); _statusLabel.Text = $"Downloading: {pct}%"; _statusLabel.ForeColor = Th.Blu; }); if (chunk.IsLast) { state.Stream.Flush(); state.Dispose(); _client.ActiveDownloads.TryRemove(chunk.TransferId, out _); if (IsHandleCreated) BeginInvoke(() => { _progressBar.Visible = false; _statusLabel.Text = $"Downloaded: {chunk.FileName}"; _statusLabel.ForeColor = Th.Grn; }); } } catch (Exception ex) { state.Dispose(); _client.ActiveDownloads.TryRemove(chunk.TransferId, out _); if (IsHandleCreated) BeginInvoke(() => { _progressBar.Visible = false; _statusLabel.Text = $"Error: {ex.Message}"; _statusLabel.ForeColor = Th.Red; }); } }
+    public void ReceiveCmdResult(bool ok, string msg) { if (IsHandleCreated) BeginInvoke(() => { _statusLabel.Text = msg; _statusLabel.ForeColor = ok ? Th.Grn : Th.Red; }); }
+    static string FmtSz(long b) => b switch { < 1024 => $"{b} B", < 1048576 => $"{b / 1024.0:0.0} KB", < 1073741824 => $"{b / 1048576.0:0.0} MB", _ => $"{b / 1073741824.0:0.00} GB" };
+    static Bitmap MkIco(Color c, bool f) { var bmp = new Bitmap(16, 16); using var g = Graphics.FromImage(bmp); g.SmoothingMode = SmoothingMode.AntiAlias; g.Clear(Color.Transparent); using var br = new SolidBrush(c); if (f) { g.FillRectangle(br, 1, 3, 6, 2); g.FillRectangle(br, 1, 4, 14, 10); } else { g.FillRectangle(br, 3, 1, 10, 14); } return bmp; }
+    static Button MkBtn(string t, Color fg) { var b = new Button { Text = t, ForeColor = fg, BackColor = Th.Card, FlatStyle = FlatStyle.Flat, Size = new Size(80, 28), Cursor = Cursors.Hand, Font = new Font("Segoe UI", 8f) }; b.FlatAppearance.BorderColor = Color.FromArgb(70, fg); return b; }
+}
+
+// ═══════════════════════════════════════════════════
+//  Controls
+// ═══════════════════════════════════════════════════
+public sealed class DPanel : Panel { public DPanel() { DoubleBuffered = true; SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true); } }
+
+public class BorderlessForm : Form
+{
+    protected bool _dragging; Point _dms, _dfs; const int Grip = 8;
+    protected BorderlessForm() { FormBorderStyle = FormBorderStyle.None; Padding = new Padding(1); SetStyle(ControlStyles.ResizeRedraw, true); }
+    protected override void OnPaint(PaintEventArgs e) { base.OnPaint(e); using var p = new Pen(Th.Brd); e.Graphics.DrawRectangle(p, 0, 0, Width - 1, Height - 1); }
+    protected override void WndProc(ref Message m) { if (m.Msg == 0x84) { base.WndProc(ref m); long v = m.LParam.ToInt64(); var pt = PointToClient(new Point((int)(v & 0xFFFF), (int)((v >> 16) & 0xFFFF))); if (pt.X >= Width - Grip && pt.Y >= Height - Grip) m.Result = (IntPtr)17; else if (pt.Y >= Height - Grip) m.Result = (IntPtr)15; else if (pt.X >= Width - Grip) m.Result = (IntPtr)11; else if (pt.X <= Grip && pt.Y >= Height - Grip) m.Result = (IntPtr)16; else if (pt.X <= Grip) m.Result = (IntPtr)10; return; } base.WndProc(ref m); }
+    protected void DD(object? s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { _dragging = true; _dms = Cursor.Position; _dfs = Location; } }
+    protected void DM(object? s, MouseEventArgs e) { if (_dragging) { var c = Cursor.Position; Location = new Point(_dfs.X + c.X - _dms.X, _dfs.Y + c.Y - _dms.Y); } }
+    protected void DU(object? s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) _dragging = false; }
+    protected Panel MkTitle(string title, Color col) { var tp = new Panel { Dock = DockStyle.Top, Height = 42, BackColor = Th.TBg }; var tl = new Label { Text = title, Font = new Font("Segoe UI", 11f, FontStyle.Bold), ForeColor = col, AutoSize = true, Location = new Point(12, 11) }; var (cb, mb) = Th.MkWB(this); cb.Click += (_, _) => Close(); tp.Controls.AddRange(new Control[] { tl, cb, mb }); tp.Resize += (_, _) => Th.LB(tp, cb, mb); foreach (Control c in new Control[] { tp, tl }) { c.MouseDown += DD; c.MouseMove += DM; c.MouseUp += DU; } Th.LB(tp, cb, mb); return tp; }
+}
