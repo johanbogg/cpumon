@@ -101,8 +101,14 @@ sealed class CpuMonService : ServiceBase
         while (!ct.IsCancellationRequested)
         {
             if (!_agentConnected)
+            {
                 try { LaunchInInteractiveSession(exePath, $"--agent --pipe-secret {_pipeSecret}"); } catch { }
-            await Task.Delay(_agentConnected ? 30000 : 5000, ct);
+                await Task.Delay(5000, ct);
+                continue;
+            }
+            // Poll in short slices so we notice a killed agent quickly
+            for (int i = 0; i < 30 && _agentConnected && !ct.IsCancellationRequested; i++)
+                await Task.Delay(1000, ct);
         }
     }
 
