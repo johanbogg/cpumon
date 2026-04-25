@@ -899,6 +899,7 @@ public sealed class ProcessInfo
     [JsonPropertyName("pid")] public int Pid { get; set; }
     [JsonPropertyName("name")] public string Name { get; set; } = "";
     [JsonPropertyName("mem")] public long MemoryBytes { get; set; }
+    [JsonPropertyName("cpu")] public float CpuPercent { get; set; }
     [JsonPropertyName("title")] public string WindowTitle { get; set; } = "";
 }
 
@@ -1115,7 +1116,28 @@ public static class CmdExec
         {
             case "restart": Res(cmd.CmdId, true, "Restarting...", lk, wr); Task.Delay(500).ContinueWith(_ => { try { Process.Start("shutdown", "/r /t 3 /c \"Remote restart\""); } catch { } }); break;
             case "shutdown": Res(cmd.CmdId, true, "Shutting down...", lk, wr); Task.Delay(500).ContinueWith(_ => { try { Process.Start("shutdown", "/s /t 3 /c \"Remote shutdown\""); } catch { } }); break;
-            case "listprocesses": try { var procs = Process.GetProcesses().Select(p => { try { return new ProcessInfo { Pid = p.Id, Name = p.ProcessName, MemoryBytes = p.WorkingSet64, WindowTitle = p.MainWindowTitle ?? "" }; } catch { return new ProcessInfo { Pid = p.Id, Name = p.ProcessName }; } }).OrderByDescending(p => p.MemoryBytes).ToList(); var msg = new ClientMessage { Type = "processlist", Processes = procs }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(msg)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
+            case "listprocesses": {
+                var wrSnap = wr;
+                Task.Run(() => {
+                    try {
+                        var t0 = DateTime.UtcNow;
+                        var snap = Process.GetProcesses();
+                        var times1 = snap.ToDictionary(p => p.Id, p => { try { return (p.ProcessName, p.WorkingSet64, p.TotalProcessorTime); } catch { return (p.ProcessName, 0L, TimeSpan.Zero); } });
+                        Thread.Sleep(500);
+                        int ncpu = Environment.ProcessorCount;
+                        double elapsed = (DateTime.UtcNow - t0).TotalMilliseconds;
+                        var procs = times1.Select(kv => {
+                            var (name, mem, t1) = kv.Value;
+                            float cpu = 0f;
+                            try { var p2 = Process.GetProcessById(kv.Key); var delta = (p2.TotalProcessorTime - t1).TotalMilliseconds; cpu = (float)(delta / elapsed / ncpu * 100.0); if (cpu < 0) cpu = 0; } catch { }
+                            return new ProcessInfo { Pid = kv.Key, Name = name, MemoryBytes = mem, CpuPercent = cpu };
+                        }).OrderByDescending(p => p.MemoryBytes).ToList();
+                        var m2 = new ClientMessage { Type = "processlist", Processes = procs };
+                        lock (lk) { wrSnap?.WriteLine(JsonSerializer.Serialize(m2)); wrSnap?.Flush(); }
+                    } catch { }
+                });
+                break;
+            }
             case "kill": try { var proc = Process.GetProcessById(cmd.Pid); string n = proc.ProcessName; proc.Kill(true); proc.WaitForExit(5000); Res(cmd.CmdId, true, $"Killed {n}", lk, wr); } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
             case "start": try { var s = Process.Start(new ProcessStartInfo { FileName = cmd.FileName ?? "", Arguments = cmd.Args ?? "", UseShellExecute = true }); Res(cmd.CmdId, true, $"PID {s?.Id}", lk, wr); } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
             case "sysinfo": try { var si = SysInfoCollector.Collect(); var m2 = new ClientMessage { Type = "sysinfo", SysInfo = si }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(m2)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;

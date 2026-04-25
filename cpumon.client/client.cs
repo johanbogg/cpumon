@@ -1108,6 +1108,9 @@ sealed class PawDashboardForm : Form
     // PAW file browser tracking
     readonly ConcurrentDictionary<string, PawFileBrowserProxy> _fileBrowsers = new();
 
+    // PAW process dialog tracking
+    readonly Dictionary<string, PawProcDialog> _procDialogs = new();
+
     // PAW RDP tracking: rdpId → viewer
     readonly ConcurrentDictionary<string, RdpViewerDialog> _rdpViewers = new();
 
@@ -1360,8 +1363,15 @@ sealed class PawDashboardForm : Form
     public void ReceiveProcessList(string source, List<ProcessInfo> procs)
     {
         if (!IsHandleCreated || IsDisposed) return;
-        using var d = new PawProcDialog(source, procs, _sendCmd);
-        d.ShowDialog(this);
+        if (_procDialogs.TryGetValue(source, out var existing) && !existing.IsDisposed)
+            existing.UpdateList(procs);
+        else {
+            var d = new PawProcDialog(source, _sendCmd);
+            d.UpdateList(procs);
+            _procDialogs[source] = d;
+            d.FormClosed += (_, _) => _procDialogs.Remove(source);
+            d.Show(this);
+        }
     }
 
     public void ReceiveSysInfo(string source, SystemInfoReport si)
@@ -1614,11 +1624,28 @@ sealed class PawFileBrowserDialogClient : Form
 // ═══════════════════════════════════════════════════
 sealed class PawProcDialog : Form
 {
-    public PawProcDialog(string source, List<ProcessInfo> procs, Action<string, ServerCommand> send)
+    readonly string _source;
+    readonly Action<string, ServerCommand> _send;
+    readonly DataGridView _grid;
+    readonly TextBox _search;
+    readonly Timer _timer;
+    List<ProcessInfo> _all = new();
+
+    public PawProcDialog(string source, Action<string, ServerCommand> send)
     {
-        Text = $"🔑 Processes — {source}"; Size = new Size(720, 520); StartPosition = FormStartPosition.CenterParent;
+        _source = source; _send = send;
+        Text = $"🔑 Processes — {source}"; Size = new Size(740, 560); StartPosition = FormStartPosition.CenterScreen;
         BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
-        var grid = new DataGridView
+
+        _search = new TextBox
+        {
+            Dock = DockStyle.Top, Height = 28,
+            BackColor = Th.Card, ForeColor = Th.Brt, BorderStyle = BorderStyle.FixedSingle
+        };
+        _search.PlaceholderText = "Filter processes...";
+        _search.TextChanged += (_, _) => ApplyFilter();
+
+        _grid = new DataGridView
         {
             Dock = DockStyle.Fill, BackgroundColor = Th.Bg, ForeColor = Th.Brt, GridColor = Th.Brd,
             DefaultCellStyle = new DataGridViewCellStyle { BackColor = Th.Card, ForeColor = Th.Brt, SelectionBackColor = Color.FromArgb(50, 80, 160) },
@@ -1626,12 +1653,58 @@ sealed class PawProcDialog : Form
             EnableHeadersVisualStyles = false, RowHeadersVisible = false, AllowUserToAddRows = false, ReadOnly = true,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, BorderStyle = BorderStyle.None
         };
-        grid.Columns.Add("PID", "PID"); grid.Columns.Add("Name", "Name"); grid.Columns.Add("Mem", "Memory"); grid.Columns.Add("Title", "Title");
-        foreach (var p in procs.OrderByDescending(p => p.MemoryBytes)) grid.Rows.Add(p.Pid, p.Name, (p.MemoryBytes / 1048576.0).ToString("0.0") + " MB", p.WindowTitle);
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "PID", HeaderText = "PID", AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "Name" });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "CPU", HeaderText = "CPU %", AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Mem", HeaderText = "Memory", AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells });
+
         var bp = new Panel { Dock = DockStyle.Bottom, Height = 42, BackColor = Th.TBg };
-        var kill = new Button { Text = "Kill", ForeColor = Th.Red, BackColor = Th.Card, FlatStyle = FlatStyle.Flat, Size = new Size(80, 28), Location = new Point(8, 6), Cursor = Cursors.Hand }; kill.FlatAppearance.BorderColor = Th.Red;
-        kill.Click += (_, _) => { if (grid.SelectedRows.Count == 0) return; var pv = grid.SelectedRows[0].Cells["PID"].Value; if (pv != null && MessageBox.Show($"Kill PID {pv}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes) send(source, new ServerCommand { Cmd = "kill", CmdId = Guid.NewGuid().ToString("N")[..8], Pid = (int)pv }); };
-        bp.Controls.Add(kill); Controls.Add(grid); Controls.Add(bp);
+        var kill = new Button { Text = "Kill", ForeColor = Th.Red, BackColor = Th.Card, FlatStyle = FlatStyle.Flat, Size = new Size(80, 28), Location = new Point(8, 6), Cursor = Cursors.Hand };
+        kill.FlatAppearance.BorderColor = Th.Red;
+        kill.Click += (_, _) =>
+        {
+            if (_grid.SelectedRows.Count == 0) return;
+            var pv = _grid.SelectedRows[0].Cells["PID"].Value;
+            if (pv != null && MessageBox.Show($"Kill PID {pv}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
+                _send(_source, new ServerCommand { Cmd = "kill", CmdId = Guid.NewGuid().ToString("N")[..8], Pid = (int)pv });
+        };
+        bp.Controls.Add(kill);
+
+        _timer = new Timer { Interval = 2000 };
+        _timer.Tick += (_, _) => _send(_source, new ServerCommand { Cmd = "listprocesses" });
+        _timer.Start();
+
+        FormClosed += (_, _) => _timer.Stop();
+
+        Controls.Add(_grid);
+        Controls.Add(_search);
+        Controls.Add(bp);
+    }
+
+    public void UpdateList(List<ProcessInfo> procs)
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        if (InvokeRequired) { BeginInvoke(() => UpdateList(procs)); return; }
+        _all = procs;
+        ApplyFilter();
+    }
+
+    void ApplyFilter()
+    {
+        var filter = _search.Text.Trim();
+        var filtered = string.IsNullOrEmpty(filter)
+            ? _all
+            : _all.Where(p => p.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        int? selPid = _grid.SelectedRows.Count > 0 ? _grid.SelectedRows[0].Cells["PID"].Value as int? : null;
+        _grid.SuspendLayout();
+        _grid.Rows.Clear();
+        foreach (var p in filtered.OrderByDescending(p => p.CpuPercent))
+        {
+            int idx = _grid.Rows.Add(p.Pid, p.Name, p.CpuPercent.ToString("0.0") + "%", (p.MemoryBytes / 1048576.0).ToString("0.0") + " MB");
+            if (p.Pid == selPid) _grid.Rows[idx].Selected = true;
+        }
+        _grid.ResumeLayout();
     }
 }
 
