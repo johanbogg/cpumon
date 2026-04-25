@@ -127,7 +127,12 @@ sealed class ClientForm : BorderlessForm
                     string? beaconSid = parts.Length >= 3 ? parts[2] : null;
                     if (!string.IsNullOrEmpty(_sid) && beaconSid != null && beaconSid != _sid) continue;
                     var ep = new IPEndPoint(res.RemoteEndPoint.Address, port);
-                    if (_ep == null || !_ep.Address.Equals(ep.Address)) { _ep = ep; _sa = ep.Address.ToString(); _ns = NetState.BeaconFound; _log.Add($"Server: {_sa}:{port}", Th.Grn); lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } }
+                    if (_ep == null || !_ep.Address.Equals(ep.Address))
+                    {
+                        _ep = ep; _sa = ep.Address.ToString();
+                        if (_ns != NetState.Connected)
+                        { _ns = NetState.BeaconFound; _log.Add($"Server: {_sa}:{port}", Th.Grn); lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } }
+                    }
                 }
             }
             catch (OperationCanceledException) { break; }

@@ -242,8 +242,12 @@ sealed class CpuMonService : ServiceBase
                     var ep = new IPEndPoint(res.RemoteEndPoint.Address, port);
                     if (_ep == null || !_ep.Address.Equals(ep.Address))
                     {
-                        _ep = ep; _sa = ep.Address.ToString(); _ns = NetState.BeaconFound;
-                        lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                        _ep = ep; _sa = ep.Address.ToString();
+                        if (_ns != NetState.Connected)
+                        {
+                            _ns = NetState.BeaconFound;
+                            lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                        }
                     }
                 }
             }
