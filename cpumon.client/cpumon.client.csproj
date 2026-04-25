@@ -16,4 +16,5 @@
   <ItemGroup>
     <ProjectReference Include="..\CpuMon.Shared\CpuMon.Shared.csproj" />
   </ItemGroup>
+
 </Project>
