@@ -253,7 +253,7 @@ sealed class ServiceDaemonContext : ApplicationContext
     volatile IPEndPoint? _ep;
     TcpClient? _tcp; SslStream? _ssl; StreamWriter? _wr; StreamReader? _rd;
     readonly object _tl = new();
-    string _cpu = "", _ak = "";
+    string _cpu = "", _ak = "", _sid = "";
     readonly SendPacer _pacer = new();
 
     // Agent pipe server
@@ -269,9 +269,10 @@ sealed class ServiceDaemonContext : ApplicationContext
     {
         _fip = forceIp; _tok = token;
         _mon = new HardwareMonitorService();
-        var (st, sk) = TokenStore.Load();
+        var (st, sk, ssid) = TokenStore.Load();
         if (_tok == null && st != null) _tok = st;
         if (sk != null) _ak = sk;
+        if (ssid != null) _sid = ssid;
 
         _mon.Start();
         _cpu = ReportBuilder.WmiStr("Win32_Processor", "Name");
@@ -463,6 +464,8 @@ sealed class ServiceDaemonContext : ApplicationContext
                     int port = Proto.DataPort;
                     var parts = msg.Split('|');
                     if (parts.Length >= 2 && int.TryParse(parts[1], out int p)) port = p;
+                    string? beaconSid = parts.Length >= 3 ? parts[2] : null;
+                    if (!string.IsNullOrEmpty(_sid) && beaconSid != null && beaconSid != _sid) continue;
                     var ep = new IPEndPoint(res.RemoteEndPoint.Address, port);
                     if (_ep == null || !_ep.Address.Equals(ep.Address))
                     {
@@ -529,7 +532,8 @@ sealed class ServiceDaemonContext : ApplicationContext
                     if (cmd.AuthOk && cmd.AuthKey != null)
                     {
                         _ak = cmd.AuthKey;
-                        if (_tok != null) TokenStore.Save(_tok, _ak);
+                        if (cmd.ServerId != null) _sid = cmd.ServerId;
+                        if (_tok != null) TokenStore.Save(_tok, _ak, _sid);
                         _ns = NetState.Connected;
                     }
                     else { _ns = NetState.AuthFailed; TokenStore.Clear(); }
@@ -602,7 +606,7 @@ sealed class DaemonContext : ApplicationContext
     readonly string? _fip; string? _tok;
     volatile NetState _ns = NetState.Idle; volatile string _sa = ""; volatile int _sc;
     volatile IPEndPoint? _ep; TcpClient? _tcp; SslStream? _ssl; StreamWriter? _wr; StreamReader? _rd;
-    readonly object _tl = new(); string _cpu = "", _ak = "";
+    readonly object _tl = new(); string _cpu = "", _ak = "", _sid = "";
     readonly SendPacer _pacer = new();
     volatile bool _isPaw;
 
@@ -610,9 +614,10 @@ sealed class DaemonContext : ApplicationContext
     {
         _uiCtx = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _fip = forceIp; _tok = token; _mon = new HardwareMonitorService();
-        var (st, sk) = TokenStore.Load();
+        var (st, sk, ssid) = TokenStore.Load();
         if (_tok == null && st != null) _tok = st;
         if (sk != null) _ak = sk;
+        if (ssid != null) _sid = ssid;
 
         _tray = new NotifyIcon { Icon = MkIco(Th.Grn), Visible = true, Text = "CPU Monitor (Daemon)" };
         var menu = new ContextMenuStrip();
@@ -667,6 +672,8 @@ sealed class DaemonContext : ApplicationContext
                 if (msg.StartsWith(Proto.Beacon))
                 {
                     int port = Proto.DataPort; var parts = msg.Split('|'); if (parts.Length >= 2 && int.TryParse(parts[1], out int p)) port = p;
+                    string? beaconSid = parts.Length >= 3 ? parts[2] : null;
+                    if (!string.IsNullOrEmpty(_sid) && beaconSid != null && beaconSid != _sid) continue;
                     var ep = new IPEndPoint(res.RemoteEndPoint.Address, port);
                     if (_ep == null || !_ep.Address.Equals(ep.Address)) { _ep = ep; _sa = ep.Address.ToString(); _ns = NetState.BeaconFound; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } }
                 }
@@ -708,7 +715,7 @@ sealed class DaemonContext : ApplicationContext
                     var cmd = JsonSerializer.Deserialize<ServerCommand>(line);
                     if (cmd != null)
                     {
-                        if (cmd.Cmd == "auth_response") { if (cmd.AuthOk && cmd.AuthKey != null) { _ak = cmd.AuthKey; if (_tok != null) TokenStore.Save(_tok, _ak); _ns = NetState.Connected; } else { _ns = NetState.AuthFailed; TokenStore.Clear(); } }
+                        if (cmd.Cmd == "auth_response") { if (cmd.AuthOk && cmd.AuthKey != null) { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _ns = NetState.Connected; } else { _ns = NetState.AuthFailed; TokenStore.Clear(); } }
                         else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
                         else if (cmd.Cmd == "paw_granted") _isPaw = true;
                         else if (cmd.Cmd == "paw_revoked") _isPaw = false;
@@ -751,7 +758,7 @@ sealed class ClientForm : BorderlessForm
     TcpClient? _tcp; SslStream? _ssl; StreamWriter? _wr; StreamReader? _rd; readonly object _tl = new();
     volatile IPEndPoint? _ep;
     const int HL = 120; readonly Queue<float> _lh = new();
-    string _cpu = "", _ak = "";
+    string _cpu = "", _ak = "", _sid = "";
     readonly SendPacer _pacer = new();
 
     // PAW state
@@ -762,9 +769,10 @@ sealed class ClientForm : BorderlessForm
     public ClientForm(string? fip, string? token)
     {
         _fip = fip; _tok = token;
-        var (st, sk) = TokenStore.Load();
+        var (st, sk, ssid) = TokenStore.Load();
         if (_tok == null && st != null) _tok = st;
         if (sk != null) _ak = sk;
+        if (ssid != null) _sid = ssid;
 
         Text = "CPU Monitor"; StartPosition = FormStartPosition.Manual;
         Location = new Point(30, 30); ClientSize = new Size(360, 500); MinimumSize = new Size(320, 400);
@@ -843,6 +851,8 @@ sealed class ClientForm : BorderlessForm
                 if (msg.StartsWith(Proto.Beacon))
                 {
                     int port = Proto.DataPort; var parts = msg.Split('|'); if (parts.Length >= 2 && int.TryParse(parts[1], out int p)) port = p;
+                    string? beaconSid = parts.Length >= 3 ? parts[2] : null;
+                    if (!string.IsNullOrEmpty(_sid) && beaconSid != null && beaconSid != _sid) continue;
                     var ep = new IPEndPoint(res.RemoteEndPoint.Address, port);
                     if (_ep == null || !_ep.Address.Equals(ep.Address)) { _ep = ep; _sa = ep.Address.ToString(); _ns = NetState.BeaconFound; _log.Add($"Server: {_sa}:{port}", Th.Grn); lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } }
                 }
@@ -891,7 +901,7 @@ sealed class ClientForm : BorderlessForm
                     {
                         if (cmd.Cmd == "auth_response")
                         {
-                            if (cmd.AuthOk && cmd.AuthKey != null) { _ak = cmd.AuthKey; if (_tok != null) TokenStore.Save(_tok, _ak); _ns = NetState.Connected; _log.Add("✓ Auth OK", Th.Grn); }
+                            if (cmd.AuthOk && cmd.AuthKey != null) { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _ns = NetState.Connected; _log.Add("✓ Auth OK", Th.Grn); }
                             else { _ns = NetState.AuthFailed; TokenStore.Clear(); _log.Add("✕ Auth failed", Th.Red); }
                         }
                         else if (cmd.Cmd == "mode" && cmd.Mode != null) { _pacer.Mode = cmd.Mode; _log.Add($"Mode: {cmd.Mode}", Th.Dim); }

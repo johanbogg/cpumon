@@ -199,9 +199,9 @@ public sealed class ApprovedClient
 public static class TokenStore
 {
     const string Path = "client_auth.json";
-    sealed class Data { [JsonPropertyName("t")] public string T { get; set; } = ""; [JsonPropertyName("k")] public string K { get; set; } = ""; }
-    public static (string? token, string? key) Load() { try { if (File.Exists(Path)) { var d = JsonSerializer.Deserialize<Data>(File.ReadAllText(Path)); return (d?.T, d?.K); } } catch { } return (null, null); }
-    public static void Save(string t, string k) { try { File.WriteAllText(Path, JsonSerializer.Serialize(new Data { T = t, K = k })); } catch { } }
+    sealed class Data { [JsonPropertyName("t")] public string T { get; set; } = ""; [JsonPropertyName("k")] public string K { get; set; } = ""; [JsonPropertyName("s")] public string? S { get; set; } }
+    public static (string? token, string? key, string? serverId) Load() { try { if (File.Exists(Path)) { var d = JsonSerializer.Deserialize<Data>(File.ReadAllText(Path)); return (d?.T, d?.K, d?.S); } } catch { } return (null, null, null); }
+    public static void Save(string t, string k, string? sid = null) { try { File.WriteAllText(Path, JsonSerializer.Serialize(new Data { T = t, K = k, S = sid })); } catch { } }
     public static void Clear() { try { if (File.Exists(Path)) File.Delete(Path); } catch { } }
 }
 
@@ -242,6 +242,7 @@ public sealed class ServerCommand
     [JsonPropertyName("args")] public string? Args { get; set; }
     [JsonPropertyName("authOk")] public bool AuthOk { get; set; }
     [JsonPropertyName("authKey")] public string? AuthKey { get; set; }
+    [JsonPropertyName("serverId")] public string? ServerId { get; set; }
     [JsonPropertyName("message")] public string? Message { get; set; }
     [JsonPropertyName("mode")] public string? Mode { get; set; }
     [JsonPropertyName("termId")] public string? TermId { get; set; }

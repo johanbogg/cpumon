@@ -105,7 +105,8 @@ sealed class ServerForm : BorderlessForm
         using var u = new UdpClient();
         u.EnableBroadcast = true;
         var ep = new IPEndPoint(IPAddress.Broadcast, Proto.DiscPort);
-        var pay = Encoding.UTF8.GetBytes($"{Proto.Beacon}|{Proto.DataPort}");
+        var sid = CertificateStore.ServerCert().Thumbprint;
+        var pay = Encoding.UTF8.GetBytes($"{Proto.Beacon}|{Proto.DataPort}|{sid}");
         _log.Add($"Beacon UDP :{Proto.DiscPort}", Th.Blu);
         while (!ct.IsCancellationRequested)
         {
@@ -174,7 +175,7 @@ sealed class ServerForm : BorderlessForm
                         {
                             cl.Authenticated = true; cl.AuthKey = msg.AuthKey; cl.MachineName = mn;
                             _store.Seen(mn);
-                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = msg.AuthKey });
+                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = msg.AuthKey, ServerId = CertificateStore.ServerCert().Thumbprint });
                             _log.Add($"✓ {mn} re-auth", Th.Grn);
                             _cls[mn] = cl;
                             continue;
@@ -185,7 +186,7 @@ sealed class ServerForm : BorderlessForm
                             string ak = Security.DeriveKey(msg.Token, mn);
                             _store.Approve(mn, ak, ip);
                             cl.Authenticated = true; cl.AuthKey = ak; cl.MachineName = mn;
-                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = ak });
+                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = ak, ServerId = CertificateStore.ServerCert().Thumbprint });
                             _log.Add($"✓ {mn} approved", Th.Grn);
                             _cls[mn] = cl;
                             continue;
