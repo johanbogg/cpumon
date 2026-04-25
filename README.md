@@ -1,6 +1,6 @@
 # cpumon
 
-A lightweight remote management and monitoring tool for Windows home networks and small businesses. Monitor CPU, RAM, and disk in real time; open terminals, browse files, stream a remote desktop, and manage Windows services — all over a self-signed TLS connection from a single console window.
+A lightweight remote management and monitoring tool for Windows home networks and small businesses. Monitor CPU, RAM, and disk in real time; open terminals, browse files, stream a remote desktop, and manage Windows services — all over a TLS connection from a single console window.
 
 ---
 
@@ -24,7 +24,7 @@ A lightweight remote management and monitoring tool for Windows home networks an
 ## Architecture
 
 ```
-cpumon.shared   — all shared types, protocol definitions, UI helpers
+cpumon.shared   — shared types, protocol definitions, UI helpers
 cpumon.server   — management console (the operator machine)
 cpumon.client   — monitored machine agent
 ```
@@ -51,8 +51,12 @@ Messages are newline-delimited JSON: `ClientMessage` (client → server) and `Se
 |------|---------|-------------|
 | *(none)* | GUI | `ClientForm` — WinForms overlay with local CPU stats; requests UAC elevation |
 | `--daemon` | Systray | `DaemonContext` — headless, sits in the notification area |
-| `--service-mode` | Session 0 | `ServiceDaemonContext` — runs as a Windows service (e.g. via NSSM); launches an agent in the interactive session for RDP capture |
+| `--service` | Session 0 | `CpuMonService` — SCM-managed Windows service; no NSSM required |
 | `--agent` | User session | `AgentContext` — captures screen and injects input; communicates with the service via a named pipe (`cpumon_agent_pipe`) |
+| `--install` | Admin | Copy exe to `C:\ProgramData\CpuMon`, register SCM service, create agent logon task |
+| `--uninstall` | Admin | Stop and remove the service and agent scheduled task |
+
+The service launches an agent process in the interactive user session automatically. The agent connects back over an authenticated named pipe; the pipe security descriptor grants `AuthenticatedUsers` read/write access so the cross-session connection works when the service runs as LocalSystem.
 
 ### PAW relay
 
@@ -83,11 +87,11 @@ dotnet build cpumon.server
 dotnet build cpumon.client
 ```
 
-Published self-contained executables:
+Published single-file executables:
 
 ```
-dotnet publish cpumon.server -c Release -r win-x64
-dotnet publish cpumon.client -c Release -r win-x64
+dotnet publish cpumon.server -c Release
+dotnet publish cpumon.client -c Release
 ```
 
 ---
@@ -103,32 +107,42 @@ cpumon.server.exe
 The window shows the invite token. Keep this window open — all client cards appear here.
 
 Options:
-- `--no-broadcast` — disable UDP beacon (clients must connect via `--server <ip>`)
+- `--no-broadcast` — disable UDP beacon (clients must connect via `--server-ip <ip>`)
 
 ### Client (monitored machine)
 
+**Recommended — native Windows service via install script (requires admin PowerShell):**
+```powershell
+.\install.ps1
+# With a fixed server IP:
+.\install.ps1 -ServerIp 192.168.1.10 -Token <token>
+# Uninstall:
+.\install.ps1 -Uninstall
+```
+
+`install.ps1` publishes the client if needed, copies it to `C:\ProgramData\CpuMon`, registers a SCM service (auto-start, LocalSystem, with failure-restart recovery), and creates a scheduled task that starts the tray agent in each user's session on logon.
+
+**Or install directly from the exe (must already be in its final location):**
+```
+cpumon.client.exe --install [--server-ip <ip>] [--token <token>]
+cpumon.client.exe --uninstall
+```
+
 **GUI mode (interactive desktop):**
 ```
-cpumon.client.exe --server <server-ip>
-```
-Omit `--server` if auto-discovery is working on the same subnet.
-
-**Daemon (systray, starts automatically with Windows):**
-```
-cpumon.client.exe --daemon --server <server-ip>
+cpumon.client.exe [--server-ip <server-ip>]
 ```
 
-**Windows service (via NSSM):**
+**Daemon (systray only):**
 ```
-nssm install cpumon "C:\path\to\cpumon.client.exe" "--service-mode --server <server-ip>"
-nssm start cpumon
+cpumon.client.exe --daemon [--server-ip <server-ip>]
 ```
 
 ### First connection
 
 1. Copy the token shown on the server.
-2. Launch the client with `--token <token>` on first run, or paste it when prompted.
-3. The client card appears on the server. From then on the client reconnects automatically.
+2. Supply it via `--token <token>` (to `install.ps1`, `--install`, or a direct launch).
+3. The client card appears on the server. From then on the client reconnects automatically with the stored key — no token needed again.
 
 ---
 
@@ -137,17 +151,23 @@ nssm start cpumon
 ```
 cpumon/
 ├── cpumon.shared/
-│   ├── shared.cs          — all shared types and helpers
+│   ├── protocol.cs        — protocol types, AppState, TokenStore, CertificateStore
+│   ├── services.cs        — RdpCaptureSession, SysInfoCollector, CmdExec, ReportBuilder, …
+│   ├── ui.cs              — RdpViewerDialog, TerminalDialog, FileBrowserDialog, …
 │   └── cpumon.shared.csproj
 ├── cpumon.server/
-│   ├── server.cs          — server UI and connection handling
+│   ├── serverform.cs      — main server UI and connection handling
+│   ├── serverdialogs.cs   — ApprovedClientsDialog, SysInfoDialog, ProcDialog, ServicesDialog
 │   ├── program.cs
 │   └── cpumon.server.csproj
 ├── cpumon.client/
-│   ├── client.cs          — client contexts, PAW dashboard
+│   ├── clientform.cs      — interactive GUI client
+│   ├── contexts.cs        — AgentContext, DaemonContext
+│   ├── service.cs         — CpuMonService (SCM), ServiceManager (install/uninstall)
 │   ├── program.cs
 │   └── cpumon.client.csproj
-└── cpumon.sln
+├── install.ps1            — PowerShell install/uninstall script
+└── cpumon.slnx
 ```
 
 Runtime files (created automatically):
@@ -156,13 +176,16 @@ Runtime files (created automatically):
 |------|----------|---------|
 | `cpumon.pfx` | Server working dir | Auto-generated TLS certificate |
 | `approved_clients.json` | Server working dir | Approved client keys and metadata |
-| `client_auth.json` | Client working dir | Saved auth key and server address |
+| `client_auth.json` | Client working dir | Saved auth key and pinned server thumbprint |
 
 ---
 
 ## Security notes
 
-- TLS uses a self-signed ECDSA certificate auto-generated on first run. The client skips certificate validation by design (home-network trust model). Do not expose port 47201 to the public internet.
+- TLS uses a self-signed ECDSA certificate auto-generated on first run and stored as `cpumon.pfx`.
+- **Certificate pinning (TOFU):** on first connection the client accepts the server's certificate and pins its thumbprint in `client_auth.json`. All subsequent connections reject any certificate with a different thumbprint, blocking MITM attacks even over the internet.
+- The UDP beacon includes the server certificate thumbprint; clients ignore beacons from a different server once paired.
 - The invite token is single-use per server session; rotating it with **🔄 New** invalidates the old one.
 - Individual clients can be revoked or forgotten from **👥 Clients**.
 - PAW status grants broad relay access — assign it only to machines you fully control.
+- If the server certificate is replaced (e.g. after reinstalling), delete `client_auth.json` on each client to re-pair.
