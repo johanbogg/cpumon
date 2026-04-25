@@ -244,7 +244,14 @@ sealed class ClientForm : BorderlessForm
         lock (_tl) { if (_tcp?.Connected == true && _wr != null) return; }
         _ns = NetState.Connecting; _log.Add($"Connecting {ep}...", Th.Blu);
         var c = new TcpClient(); await c.ConnectAsync(ep.Address, ep.Port, ct);
-        var ssl = new SslStream(c.GetStream(), false, (_, _, _, _) => true); await ssl.AuthenticateAsClientAsync("cpumon-server");
+        string? seenThumb = null;
+        var ssl = new SslStream(c.GetStream(), false, (_, cert, _, _) =>
+        {
+            if (cert == null) return false;
+            seenThumb = cert.GetCertHashString();
+            return string.IsNullOrEmpty(_sid) || string.Equals(seenThumb, _sid, StringComparison.OrdinalIgnoreCase);
+        });
+        await ssl.AuthenticateAsClientAsync("cpumon-server");
         lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _tcp = c; _ssl = ssl; _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; _rd = new StreamReader(ssl, Encoding.UTF8); }
         var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak };
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }

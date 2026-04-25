@@ -325,7 +325,13 @@ sealed class CpuMonService : ServiceBase
         _ns = NetState.Connecting;
         var c = new TcpClient();
         await c.ConnectAsync(ep.Address, ep.Port, ct);
-        var ssl = new SslStream(c.GetStream(), false, (_, _, _, _) => true);
+        string? seenThumb = null;
+        var ssl = new SslStream(c.GetStream(), false, (_, cert, _, _) =>
+        {
+            if (cert == null) return false;
+            seenThumb = cert.GetCertHashString();
+            return string.IsNullOrEmpty(_sid) || string.Equals(seenThumb, _sid, StringComparison.OrdinalIgnoreCase);
+        });
         await ssl.AuthenticateAsClientAsync("cpumon-server");
         lock (_tl)
         {
