@@ -33,7 +33,8 @@ except ImportError:
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-STATE_FILE  = os.path.expanduser("~/.cpumon/client_auth.json")
+_state_dir  = os.environ.get("STATE_DIRECTORY") or os.path.expanduser("~/.cpumon")
+STATE_FILE  = os.path.join(_state_dir, "client_auth.json")
 DISC_PORT   = 47200
 DATA_PORT   = 47201
 BEACON      = "CPUMON_V2"
