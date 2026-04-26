@@ -34,6 +34,7 @@ sealed class CpuMonService : ServiceBase
     readonly object _tl = new();
     string _cpu = "", _ak = "", _sid = "";
     readonly SendPacer _pacer = new();
+    FileStream? _updateStream;
 
     NamedPipeServerStream? _agentPipe;
     StreamReader? _agentReader;
@@ -212,6 +213,44 @@ sealed class CpuMonService : ServiceBase
         }
     }
 
+    void HandleUpdateChunk(FileChunkData chunk)
+    {
+        try
+        {
+            string updatePath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe");
+            if (_updateStream == null)
+                _updateStream = new FileStream(updatePath, FileMode.Create, FileAccess.Write);
+            if (!string.IsNullOrEmpty(chunk.Data))
+                _updateStream.Write(Convert.FromBase64String(chunk.Data));
+            if (chunk.IsLast)
+            {
+                _updateStream.Flush(); _updateStream.Dispose(); _updateStream = null;
+                ApplyUpdate(updatePath);
+            }
+        }
+        catch { _updateStream?.Dispose(); _updateStream = null; }
+    }
+
+    void ApplyUpdate(string updatePath)
+    {
+        string exePath = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "cpumon.client.exe");
+        string batPath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.bat");
+        File.WriteAllText(batPath,
+            "@echo off\r\n" +
+            "timeout /t 3 /nobreak > nul\r\n" +
+            "sc stop CpuMonClient\r\n" +
+            "timeout /t 2 /nobreak > nul\r\n" +
+            $"move /Y \"{updatePath}\" \"{exePath}\"\r\n" +
+            "sc start CpuMonClient\r\n" +
+            "schtasks /delete /tn \"CpuMonUpdate\" /f\r\n" +
+            "del \"%~f0\"\r\n");
+        Process.Start(new ProcessStartInfo("schtasks.exe",
+            $"/create /tn \"CpuMonUpdate\" /tr \"cmd /c \\\"{batPath}\\\"\" /sc once /st 00:00 /du 00:01 /f /ru SYSTEM /rl highest")
+        { UseShellExecute = false, CreateNoWindow = true })?.WaitForExit(5000);
+        Process.Start(new ProcessStartInfo("schtasks.exe", "/run /tn \"CpuMonUpdate\"")
+        { UseShellExecute = false, CreateNoWindow = true })?.WaitForExit(3000);
+    }
+
     void SendToAgent(AgentIpc.AgentMessage msg)
     {
         lock (_agentLock)
@@ -323,6 +362,7 @@ sealed class CpuMonService : ServiceBase
                 else if (cmd.Cmd == "rdp_refresh" && cmd.RdpId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_refresh", RdpId = cmd.RdpId });
                 else if (cmd.Cmd == "rdp_input" && cmd.RdpInput != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_input", Input = cmd.RdpInput });
                 else if (cmd.Cmd == "send_message" && cmd.Message != null) SendToAgent(new AgentIpc.AgentMessage { Type = "msg_popup", Message = cmd.Message });
+                else if (cmd.Cmd == "update_push" && cmd.UpdateChunk != null) HandleUpdateChunk(cmd.UpdateChunk);
                 else CmdExec.Run(cmd, _tl, ref _wr);
             }
             catch { }
@@ -350,7 +390,7 @@ sealed class CpuMonService : ServiceBase
             _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false };
             _rd = new StreamReader(ssl, Encoding.UTF8);
         }
-        var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak };
+        var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, AppVersion = Proto.AppVersion };
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }
     }
 }
@@ -366,9 +406,8 @@ static class ServiceManager
     const string SvcDesc    = "CPU Monitor remote management client — sends hardware telemetry and accepts remote commands.";
     const string AgentTask  = "CpuMonAgent";
 
-    // C:\ProgramData\CpuMon — no spaces, writable by LocalSystem
     static string InstallDir =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "CpuMon");
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "CpuMon", "Client");
 
     public static void Install(string? forceIp, string? token)
     {

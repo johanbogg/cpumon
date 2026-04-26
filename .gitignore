@@ -6,3 +6,10 @@ obj/
 approved_clients.json
 client_auth.json
 cpumon_server.log
+dist/
+*.zip
+cpumon.client.exe
+cpumon.server.exe
+cpumon_update.exe
+cpumon_update.bat
+*.pdf

@@ -323,6 +323,7 @@ public sealed class RemoteClient : IDisposable
     public List<ServiceInfo>? LastServiceList { get; set; }
     public bool Expanded { get; set; }
     public bool Authenticated { get; set; }
+    public string ClientVersion { get; set; } = "";
     public string AuthKey { get; set; } = "";
     public string SendMode { get; set; } = "full";
     public bool IsPaw { get; set; }
@@ -380,6 +381,32 @@ public static class CmdExec
     {
         switch (cmd.Cmd)
         {
+            case "update_push":
+                if (cmd.UpdateChunk != null)
+                {
+                    var chunk = cmd.UpdateChunk;
+                    string updPath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe");
+                    try
+                    {
+                        if (!ActiveUploads.TryGetValue("__update__", out var us))
+                            ActiveUploads["__update__"] = us = new FileStream(updPath, FileMode.Create, FileAccess.Write);
+                        if (!string.IsNullOrEmpty(chunk.Data)) { var b = Convert.FromBase64String(chunk.Data); us.Write(b); }
+                        if (chunk.IsLast)
+                        {
+                            us.Flush(); us.Dispose(); ActiveUploads.TryRemove("__update__", out _);
+                            string exePath = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "cpumon.client.exe");
+                            string batPath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.bat");
+                            File.WriteAllText(batPath,
+                                "@echo off\r\ntimeout /t 3 /nobreak > nul\r\n" +
+                                $"move /Y \"{updPath}\" \"{exePath}\"\r\n" +
+                                $"start \"\" \"{exePath}\"\r\ndel \"%~f0\"\r\n");
+                            Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{batPath}\"") { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden });
+                            Environment.Exit(0);
+                        }
+                    }
+                    catch { if (ActiveUploads.TryRemove("__update__", out var bad)) bad.Dispose(); }
+                }
+                break;
             case "restart": Res(cmd.CmdId, true, "Restarting...", lk, wr); Task.Delay(500).ContinueWith(_ => { try { Process.Start("shutdown", "/r /t 3 /c \"Remote restart\""); } catch { } }); break;
             case "shutdown": Res(cmd.CmdId, true, "Shutting down...", lk, wr); Task.Delay(500).ContinueWith(_ => { try { Process.Start("shutdown", "/s /t 3 /c \"Remote shutdown\""); } catch { } }); break;
             case "listprocesses": {

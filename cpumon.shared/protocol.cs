@@ -40,6 +40,8 @@ public static class Proto
     public const int RdpFpsDefault = 10;
     public const int RdpTileSize = 128;
     public const int RdpJpegQuality = 40;
+    public static string AppVersion =>
+        System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "1.0.0";
 }
 public static class AppState
 {
@@ -150,6 +152,7 @@ public sealed class ClientMessage
     [JsonPropertyName("fileListing")] public FileListing? FileListing { get; set; }
     [JsonPropertyName("fileChunk")] public FileChunkData? FileChunk { get; set; }
     [JsonPropertyName("transferId")] public string? TransferId { get; set; }
+    [JsonPropertyName("appVersion")] public string? AppVersion { get; set; }
     [JsonPropertyName("serviceList")] public List<ServiceInfo>? ServiceList { get; set; }
     [JsonPropertyName("pawCmd")] public ServerCommand? PawCmd { get; set; }
     [JsonPropertyName("pawTarget")] public string? PawTarget { get; set; }
@@ -192,6 +195,7 @@ public sealed class ServerCommand
     [JsonPropertyName("pawCmdResult")] public bool PawCmdSuccess { get; set; }
     [JsonPropertyName("pawCmdMsg")] public string? PawCmdMsg { get; set; }
     [JsonPropertyName("pawCmdId")] public string? PawCmdId { get; set; }
+    [JsonPropertyName("updateChunk")] public FileChunkData? UpdateChunk { get; set; }
     // Remote desktop
     [JsonPropertyName("rdpId")] public string? RdpId { get; set; }
     [JsonPropertyName("rdpFps")] public int RdpFps { get; set; }

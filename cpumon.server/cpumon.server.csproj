@@ -16,4 +16,17 @@
   <ItemGroup>
     <ProjectReference Include="..\CpuMon.Shared\CpuMon.Shared.csproj" />
   </ItemGroup>
+
+  <Target Name="GitVersion" BeforeTargets="CoreCompile;GetAssemblyVersion">
+    <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitCount" />
+    </Exec>
+    <PropertyGroup>
+      <GitCount Condition="'$(GitCount)' == ''">0</GitCount>
+      <Version>1.0.$(GitCount.Trim())</Version>
+      <AssemblyVersion>1.0.$(GitCount.Trim()).0</AssemblyVersion>
+      <FileVersion>1.0.$(GitCount.Trim()).0</FileVersion>
+    </PropertyGroup>
+  </Target>
+
 </Project>

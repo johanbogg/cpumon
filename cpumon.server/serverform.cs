@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.IO;
 using System.Net.Security;
 using System.Collections.Generic;
 using System.Drawing;
@@ -173,6 +174,7 @@ sealed class ServerForm : BorderlessForm
                         if (!string.IsNullOrEmpty(msg.AuthKey) && _store.IsOk(mn, msg.AuthKey))
                         {
                             cl.Authenticated = true; cl.AuthKey = msg.AuthKey; cl.MachineName = mn;
+                            cl.ClientVersion = msg.AppVersion ?? "";
                             _store.Seen(mn);
                             cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = msg.AuthKey, ServerId = CertificateStore.ServerCert().Thumbprint });
                             _log.Add($"✓ {mn} re-auth", Th.Grn);
@@ -185,6 +187,7 @@ sealed class ServerForm : BorderlessForm
                             string ak = Security.DeriveKey(msg.Token, mn);
                             _store.Approve(mn, ak, ip);
                             cl.Authenticated = true; cl.AuthKey = ak; cl.MachineName = mn;
+                            cl.ClientVersion = msg.AppVersion ?? "";
                             cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = ak, ServerId = CertificateStore.ServerCert().Thumbprint });
                             _log.Add($"✓ {mn} approved", Th.Grn);
                             _cls[mn] = cl;
@@ -383,9 +386,62 @@ sealed class ServerForm : BorderlessForm
                     else { try { cl.Send(new ServerCommand { Cmd = "paw_revoked" }); } catch { } _log.Add($"PAW revoked: {m}", Th.Dim); }
                     _ct.Invalidate();
                     break;
+                case "update":
+                    BeginInvoke(() =>
+                    {
+                        using var ofd = new OpenFileDialog { Title = "Select new client exe to push", Filter = "Executable|*.exe" };
+                        if (ofd.ShowDialog(this) != DialogResult.OK) return;
+                        _log.Add($"Pushing update → {m}…", Th.Org);
+                        Task.Run(() => PushUpdate(cl, ofd.FileName));
+                    });
+                    break;
             }
             break;
         }
+    }
+
+    void PushUpdate(RemoteClient cl, string exePath)
+    {
+        try
+        {
+            var fi = new FileInfo(exePath);
+            long total = fi.Length;
+            long offset = 0;
+            var buf = new byte[Proto.FileChunkSize];
+            string tid = Guid.NewGuid().ToString("N")[..12];
+            using var fs = fi.OpenRead();
+            while (true)
+            {
+                int n = fs.Read(buf, 0, buf.Length);
+                bool last = n == 0 || offset + n >= total;
+                cl.Send(new ServerCommand
+                {
+                    Cmd = "update_push",
+                    UpdateChunk = new FileChunkData
+                    {
+                        TransferId = tid, FileName = fi.Name,
+                        Data = n > 0 ? Convert.ToBase64String(buf, 0, n) : "",
+                        Offset = offset, TotalSize = total, IsLast = last
+                    }
+                });
+                offset += n;
+                if (last) break;
+                Thread.Sleep(5);
+            }
+            BeginInvoke(() => _log.Add($"Update sent → {cl.MachineName}", Th.Grn));
+        }
+        catch (Exception ex)
+        {
+            BeginInvoke(() => _log.Add($"Update failed: {ex.Message}", Th.Red));
+        }
+    }
+
+    static bool ClientNeedsUpdate(string clientVersion)
+    {
+        if (string.IsNullOrEmpty(clientVersion)) return false;
+        if (!Version.TryParse(clientVersion, out var cv)) return false;
+        if (!Version.TryParse(Proto.AppVersion, out var sv)) return false;
+        return cv < sv;
     }
 
     // ── Painting ──
@@ -532,6 +588,14 @@ sealed class ServerForm : BorderlessForm
         using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 12, 8, 8);
         using (var nf = new Font("Segoe UI Semibold", 11f, FontStyle.Bold)) using (var nb = new SolidBrush(Th.Brt))
             g.DrawString(r.MachineName, nf, nb, x + 26, y + 7);
+        if (!string.IsNullOrEmpty(cl.ClientVersion))
+        {
+            bool outdated = ClientNeedsUpdate(cl.ClientVersion);
+            using var vf = new Font("Segoe UI", 7f);
+            using var vb = new SolidBrush(outdated ? Th.Org : Th.Dim);
+            var nsz = g.MeasureString(r.MachineName, new Font("Segoe UI Semibold", 11f, FontStyle.Bold));
+            g.DrawString($"v{cl.ClientVersion}" + (outdated ? " ⚠" : ""), vf, vb, x + 28 + nsz.Width, y + 11);
+        }
         using (var cf = new Font("Segoe UI", 7.5f)) using (var cb = new SolidBrush(Th.Dim))
             g.DrawString(r.CpuName, cf, cb, x + 26, y + 27);
 
@@ -562,7 +626,9 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, bx, by2, 100, 22, "📁 Files", Th.Yel, r.MachineName, "files"); bx += 108;
         DrawBtn(g, bx, by2, 80, 22, "🖥 RDP", Th.Cyan, r.MachineName, "rdp"); bx += 88;
         DrawBtn(g, bx, by2, 68, 22, "⚙ Svcs", Th.Grn, r.MachineName, "services"); bx += 76;
-        DrawBtn(g, bx, by2, 68, 22, "💬 Msg", Th.Yel, r.MachineName, "msg");
+        DrawBtn(g, bx, by2, 68, 22, "💬 Msg", Th.Yel, r.MachineName, "msg"); bx += 76;
+        if (ClientNeedsUpdate(cl.ClientVersion))
+            DrawBtn(g, bx, by2, 80, 22, "⬆ Update", Th.Org, r.MachineName, "update");
 
         return h;
     }
