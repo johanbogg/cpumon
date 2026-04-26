@@ -7,6 +7,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -107,16 +108,41 @@ sealed class ServerForm : BorderlessForm
 
     async Task BeaconLoop(CancellationToken ct)
     {
-        using var u = new UdpClient();
-        u.EnableBroadcast = true;
-        var ep = new IPEndPoint(IPAddress.Broadcast, Proto.DiscPort);
         var sid = CertificateStore.ServerCert().Thumbprint;
         var pay = Encoding.UTF8.GetBytes($"{Proto.Beacon}|{Proto.DataPort}|{sid}");
         _log.Add($"Beacon UDP :{Proto.DiscPort}", Th.Blu);
         while (!ct.IsCancellationRequested)
         {
-            try { await u.SendAsync(pay, pay.Length, ep); } catch { }
+            foreach (var (addr, bcast) in LocalBroadcastTargets())
+            {
+                try
+                {
+                    using var u = new UdpClient(new IPEndPoint(addr, 0));
+                    u.EnableBroadcast = true;
+                    await u.SendAsync(pay, pay.Length, new IPEndPoint(bcast, Proto.DiscPort));
+                }
+                catch { }
+            }
             await Task.Delay(2000, ct).ConfigureAwait(false);
+        }
+    }
+
+    static IEnumerable<(IPAddress Addr, IPAddress Bcast)> LocalBroadcastTargets()
+    {
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
+            if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+            foreach (var ua in ni.GetIPProperties().UnicastAddresses)
+            {
+                if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                var m = ua.IPv4Mask?.GetAddressBytes();
+                if (m == null || m.All(b => b == 0)) continue;
+                var a = ua.Address.GetAddressBytes();
+                var bcast = new byte[4];
+                for (int i = 0; i < 4; i++) bcast[i] = (byte)(a[i] | ~m[i]);
+                yield return (ua.Address, new IPAddress(bcast));
+            }
         }
     }
 
@@ -124,7 +150,8 @@ sealed class ServerForm : BorderlessForm
     {
         var cert = CertificateStore.ServerCert();
         var l = new TcpListener(IPAddress.Any, Proto.DataPort);
-        l.Start();
+        try { l.Start(); }
+        catch (SocketException ex) { _log.Add($"TCP bind failed: {ex.Message}", Th.Red); return; }
         ct.Register(() => l.Stop());
         _log.Add($"TCP :{Proto.DataPort} (TLS)", Th.Blu);
         while (!ct.IsCancellationRequested)

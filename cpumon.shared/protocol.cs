@@ -81,15 +81,20 @@ public static class CertificateStore
 {
     const string CertPath = "cpumon.pfx";
     static X509Certificate2? _cached;
+    static readonly object _cl = new();
     public static X509Certificate2 ServerCert()
     {
         if (_cached != null) return _cached;
-        if (File.Exists(CertPath)) { _cached = X509CertificateLoader.LoadPkcs12FromFile(CertPath, null); return _cached; }
-        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        var req = new CertificateRequest("CN=cpumon", key, HashAlgorithmName.SHA256);
-        var raw = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10));
-        var pfx = raw.Export(X509ContentType.Pfx); File.WriteAllBytes(CertPath, pfx);
-        _cached = X509CertificateLoader.LoadPkcs12(pfx, null); return _cached;
+        lock (_cl)
+        {
+            if (_cached != null) return _cached;
+            if (File.Exists(CertPath)) { _cached = X509CertificateLoader.LoadPkcs12FromFile(CertPath, null); return _cached; }
+            using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var req = new CertificateRequest("CN=cpumon", key, HashAlgorithmName.SHA256);
+            var raw = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10));
+            var pfx = raw.Export(X509ContentType.Pfx); File.WriteAllBytes(CertPath, pfx);
+            _cached = X509CertificateLoader.LoadPkcs12(pfx, null); return _cached;
+        }
     }
 }
 

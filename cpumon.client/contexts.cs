@@ -363,7 +363,7 @@ sealed class DaemonContext : ApplicationContext
         {
             await Task.Delay(200, ct).ConfigureAwait(false);
             StreamReader? r; lock (_tl) { r = _rd; }
-            if (r == null || _tcp?.Client?.Available <= 0) continue;
+            if (r == null) continue;
             try
             {
                 string? line = await r.ReadLineAsync(ct);
