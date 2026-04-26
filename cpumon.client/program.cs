@@ -21,7 +21,7 @@ internal static class Program
         AppState.Admin = Admin;
 
         bool daemon = false, serviceMode = false, agentMode = false, install = false, uninstall = false;
-        string? forceIp = null, token = null, pipeSecret = null;
+        string? forceIp = null, token = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -40,8 +40,6 @@ internal static class Program
                 forceIp = args[++i];
             else if ((a.Equals("--token", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
                 token = args[++i];
-            else if (a.Equals("--pipe-secret", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-                pipeSecret = args[++i];
         }
 
         // Non-GUI paths — no WinForms pump needed
@@ -61,7 +59,7 @@ internal static class Program
         // Agent runs in the interactive user session, no UAC needed
         if (agentMode)
         {
-            Application.Run(new AgentContext(pipeSecret));
+            Application.Run(new AgentContext());
             return;
         }
 

@@ -36,11 +36,9 @@ sealed class AgentContext : ApplicationContext
     StreamWriter? _pipeWriter;
     readonly object _pipeLock = new();
     volatile bool _connected;
-    readonly string? _pipeSecret;
 
-    public AgentContext(string? pipeSecret = null)
+    public AgentContext()
     {
-        _pipeSecret = pipeSecret;
         _uiCtx = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
 
         _tray = new NotifyIcon
@@ -126,10 +124,10 @@ sealed class AgentContext : ApplicationContext
                     _pipeWriter = new StreamWriter(pipe, Encoding.UTF8) { AutoFlush = false };
                 }
 
-                // Send auth hello
+                // Send hello for protocol sync
                 lock (_pipeLock)
                 {
-                    _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "hello", Secret = _pipeSecret ?? "" }));
+                    _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "hello" }));
                     _pipeWriter?.Flush();
                 }
                 _connected = true;
@@ -252,6 +250,7 @@ sealed class DaemonContext : ApplicationContext
     readonly object _tl = new(); string _cpu = "", _ak = "", _sid = "";
     readonly SendPacer _pacer = new();
     volatile bool _isPaw;
+    long _authFailedAt;
 
     public DaemonContext(string? forceIp, string? token)
     {
@@ -336,7 +335,17 @@ sealed class DaemonContext : ApplicationContext
         while (!ct.IsCancellationRequested)
         {
             try { _pacer.Wait(ct); } catch (OperationCanceledException) { break; }
-            var ep = _ep; if (ep == null || _ns == NetState.AuthFailed) continue;
+            var ep = _ep; if (ep == null) continue;
+            if (_ns == NetState.AuthFailed)
+            {
+                if ((DateTime.UtcNow.Ticks - Interlocked.Read(ref _authFailedAt)) < TimeSpan.TicksPerMinute * 5) continue;
+                var (rt, rk, rs) = TokenStore.Load();
+                if (rt != null) _tok = rt;
+                if (rk != null) _ak = rk;
+                if (rs != null) _sid = rs;
+                Interlocked.Exchange(ref _authFailedAt, 0);
+                _ns = NetState.Reconnecting;
+            }
             try
             {
                 await EnsureConn(ep, ct);
@@ -363,7 +372,7 @@ sealed class DaemonContext : ApplicationContext
                     var cmd = JsonSerializer.Deserialize<ServerCommand>(line);
                     if (cmd != null)
                     {
-                        if (cmd.Cmd == "auth_response") { if (cmd.AuthOk && cmd.AuthKey != null) { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _ns = NetState.Connected; } else { _ns = NetState.AuthFailed; TokenStore.Clear(); } }
+                        if (cmd.Cmd == "auth_response") { if (cmd.AuthOk && cmd.AuthKey != null) { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _ns = NetState.Connected; } else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); } }
                         else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
                         else if (cmd.Cmd == "paw_granted") _isPaw = true;
                         else if (cmd.Cmd == "paw_revoked") _isPaw = false;

@@ -23,6 +23,9 @@ sealed class ServerForm : BorderlessForm
     readonly CLog _log = new();
     readonly ConcurrentDictionary<string, RemoteClient> _cls = new();
     readonly ApprovedClientStore _store = new();
+    const int MaxConnections = 50;
+    const int IdleTimeoutMinutes = 3;
+    const int AuthTimeoutSeconds = 30;
     readonly bool _nb;
     string _tok;
     DateTime _tokAt;
@@ -85,10 +88,12 @@ sealed class ServerForm : BorderlessForm
             .Where(a => !a.Revoked && !_cls.ContainsKey(a.Name))
             .Select(a => a.Name).ToList();
 
+        var idleCutoff = DateTime.UtcNow.AddMinutes(-IdleTimeoutMinutes);
         foreach (var kv in _cls)
         {
             var cl = kv.Value;
             if (!cl.Authenticated) continue;
+            if (cl.LastSeen < idleCutoff) { _log.Add($"Idle timeout: {kv.Key}", Th.Org); cl.Kick(); continue; }
             string desired = cl.Expanded ? "full" : "keepalive";
             if (cl.SendMode != desired)
             {
@@ -127,7 +132,13 @@ sealed class ServerForm : BorderlessForm
             try
             {
                 var tcp = await l.AcceptTcpClientAsync(ct);
-                Interlocked.Increment(ref _cc);
+                if (Interlocked.Increment(ref _cc) > MaxConnections)
+                {
+                    Interlocked.Decrement(ref _cc);
+                    try { tcp.Close(); } catch { }
+                    _log.Add($"Rejected: connection limit ({MaxConnections})", Th.Red);
+                    continue;
+                }
                 string remote = tcp.Client.RemoteEndPoint?.ToString() ?? "?";
                 _ = Task.Run(async () =>
                 {
@@ -152,12 +163,14 @@ sealed class ServerForm : BorderlessForm
         string? name = null;
         string ip = remote.Contains(':') ? remote[..remote.LastIndexOf(':')] : remote;
         int rx = 0;
+        using var authCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        authCts.CancelAfter(TimeSpan.FromSeconds(AuthTimeoutSeconds));
 
         try
         {
             while (!ct.IsCancellationRequested)
             {
-                string? line = await cl.ReadLineAsync(ct);
+                string? line = await cl.ReadLineAsync(cl.Authenticated ? ct : authCts.Token);
                 if (line == null) break;
 
                 try
@@ -292,6 +305,7 @@ sealed class ServerForm : BorderlessForm
                             if (_cls.TryGetValue(msg.PawTarget, out var pawTarget))
                             {
                                 var pc = msg.PawCmd;
+                                if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - pc.IssuedAtMs > 60_000) break;
                                 if (pc.Cmd == "rdp_open" && pc.RdpId != null)
                                     pawTarget.PawRdpSessionOwners[pc.RdpId] = cl.MachineName;
                                 else if (pc.Cmd == "rdp_close" && pc.RdpId != null)
@@ -301,7 +315,7 @@ sealed class ServerForm : BorderlessForm
                             break;
                     }
                 }
-                catch { }
+                catch (Exception ex) { _log.Add($"{name ?? remote}: {ex.Message}", Th.Red); }
             }
         }
         catch { }

@@ -1,0 +1,88 @@
+You're working on cpumon — a Windows-only .NET 10 WinForms remote machine
+management tool. Project root: C:\Users\JohanBogg\AdminKeeper\fan\cpumon
+It's a git repo. Build with .\build.ps1 (runs dotnet publish → dist/).
+Install/uninstall with .\installer.ps1 (requires admin). Version is set
+automatically from git commit count (1.0.<N>) via an MSBuild target.
+
+## Three projects, one solution
+
+cpumon.shared/
+  protocol.cs   — all message types (ClientMessage, ServerCommand), protocol
+                  constants, ApprovedClientStore (DPAPI-encrypted keys),
+                  TokenStore (DPAPI-encrypted auth key), CLog, SendPacer,
+                  CertificateStore, AgentIpc, all data models
+  services.cs   — RdpCaptureSession, RemoteClient, TerminalSession,
+                  CmdExec, HardwareMonitorService, ReportBuilder,
+                  SysInfoCollector, FileBrowser helpers
+  ui.cs         — RdpViewerDialog, TerminalDialog, FileBrowserDialog,
+                  BorderlessForm, DPanel, theme (Th), drawing helpers
+
+cpumon.client/
+  program.cs     — arg parsing, mode dispatch
+  clientform.cs  — GUI mode: WinForms overlay with CPU stats + net status
+  contexts.cs    — DaemonContext (systray) and AgentContext (user-session
+                   RDP capture + input injection)
+  service.cs     — CpuMonService (SCM Windows service, Session 0) and
+                   ServiceManager (--install / --uninstall helpers)
+  pawdashboard.cs — PAW client's mirrored server dashboard (PawDashboardForm,
+                    PawFileBrowserDialogClient)
+
+cpumon.server/
+  serverform.cs   — server UI, ListenLoop, HandleClient, UpdateModes,
+                    all button actions, PAW relay logic
+  serverdialogs.cs — ApprovedClientsDialog, ProcDialog, SysInfoDialog,
+                     ServiceDialog
+
+## Transport & auth
+
+TLS/TCP port 47201. Server broadcasts UDP beacon on 47200 (with cert
+thumbprint). Clients auto-discover or use --server-ip.
+TOFU cert pinning: thumbprint stored in client_auth.json (_sid).
+Auth: client sends {type:"auth", token|authKey}. Server responds with a
+derived key (SHA256 of token:machine:cpumon_v2). Re-auth uses stored key;
+initial auth uses the server's one-time invite token (10-min window).
+
+## Client run modes
+
+No args       → ClientForm GUI (requests UAC)
+--daemon      → DaemonContext systray
+--service     → CpuMonService (SCM starts this)
+--agent       → AgentContext (launched by service via schtasks into user
+                session for screen capture; identity-verified via
+                GetNamedPipeClientProcessId, not a shared secret)
+--install     → ServiceManager.Install (copies exe, registers SCM service
+                + schtasks agent task)
+--uninstall   → ServiceManager.Uninstall
+
+## Key design facts
+
+- The named pipe (cpumon_agent_pipe) between service and agent is secured
+  by verifying the connecting process's exe path via GetNamedPipeClientProcessId
+  (no secret on the command line).
+- ApprovedClientStore and TokenStore both DPAPI-encrypt auth keys
+  (DataProtectionScope.LocalMachine). Decryption failure → "" (forces re-auth,
+  no plaintext fallback).
+- ServerCommand carries IssuedAtMs; server rejects paw_command messages
+  older than 60 seconds.
+- Auth failure (AuthFailed state) auto-retries after 5 minutes in all three
+  client contexts (service, daemon, clientform) by reloading TokenStore.
+- Server: 50-connection cap, 3-minute idle timeout (kicks via Kick()/tcp.Close),
+  30-second auth timeout for pre-auth reads (linked CTS).
+- RDP tile change detection uses a fast XOR hash over a single LockBits pass
+  (no per-tile SHA256, no per-tile byte[] allocation). Only changed tiles are
+  cloned and JPEG-encoded.
+- Server switches clients between "full" mode (1s reports) and "keepalive"
+  mode (60s pings) based on whether the card is expanded.
+- PAW mode: a designated client acts as a relay hub, receiving all reports
+  and forwarding commands through the server.
+- Auto-update: server streams a new exe as base64 FileChunkData chunks;
+  client accumulates to cpumon_update.exe, then a SYSTEM schtask swaps it.
+- Inner per-message catch blocks in HandleClient and ClientForm.CmdLoop log
+  to _log (CLog) instead of swallowing silently.
+
+## Code style
+
+Terse field names (_tl, _wr, _rd, _ssl, _tcp, _cts, _ns, _ep, etc.).
+Transport lock _tl guards all _wr/_rd/_ssl/_tcp writes.
+All UI drawing is custom GDI+. BeginInvoke for cross-thread UI updates.
+No comments unless the why is non-obvious. No trailing summaries.

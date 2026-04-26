@@ -41,7 +41,7 @@ public sealed class RdpCaptureSession : IDisposable
     int _fps;
     int _quality;
     long _seq;
-    byte[]?[]? _prevHashes;
+    ulong[]? _prevHashes;
     int _tileColCount, _tileRowCount;
     int _screenW, _screenH;
     bool _disposed;
@@ -87,72 +87,57 @@ public sealed class RdpCaptureSession : IDisposable
             _screenW = sw; _screenH = sh;
             _tileColCount = (sw + Proto.RdpTileSize - 1) / Proto.RdpTileSize;
             _tileRowCount = (sh + Proto.RdpTileSize - 1) / Proto.RdpTileSize;
-            _prevHashes = new byte[_tileColCount * _tileRowCount][];
+            _prevHashes = new ulong[_tileColCount * _tileRowCount];
             _needFull = true;
         }
 
         using var bmp = new Bitmap(sw, sh, PixelFormat.Format24bppRgb);
         using (var g = Graphics.FromImage(bmp))
-        {
             g.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
-        }
 
         GetCursorPos(out var cur);
 
         bool sendFull = _needFull;
         _needFull = false;
 
-        var tiles = new List<RdpTile>();
         var encoder = GetJpegEncoder();
         var qualityParam = new EncoderParameters(1);
         qualityParam.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, _quality);
 
-
-        for (int row = 0; row < _tileRowCount; row++)
+        // Single locked pass — identify changed tiles with a fast XOR hash, no per-tile allocation
+        var changed = new List<Rectangle>();
+        var bmpData = bmp.LockBits(new Rectangle(0, 0, sw, sh), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+        try
         {
-            for (int col = 0; col < _tileColCount; col++)
+            for (int row = 0; row < _tileRowCount; row++)
             {
-                int tx = col * Proto.RdpTileSize;
-                int ty = row * Proto.RdpTileSize;
-                int tw = Math.Min(Proto.RdpTileSize, sw - tx);
-                int th = Math.Min(Proto.RdpTileSize, sh - ty);
-
-                int idx = row * _tileColCount + col;
-
-                // Extract tile
-                var rect = new Rectangle(tx, ty, tw, th);
-                using var tile = bmp.Clone(rect, PixelFormat.Format24bppRgb);
-
-                // Hash tile to detect changes
-                byte[] hash;
-                using (var ms2 = new MemoryStream())
+                for (int col = 0; col < _tileColCount; col++)
                 {
-                    var bd = tile.LockBits(new Rectangle(0, 0, tw, th), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-                    int bytes = Math.Abs(bd.Stride) * th;
-                    var pix = new byte[bytes];
-                    Marshal.Copy(bd.Scan0, pix, 0, bytes);
-                    tile.UnlockBits(bd);
-                    hash = SHA256.HashData(pix);
+                    int tx = col * Proto.RdpTileSize, ty = row * Proto.RdpTileSize;
+                    int tw = Math.Min(Proto.RdpTileSize, sw - tx);
+                    int th = Math.Min(Proto.RdpTileSize, sh - ty);
+                    int idx = row * _tileColCount + col;
+
+                    ulong h = HashTile(bmpData.Scan0, bmpData.Stride, tx, ty, tw, th);
+                    if (!sendFull && _prevHashes![idx] == h) continue;
+                    _prevHashes![idx] = h;
+                    changed.Add(new Rectangle(tx, ty, tw, th));
                 }
-
-                if (!sendFull && _prevHashes![idx] != null && hash.SequenceEqual(_prevHashes[idx]!))
-                    continue;
-
-                _prevHashes![idx] = hash;
-
-                // Encode tile as JPEG
-                using var ms = new MemoryStream();
-                tile.Save(ms, encoder!, qualityParam);
-
-                tiles.Add(new RdpTile
-                {
-                    X = tx, Y = ty, W = tw, H = th,
-                    Data = Convert.ToBase64String(ms.ToArray())
-                });
             }
         }
+        finally { bmp.UnlockBits(bmpData); }
 
-        if (tiles.Count == 0) return;
+        if (changed.Count == 0) return;
+
+        // JPEG-encode only the changed tiles
+        var tiles = new List<RdpTile>(changed.Count);
+        foreach (var rect in changed)
+        {
+            using var tile = bmp.Clone(rect, PixelFormat.Format24bppRgb);
+            using var ms = new MemoryStream();
+            tile.Save(ms, encoder!, qualityParam);
+            tiles.Add(new RdpTile { X = rect.X, Y = rect.Y, W = rect.Width, H = rect.Height, Data = Convert.ToBase64String(ms.ToArray()) });
+        }
 
         var frame = new RdpFrameData
         {
@@ -165,13 +150,23 @@ public sealed class RdpCaptureSession : IDisposable
         };
 
         var msg = new ClientMessage { Type = "rdp_frame", RdpId = Id, RdpFrame = frame };
-        var json = JsonSerializer.Serialize(msg);
+        lock (_netLock) { try { _netWriter?.WriteLine(JsonSerializer.Serialize(msg)); _netWriter?.Flush(); } catch { } }
+    }
 
-        lock (_netLock)
+    static ulong HashTile(nint scan0, int stride, int tx, int ty, int tw, int th)
+    {
+        ulong h = 0;
+        int byteWidth = tw * 3;
+        int words = byteWidth / 8;
+        for (int y = 0; y < th; y++)
         {
-            try { _netWriter?.WriteLine(json); _netWriter?.Flush(); }
-            catch { }
+            nint row = scan0 + (ty + y) * stride + tx * 3;
+            for (int i = 0; i < words; i++)
+                h ^= (ulong)Marshal.ReadInt64(row + i * 8);
+            for (int b = words * 8; b < byteWidth; b++)
+                h ^= (ulong)Marshal.ReadByte(row + b) << ((b % 8) * 8);
         }
+        return h;
     }
 
     static ImageCodecInfo? _jpegCodec;
@@ -334,9 +329,10 @@ public sealed class RemoteClient : IDisposable
     public readonly ConcurrentDictionary<string, string> PawRdpSessionOwners = new(); // rdpId → PAW client machine name
 
     readonly TcpClient _tcp; readonly SslStream _ssl; readonly StreamReader _rd; readonly StreamWriter _wr; readonly object _wl = new();
-    public RemoteClient(TcpClient tcp, SslStream ssl) { _tcp = tcp; _ssl = ssl; _rd = new StreamReader(ssl, Encoding.UTF8); _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; }
+    public RemoteClient(TcpClient tcp, SslStream ssl) { _tcp = tcp; _ssl = ssl; _rd = new StreamReader(ssl, Encoding.UTF8); _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; LastSeen = DateTime.UtcNow; }
     public Task<string?> ReadLineAsync(CancellationToken ct) => _rd.ReadLineAsync(ct).AsTask();
     public void Send(ServerCommand cmd) { lock (_wl) { _wr.WriteLine(JsonSerializer.Serialize(cmd)); _wr.Flush(); } }
+    public void Kick() { try { _tcp.Close(); } catch { } }
     public void Dispose()
     {
         foreach (var td in TerminalDialogs.Values) try { td.Close(); } catch { } TerminalDialogs.Clear();

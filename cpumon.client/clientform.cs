@@ -36,6 +36,7 @@ sealed class ClientForm : BorderlessForm
 
     // PAW state
     volatile bool _isPaw;
+    long _authFailedAt;
     readonly ConcurrentDictionary<string, PawRemoteClient> _pawClients = new();
     PawDashboardForm? _pawForm;
 
@@ -145,7 +146,17 @@ sealed class ClientForm : BorderlessForm
         while (!ct.IsCancellationRequested)
         {
             try { _pacer.Wait(ct); } catch (OperationCanceledException) { break; }
-            var ep = _ep; if (ep == null || _ns == NetState.AuthFailed) continue;
+            var ep = _ep; if (ep == null) continue;
+            if (_ns == NetState.AuthFailed)
+            {
+                if ((DateTime.UtcNow.Ticks - Interlocked.Read(ref _authFailedAt)) < TimeSpan.TicksPerMinute * 5) continue;
+                var (rt, rk, rs) = TokenStore.Load();
+                if (rt != null) _tok = rt;
+                if (rk != null) _ak = rk;
+                if (rs != null) _sid = rs;
+                Interlocked.Exchange(ref _authFailedAt, 0);
+                _ns = NetState.Reconnecting;
+            }
             try
             {
                 await EnsureConn(ep, ct);
@@ -180,7 +191,7 @@ sealed class ClientForm : BorderlessForm
                         if (cmd.Cmd == "auth_response")
                         {
                             if (cmd.AuthOk && cmd.AuthKey != null) { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _ns = NetState.Connected; _log.Add("✓ Auth OK", Th.Grn); }
-                            else { _ns = NetState.AuthFailed; TokenStore.Clear(); _log.Add("✕ Auth failed", Th.Red); }
+                            else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); _log.Add("✕ Auth failed — will retry in 5 min", Th.Red); }
                         }
                         else if (cmd.Cmd == "mode" && cmd.Mode != null) { _pacer.Mode = cmd.Mode; _log.Add($"Mode: {cmd.Mode}", Th.Dim); }
                         else if (cmd.Cmd == "paw_granted") { _isPaw = true; _log.Add("🔑 PAW granted", Th.Mag); BeginInvoke(ShowPawDashboard); }
@@ -199,7 +210,7 @@ sealed class ClientForm : BorderlessForm
                     }
                 }
             }
-            catch { }
+            catch (Exception ex) { _log.Add($"Cmd error: {ex.Message}", Th.Red); }
         }
     }
 
@@ -240,6 +251,7 @@ sealed class ClientForm : BorderlessForm
 
     internal void SendPawCommand(string target, ServerCommand cmd)
     {
+        cmd.IssuedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var msg = new ClientMessage { Type = "paw_command", PawTarget = target, PawCmd = cmd };
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(msg)); _wr?.Flush(); }
     }

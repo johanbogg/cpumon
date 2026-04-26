@@ -13,6 +13,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 using System.ServiceProcess;
 
 // ═══════════════════════════════════════════════════
@@ -41,8 +42,11 @@ sealed class CpuMonService : ServiceBase
     StreamWriter? _agentWriter;
     readonly object _agentLock = new();
     volatile bool _agentConnected;
-    readonly string _pipeSecret = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
     long _agentLastPong = DateTime.UtcNow.Ticks;
+    long _authFailedAt;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetNamedPipeClientProcessId(IntPtr hPipe, out uint clientProcessId);
 
     public CpuMonService(string? forceIp = null, string? token = null)
     {
@@ -103,7 +107,7 @@ sealed class CpuMonService : ServiceBase
         {
             if (!_agentConnected)
             {
-                try { LaunchInInteractiveSession(exePath, $"--agent --pipe-secret {_pipeSecret}"); } catch { }
+                try { LaunchInInteractiveSession(exePath, "--agent"); } catch { }
                 await Task.Delay(5000, ct);
                 continue;
             }
@@ -148,6 +152,22 @@ sealed class CpuMonService : ServiceBase
 
                 await pipe.WaitForConnectionAsync(ct);
 
+                // Verify the connecting process is our own exe (not a shared secret on the cmd line)
+                bool authorized = false;
+                try
+                {
+                    if (GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(), out uint clientPid))
+                    {
+                        string? clientExe = Process.GetProcessById((int)clientPid).MainModule?.FileName;
+                        string? ourExe = Environment.ProcessPath;
+                        authorized = clientExe != null && ourExe != null &&
+                            string.Equals(Path.GetFullPath(clientExe), Path.GetFullPath(ourExe),
+                                StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+                catch { }
+                if (!authorized) { pipe.Dispose(); continue; }
+
                 lock (_agentLock)
                 {
                     _agentPipe = pipe;
@@ -155,19 +175,10 @@ sealed class CpuMonService : ServiceBase
                     _agentWriter = new StreamWriter(pipe, Encoding.UTF8) { AutoFlush = false };
                 }
 
+                // Consume the hello line sent by the agent for protocol sync
                 string? helloLine;
                 lock (_agentLock) { helloLine = _agentReader?.ReadLine(); }
-                bool authorized = false;
-                if (helloLine != null)
-                {
-                    try
-                    {
-                        var hello = JsonSerializer.Deserialize<AgentIpc.AgentMessage>(helloLine);
-                        authorized = hello?.Type == "hello" && hello.Secret == _pipeSecret;
-                    }
-                    catch { }
-                }
-                if (!authorized) { pipe.Dispose(); continue; }
+                if (helloLine == null) { pipe.Dispose(); continue; }
 
                 _agentConnected = true;
                 Interlocked.Exchange(ref _agentLastPong, DateTime.UtcNow.Ticks);
@@ -307,7 +318,17 @@ sealed class CpuMonService : ServiceBase
         {
             try { _pacer.Wait(ct); } catch (OperationCanceledException) { break; }
             var ep = _ep;
-            if (ep == null || _ns == NetState.AuthFailed) continue;
+            if (ep == null) continue;
+            if (_ns == NetState.AuthFailed)
+            {
+                if ((DateTime.UtcNow.Ticks - Interlocked.Read(ref _authFailedAt)) < TimeSpan.TicksPerMinute * 5) continue;
+                var (rt, rk, rs) = TokenStore.Load();
+                if (rt != null) _tok = rt;
+                if (rk != null) _ak = rk;
+                if (rs != null) _sid = rs;
+                Interlocked.Exchange(ref _authFailedAt, 0);
+                _ns = NetState.Reconnecting;
+            }
             try
             {
                 await EnsureConn(ep, ct);
@@ -352,7 +373,7 @@ sealed class CpuMonService : ServiceBase
                 {
                     if (cmd.AuthOk && cmd.AuthKey != null)
                     { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _ns = NetState.Connected; }
-                    else { _ns = NetState.AuthFailed; TokenStore.Clear(); }
+                    else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); }
                 }
                 else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
                 else if (cmd.Cmd == "rdp_open" && cmd.RdpId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_start", RdpId = cmd.RdpId, Fps = cmd.RdpFps, Quality = cmd.RdpQuality });
