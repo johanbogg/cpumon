@@ -292,13 +292,11 @@ sealed class ServerForm : BorderlessForm
                         case "cmdresult":
                             _log.Add($"[{cl.MachineName}] {msg.CmdId}: {(msg.Success ? "✓" : "✕")} {msg.Message}",
                                 msg.Success ? Th.Grn : Th.Red);
-                            // Route to file browser if CmdId matches
                             if (msg.CmdId != null)
                             {
                                 foreach (var fb in cl.FileBrowserDialogs.Values)
-                                {
                                     try { fb.ReceiveCmdResult(msg.Success, msg.Message ?? ""); } catch { }
-                                }
+                                cl.ServiceResultCallback?.Invoke(msg.Success, msg.Message ?? "");
                             }
                             break;
 

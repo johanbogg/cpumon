@@ -224,14 +224,41 @@ sealed class ServicesDialog : Form
             }
 
         var bp = new Panel { Dock = DockStyle.Bottom, Height = 42, BackColor = Th.TBg };
-        var start = MkBtn("▶ Start", Th.Grn); start.Location = new Point(8, 6);
-        start.Click += (_, _) => { if (grid.SelectedRows.Count == 0) return; var n = grid.SelectedRows[0].Cells["Name"].Value?.ToString(); if (n != null) { cl.Send(new ServerCommand { Cmd = "service_start", FileName = n, CmdId = Guid.NewGuid().ToString("N")[..8] }); Close(); } };
-        var stop = MkBtn("■ Stop", Th.Red); stop.Location = new Point(116, 6);
-        stop.Click += (_, _) => { if (grid.SelectedRows.Count == 0) return; var n = grid.SelectedRows[0].Cells["Name"].Value?.ToString(); if (n != null) { cl.Send(new ServerCommand { Cmd = "service_stop", FileName = n, CmdId = Guid.NewGuid().ToString("N")[..8] }); Close(); } };
-        var restart = MkBtn("⟳ Restart", Th.Org); restart.Location = new Point(224, 6); restart.Size = new Size(100, 28);
-        restart.Click += (_, _) => { if (grid.SelectedRows.Count == 0) return; var n = grid.SelectedRows[0].Cells["Name"].Value?.ToString(); if (n != null) { cl.Send(new ServerCommand { Cmd = "service_restart", FileName = n, CmdId = Guid.NewGuid().ToString("N")[..8] }); Close(); } };
+        var start   = MkBtn("▶ Start",   Th.Grn); start.Location   = new Point(8,   6);
+        var stop    = MkBtn("■ Stop",    Th.Red);  stop.Location    = new Point(116, 6);
+        var restart = MkBtn("⟳ Restart", Th.Org);  restart.Location = new Point(224, 6); restart.Size = new Size(100, 28);
+        var cancel  = MkBtn("✕ Cancel",  Th.Dim);  cancel.Location  = new Point(332, 6);
+        var status  = new Label { Text = "", ForeColor = Th.Dim, Font = new Font("Segoe UI", 8.5f), AutoSize = false,
+                                  Location = new Point(440, 12), Size = new Size(300, 18), Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top };
+        cancel.Click += (_, _) => Close();
 
-        bp.Controls.AddRange(new Control[] { start, stop, restart });
+        void Send(string cmd)
+        {
+            if (grid.SelectedRows.Count == 0) return;
+            var n = grid.SelectedRows[0].Cells["Name"].Value?.ToString();
+            if (n == null) return;
+            start.Enabled = stop.Enabled = restart.Enabled = false;
+            status.Text = "Working…"; status.ForeColor = Th.Org;
+            cl.ServiceResultCallback = (ok, msg) =>
+            {
+                if (!IsHandleCreated) return;
+                BeginInvoke(() =>
+                {
+                    start.Enabled = stop.Enabled = restart.Enabled = true;
+                    status.Text = msg; status.ForeColor = ok ? Th.Grn : Th.Red;
+                    cl.ServiceResultCallback = null;
+                });
+            };
+            cl.Send(new ServerCommand { Cmd = cmd, FileName = n, CmdId = Guid.NewGuid().ToString("N")[..8] });
+        }
+
+        start.Click   += (_, _) => Send("service_start");
+        stop.Click    += (_, _) => Send("service_stop");
+        restart.Click += (_, _) => Send("service_restart");
+
+        FormClosed += (_, _) => cl.ServiceResultCallback = null;
+
+        bp.Controls.AddRange(new Control[] { start, stop, restart, cancel, status });
         Controls.Add(grid); Controls.Add(bp);
     }
 
