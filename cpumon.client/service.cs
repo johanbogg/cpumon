@@ -139,7 +139,7 @@ sealed class CpuMonService : ServiceBase
                 var sec = new PipeSecurity();
                 sec.AddAccessRule(new PipeAccessRule(
                     new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
-                    PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance,
+                    PipeAccessRights.ReadWrite,
                     AccessControlType.Allow));
                 sec.AddAccessRule(new PipeAccessRule(
                     new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
@@ -340,7 +340,7 @@ sealed class CpuMonService : ServiceBase
                 else
                 {
                     var snap = _mon.GetSnapshot();
-                    var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu), MachineName = Environment.MachineName, AuthKey = _ak };
+                    var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu, _mon), MachineName = Environment.MachineName, AuthKey = _ak };
                     lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m)); _wr?.Flush(); }
                 }
                 _sc++; _ns = NetState.Connected;
@@ -349,6 +349,7 @@ sealed class CpuMonService : ServiceBase
             {
                 _ns = NetState.Reconnecting;
                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                CmdExec.DisposeAll();
                 try { _pacer.Wait(ct); } catch { }
             }
         }

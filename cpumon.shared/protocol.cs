@@ -367,6 +367,10 @@ public sealed class MachineReport
     [JsonPropertyName("ramUsed")] public double RamUsedGB { get; set; }
     [JsonPropertyName("drvs")] public List<DriveStat> Drives { get; set; } = new();
     [JsonPropertyName("ts")] public long TimestampUtcMs { get; set; }
+    [JsonPropertyName("gpuLoad")] public float? GpuLoadPercent { get; set; }
+    [JsonPropertyName("gpuTemp")] public float? GpuTemperatureC { get; set; }
+    [JsonPropertyName("gpuVramUsed")] public float? GpuVramUsedMB { get; set; }
+    [JsonPropertyName("gpuVramTotal")] public float? GpuVramTotalMB { get; set; }
 }
 
 public sealed class CoreReport

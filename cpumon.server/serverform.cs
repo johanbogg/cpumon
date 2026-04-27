@@ -653,11 +653,13 @@ sealed class ServerForm : BorderlessForm
         DrawMetric(g, mx, my, "LOAD", Th.F(r.TotalLoadPercent, "0", "%"), Th.LdC(r.TotalLoadPercent ?? 0)); mx += 110;
         DrawMetric(g, mx, my, "FREQ", Th.FF(r.PackageFrequencyMHz), Th.Blu); mx += 110;
         DrawMetric(g, mx, my, "TEMP", Th.F(r.PackageTemperatureC, "0.0", "°C"), Th.TpC(r.PackageTemperatureC ?? 0)); mx += 110;
-        if (r.PackagePowerW is > 0) DrawMetric(g, mx, my, "PWR", Th.F(r.PackagePowerW, "0.0", "W"), Th.Org);
+        if (r.PackagePowerW is > 0) { DrawMetric(g, mx, my, "PWR", Th.F(r.PackagePowerW, "0.0", "W"), Th.Org); mx += 110; }
+        if (r.GpuLoadPercent.HasValue) DrawMetric(g, mx, my, "GPU", Th.F(r.GpuLoadPercent, "0", "%"), Th.LdC(r.GpuLoadPercent ?? 0));
 
         int my2 = y + 63, mx2 = x + 12;
         if (r.RamTotalGB > 0) { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); DrawMetric(g, mx2, my2, "RAM", $"{r.RamUsedGB:0.1}/{r.RamTotalGB:0.0} GB", pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); mx2 += 140; }
-        foreach (var drv in r.Drives.Take(4)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); mx2 += 100; }
+        foreach (var drv in r.Drives.Take(3)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); mx2 += 100; }
+        if (r.GpuVramTotalMB is > 0 && r.GpuVramUsedMB.HasValue) { string vram = r.GpuVramTotalMB > 1024 ? $"{r.GpuVramUsedMB/1024:0.1}/{r.GpuVramTotalMB/1024:0.0}G" : $"{r.GpuVramUsedMB:0}/{r.GpuVramTotalMB:0}M"; DrawMetric(g, mx2, my2, "VRAM", vram, Th.Blu); }
 
         // Row 1
         int by = y + hdrH, bx = x + 12;
