@@ -219,7 +219,10 @@ sealed class ServerForm : BorderlessForm
                             _store.Seen(mn);
                             cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = msg.AuthKey, ServerId = CertificateStore.ServerCert().Thumbprint });
                             _log.Add($"✓ {mn} re-auth", Th.Grn);
+                            if (_cls.TryGetValue(mn, out var prev1) && !ReferenceEquals(prev1, cl))
+                                while (prev1.PendingCmds.TryDequeue(out var pc)) cl.PendingCmds.Enqueue(pc);
                             _cls[mn] = cl;
+                            cl.FlushPending();
                             continue;
                         }
 
@@ -231,7 +234,10 @@ sealed class ServerForm : BorderlessForm
                             cl.ClientVersion = msg.AppVersion ?? "";
                             cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = ak, ServerId = CertificateStore.ServerCert().Thumbprint });
                             _log.Add($"✓ {mn} approved", Th.Grn);
+                            if (_cls.TryGetValue(mn, out var prev2) && !ReferenceEquals(prev2, cl))
+                                while (prev2.PendingCmds.TryDequeue(out var pc)) cl.PendingCmds.Enqueue(pc);
                             _cls[mn] = cl;
+                            cl.FlushPending();
                             continue;
                         }
 

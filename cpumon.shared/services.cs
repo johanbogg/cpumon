@@ -328,10 +328,12 @@ public sealed class RemoteClient : IDisposable
     public readonly ConcurrentDictionary<string, RdpViewerDialog> RdpDialogs = new();
     public readonly ConcurrentDictionary<string, string> PawRdpSessionOwners = new(); // rdpId → PAW client machine name
 
+    public readonly ConcurrentQueue<ServerCommand> PendingCmds = new();
     readonly TcpClient _tcp; readonly SslStream _ssl; readonly StreamReader _rd; readonly StreamWriter _wr; readonly object _wl = new();
     public RemoteClient(TcpClient tcp, SslStream ssl) { _tcp = tcp; _ssl = ssl; _rd = new StreamReader(ssl, Encoding.UTF8); _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; LastSeen = DateTime.UtcNow; }
     public Task<string?> ReadLineAsync(CancellationToken ct) => _rd.ReadLineAsync(ct).AsTask();
-    public void Send(ServerCommand cmd) { lock (_wl) { _wr.WriteLine(JsonSerializer.Serialize(cmd)); _wr.Flush(); } }
+    public void Send(ServerCommand cmd) { lock (_wl) { try { _wr.WriteLine(JsonSerializer.Serialize(cmd)); _wr.Flush(); } catch { if (PendingCmds.Count < 5) PendingCmds.Enqueue(cmd); } } }
+    public void FlushPending() { while (PendingCmds.TryDequeue(out var cmd)) { try { Send(cmd); } catch { break; } } }
     public void Kick() { try { _tcp.Close(); } catch { } }
     public void Dispose()
     {
