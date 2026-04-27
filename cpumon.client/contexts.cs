@@ -255,6 +255,7 @@ sealed class DaemonContext : ApplicationContext
     readonly object _tl = new(); string _cpu = "", _ak = "", _sid = "";
     readonly SendPacer _pacer = new();
     volatile bool _isPaw;
+    volatile int _peerCount;
     long _authFailedAt;
     Color _lastTrayCol = Color.Empty;
 
@@ -298,7 +299,7 @@ sealed class DaemonContext : ApplicationContext
         {
             await Task.Delay(2000, ct).ConfigureAwait(false);
             var col = _ns == NetState.Connected ? (_isPaw ? Th.Mag : Th.Grn) : _ns == NetState.AuthFailed ? Th.Red : Th.Org;
-            string st = _ns switch { NetState.Connected => $"Connected {_sa} ↑{_sc}{(_isPaw ? " [PAW]" : "")}", NetState.AuthFailed => "Auth failed!", NetState.Searching => "Searching...", _ => $"{_ns} {_sa}" };
+            string st = _ns switch { NetState.Connected => $"Connected {_sa} ↑{_sc} · {_peerCount} peer{(_peerCount == 1 ? "" : "s")}{(_isPaw ? " [PAW]" : "")}", NetState.AuthFailed => "Auth failed!", NetState.Searching => "Searching...", _ => $"{_ns} {_sa}" };
             _uiCtx.Post(_ =>
             {
                 try { if (col != _lastTrayCol) { var old = _tray.Icon; _tray.Icon = MkIco(col); old?.Dispose(); _lastTrayCol = col; } _tray.Text = $"CPU Monitor — {st}"; if (_tray.ContextMenuStrip?.Items.Count > 0) _tray.ContextMenuStrip.Items[0].Text = st; } catch { }
@@ -378,7 +379,7 @@ sealed class DaemonContext : ApplicationContext
                     var cmd = JsonSerializer.Deserialize<ServerCommand>(line);
                     if (cmd != null)
                     {
-                        if (cmd.Cmd == "auth_response") { if (cmd.AuthOk && cmd.AuthKey != null) { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _ns = NetState.Connected; } else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); } }
+                        if (cmd.Cmd == "auth_response") { if (cmd.AuthOk && cmd.AuthKey != null) { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _peerCount = cmd.PeerCount; _ns = NetState.Connected; } else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); } }
                         else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
                         else if (cmd.Cmd == "paw_granted") _isPaw = true;
                         else if (cmd.Cmd == "paw_revoked") _isPaw = false;

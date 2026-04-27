@@ -217,7 +217,7 @@ sealed class ServerForm : BorderlessForm
                             cl.Authenticated = true; cl.AuthKey = msg.AuthKey; cl.MachineName = mn;
                             cl.ClientVersion = msg.AppVersion ?? "";
                             _store.Seen(mn);
-                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = msg.AuthKey, ServerId = CertificateStore.ServerCert().Thumbprint });
+                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = msg.AuthKey, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
                             _log.Add($"✓ {mn} re-auth", Th.Grn);
                             if (_cls.TryGetValue(mn, out var prev1) && !ReferenceEquals(prev1, cl))
                                 while (prev1.PendingCmds.TryDequeue(out var pc)) cl.PendingCmds.Enqueue(pc);
@@ -232,7 +232,7 @@ sealed class ServerForm : BorderlessForm
                             _store.Approve(mn, ak, ip);
                             cl.Authenticated = true; cl.AuthKey = ak; cl.MachineName = mn;
                             cl.ClientVersion = msg.AppVersion ?? "";
-                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = ak, ServerId = CertificateStore.ServerCert().Thumbprint });
+                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = ak, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
                             _log.Add($"✓ {mn} approved", Th.Grn);
                             if (_cls.TryGetValue(mn, out var prev2) && !ReferenceEquals(prev2, cl))
                                 while (prev2.PendingCmds.TryDequeue(out var pc)) cl.PendingCmds.Enqueue(pc);
