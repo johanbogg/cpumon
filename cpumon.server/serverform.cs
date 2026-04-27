@@ -296,6 +296,12 @@ sealed class ServerForm : BorderlessForm
                             BeginInvoke(() => { using var d = new ServicesDialog(cl); d.ShowDialog(this); });
                             break;
 
+                        case "events" when msg.Events != null:
+                            cl.LastEvents = msg.Events;
+                            _log.Add($"{cl.MachineName}: {msg.Events.Count} events", Th.Cyan);
+                            BeginInvoke(() => { using var d = new EventViewerDialog(cl); d.ShowDialog(this); });
+                            break;
+
                         case "cmdresult":
                             _log.Add($"[{cl.MachineName}] {msg.CmdId}: {(msg.Success ? "✓" : "✕")} {msg.Message}",
                                 msg.Success ? Th.Grn : Th.Red);
@@ -432,6 +438,7 @@ sealed class ServerForm : BorderlessForm
                     { _store.Forget(m); if (_cls.TryRemove(m, out var rc)) rc.Dispose(); _ct.Invalidate(); }
                     break;
                 case "services": cl.Send(new ServerCommand { Cmd = "list_services", CmdId = Guid.NewGuid().ToString("N")[..8] }); _log.Add($"Svcs→{m}", Th.Grn); break;
+                case "events": cl.Send(new ServerCommand { Cmd = "list_events", CmdId = Guid.NewGuid().ToString("N")[..8] }); _log.Add($"Evts→{m}", Th.Yel); break;
                 case "msg":
                     BeginInvoke(() =>
                     {
@@ -700,6 +707,7 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, bx, by, 72, 22, "⟳ Restart", Th.Org, r.MachineName, "restart"); bx += 80;
         DrawBtn(g, bx, by, 78, 22, "☰ Procs", Th.Blu, r.MachineName, "processes"); bx += 86;
         DrawBtn(g, bx, by, 68, 22, "ℹ Info", Th.Cyan, r.MachineName, "sysinfo"); bx += 76;
+        DrawBtn(g, bx, by, 74, 22, "⚠ Events", Th.Yel, r.MachineName, "events"); bx += 82;
         DrawBtn(g, bx, by, 72, 22, "⏻ Off", Th.Red, r.MachineName, "shutdown"); bx += 80;
         DrawBtn(g, bx, by, 68, 22, "🗑 Forget", Th.Dim, r.MachineName, "forget"); bx += 76;
         bool isPaw = _store.IsPaw(r.MachineName);

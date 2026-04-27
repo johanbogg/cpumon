@@ -269,3 +269,39 @@ sealed class ServicesDialog : Form
         return b;
     }
 }
+
+sealed class EventViewerDialog : Form
+{
+    public EventViewerDialog(RemoteClient cl)
+    {
+        var events = cl.LastEvents ?? new List<EventLogEntry>();
+        Text = $"⚠ Events — {cl.MachineName}"; Size = new Size(900, 500); MinimumSize = new Size(600, 350);
+        StartPosition = FormStartPosition.CenterParent; BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
+
+        var grid = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Segoe UI", 8.5f), BorderStyle = BorderStyle.None, GridLines = true, MultiSelect = false };
+        grid.Columns.Add("Time", 140); grid.Columns.Add("Level", 70); grid.Columns.Add("Source", 150); grid.Columns.Add("Message", 500);
+
+        foreach (var e in events)
+        {
+            var ts = DateTimeOffset.FromUnixTimeMilliseconds(e.TimestampUtcMs).LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss");
+            var item = new ListViewItem(ts);
+            item.SubItems.Add(e.Level); item.SubItems.Add(e.Source); item.SubItems.Add(e.Message);
+            item.ForeColor = e.Level == "Error" ? Th.Red : Th.Org;
+            grid.Items.Add(item);
+        }
+
+        var detail = new TextBox { Dock = DockStyle.Bottom, Height = 80, BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 8.5f), ReadOnly = true, Multiline = true, BorderStyle = BorderStyle.FixedSingle, ScrollBars = ScrollBars.Vertical };
+        grid.SelectedIndexChanged += (_, _) =>
+        {
+            if (grid.SelectedItems.Count > 0)
+            {
+                int idx = grid.SelectedItems[0].Index;
+                if (idx < events.Count) detail.Text = $"[{events[idx].Level}] {events[idx].Source}\r\n{DateTimeOffset.FromUnixTimeMilliseconds(events[idx].TimestampUtcMs).LocalDateTime:yyyy-MM-dd HH:mm:ss}\r\n\r\n{events[idx].Message}";
+            }
+        };
+
+        var cp = new Button { Text = "📋 Copy", Dock = DockStyle.Bottom, Height = 30, BackColor = Th.Card, ForeColor = Th.Blu, FlatStyle = FlatStyle.Flat };
+        cp.Click += (_, _) => { if (grid.SelectedItems.Count > 0) { int idx = grid.SelectedItems[0].Index; if (idx < events.Count) Clipboard.SetText(events[idx].Message); } };
+        Controls.Add(grid); Controls.Add(detail); Controls.Add(cp);
+    }
+}

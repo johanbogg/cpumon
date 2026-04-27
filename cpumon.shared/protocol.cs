@@ -194,6 +194,7 @@ public sealed class ClientMessage
     [JsonPropertyName("transferId")] public string? TransferId { get; set; }
     [JsonPropertyName("appVersion")] public string? AppVersion { get; set; }
     [JsonPropertyName("serviceList")] public List<ServiceInfo>? ServiceList { get; set; }
+    [JsonPropertyName("events")] public List<EventLogEntry>? Events { get; set; }
     [JsonPropertyName("pawCmd")] public ServerCommand? PawCmd { get; set; }
     [JsonPropertyName("pawTarget")] public string? PawTarget { get; set; }
     // Remote desktop
@@ -445,6 +446,14 @@ public sealed class ServiceInfo
     [JsonPropertyName("d")] public string DisplayName { get; set; } = "";
     [JsonPropertyName("s")] public string Status { get; set; } = "";
     [JsonPropertyName("st")] public string StartType { get; set; } = "";
+}
+
+public sealed class EventLogEntry
+{
+    [JsonPropertyName("level")] public string Level { get; set; } = "";
+    [JsonPropertyName("src")] public string Source { get; set; } = "";
+    [JsonPropertyName("msg")] public string Message { get; set; } = "";
+    [JsonPropertyName("ts")] public long TimestampUtcMs { get; set; }
 }
 
 public sealed class FileDownloadState : IDisposable
