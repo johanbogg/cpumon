@@ -336,7 +336,7 @@ public sealed class RemoteClient : IDisposable
     public void Dispose()
     {
         foreach (var td in TerminalDialogs.Values) try { td.Close(); } catch { } TerminalDialogs.Clear();
-        foreach (var fd in FileBrowserDialogs.Values) try { fd.Close(); } catch { } FileBrowserDialogs.Clear();
+        foreach (var fd in FileBrowserDialogs.Values) try { fd.Dispose(); } catch { } FileBrowserDialogs.Clear();
         foreach (var rd in RdpDialogs.Values) try { rd.Close(); } catch { } RdpDialogs.Clear();
         foreach (var ds in ActiveDownloads.Values) ds.Dispose(); ActiveDownloads.Clear();
         _rd.Dispose(); _wr.Dispose(); _ssl.Dispose(); _tcp.Dispose();
