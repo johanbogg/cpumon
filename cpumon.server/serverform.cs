@@ -609,7 +609,9 @@ sealed class ServerForm : BorderlessForm
         if (r.RamTotalGB > 0)
         { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); using var rb = new SolidBrush(pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); g.DrawString($"RAM {pct}%", mf, rb, mx, y + 10); mx += 56; }
         if (r.Drives.Count > 0)
-        { var d0 = r.Drives[0]; int dpct = d0.TotalGB > 0 ? (int)((d0.TotalGB - d0.FreeGB) / d0.TotalGB * 100) : 0; using var db = new SolidBrush(dpct > 90 ? Th.Red : dpct > 75 ? Th.Org : Th.Dim); g.DrawString($"{d0.Name} {d0.FreeGB:0.0}G", mf, db, mx, y + 10); }
+        { var d0 = r.Drives[0]; int dpct = d0.TotalGB > 0 ? (int)((d0.TotalGB - d0.FreeGB) / d0.TotalGB * 100) : 0; using var db = new SolidBrush(dpct > 90 ? Th.Red : dpct > 75 ? Th.Org : Th.Dim); g.DrawString($"{d0.Name} {d0.FreeGB:0.0}G", mf, db, mx, y + 10); mx += 72; }
+        if (r.NetUpKBps + r.NetDownKBps > 0.5)
+        { using var netb = new SolidBrush(Th.Dim); g.DrawString($"↑{FmtNet(r.NetUpKBps)} ↓{FmtNet(r.NetDownKBps)}", mf, netb, mx, y + 10); }
 
         using var modf = new Font("Segoe UI", 7f);
         using var modb = new SolidBrush(cl.SendMode == "keepalive" ? Th.Dim : Th.Grn);
@@ -659,7 +661,8 @@ sealed class ServerForm : BorderlessForm
         int my2 = y + 63, mx2 = x + 12;
         if (r.RamTotalGB > 0) { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); DrawMetric(g, mx2, my2, "RAM", $"{r.RamUsedGB:0.1}/{r.RamTotalGB:0.0} GB", pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); mx2 += 140; }
         foreach (var drv in r.Drives.Take(3)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); mx2 += 100; }
-        if (r.GpuVramTotalMB is > 0 && r.GpuVramUsedMB.HasValue) { string vram = r.GpuVramTotalMB > 1024 ? $"{r.GpuVramUsedMB/1024:0.1}/{r.GpuVramTotalMB/1024:0.0}G" : $"{r.GpuVramUsedMB:0}/{r.GpuVramTotalMB:0}M"; DrawMetric(g, mx2, my2, "VRAM", vram, Th.Blu); }
+        if (r.GpuVramTotalMB is > 0 && r.GpuVramUsedMB.HasValue) { string vram = r.GpuVramTotalMB > 1024 ? $"{r.GpuVramUsedMB/1024:0.1}/{r.GpuVramTotalMB/1024:0.0}G" : $"{r.GpuVramUsedMB:0}/{r.GpuVramTotalMB:0}M"; DrawMetric(g, mx2, my2, "VRAM", vram, Th.Blu); mx2 += 110; }
+        if (r.NetUpKBps + r.NetDownKBps > 0.5) DrawMetric(g, mx2, my2, "NET ↑↓", $"{FmtNet(r.NetUpKBps)}/{FmtNet(r.NetDownKBps)}", Th.Dim);
 
         // Row 1
         int by = y + hdrH, bx = x + 12;
@@ -716,6 +719,7 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, x + w - 78, y + 4, 68, 20, "🗑 Forget", Th.Dim, ac.Name, "forget_offline");
     }
 
+    static string FmtNet(double kbps) => kbps >= 1024 ? $"{kbps / 1024.0:0.0}M" : $"{kbps:0}K";
     static void DrawMetric(Graphics g, int x, int y, string l, string v, Color c)
     {
         using var lf = new Font("Segoe UI", 6.5f); using var lb = new SolidBrush(Th.Dim);

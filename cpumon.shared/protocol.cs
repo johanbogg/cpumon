@@ -371,6 +371,8 @@ public sealed class MachineReport
     [JsonPropertyName("gpuTemp")] public float? GpuTemperatureC { get; set; }
     [JsonPropertyName("gpuVramUsed")] public float? GpuVramUsedMB { get; set; }
     [JsonPropertyName("gpuVramTotal")] public float? GpuVramTotalMB { get; set; }
+    [JsonPropertyName("netUp")] public double NetUpKBps { get; set; }
+    [JsonPropertyName("netDn")] public double NetDownKBps { get; set; }
 }
 
 public sealed class CoreReport
