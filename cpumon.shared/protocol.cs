@@ -202,6 +202,7 @@ public sealed class ServerCommand
     [JsonPropertyName("pawCmdId")] public string? PawCmdId { get; set; }
     [JsonPropertyName("updateChunk")] public FileChunkData? UpdateChunk { get; set; }
     [JsonPropertyName("issuedAt")] public long IssuedAtMs { get; set; }
+    [JsonPropertyName("nonce")] public string? Nonce { get; set; }
     // Remote desktop
     [JsonPropertyName("rdpId")] public string? RdpId { get; set; }
     [JsonPropertyName("rdpFps")] public int RdpFps { get; set; }

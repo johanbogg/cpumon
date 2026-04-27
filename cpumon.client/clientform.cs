@@ -168,6 +168,7 @@ sealed class ClientForm : BorderlessForm
             {
                 _ec++; _ns = NetState.Reconnecting; _log.Add($"Send: {ex.Message}", Th.Red);
                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                CmdExec.DisposeAll();
                 try { _pacer.Wait(ct); } catch { }
             }
         }
@@ -252,6 +253,7 @@ sealed class ClientForm : BorderlessForm
     internal void SendPawCommand(string target, ServerCommand cmd)
     {
         cmd.IssuedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        cmd.Nonce = Guid.NewGuid().ToString("N");
         var msg = new ClientMessage { Type = "paw_command", PawTarget = target, PawCmd = cmd };
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(msg)); _wr?.Flush(); }
     }

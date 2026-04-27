@@ -34,6 +34,7 @@ sealed class ServerForm : BorderlessForm
     int _sy;
     readonly List<(Rectangle R, string M, string A)> _btns = new();
     readonly Dictionary<string, ProcDialog> _procDialogs = new();
+    readonly ConcurrentDictionary<string, long> _pawSeenNonces = new();
 
     public ServerForm(bool noBroadcast)
     {
@@ -332,7 +333,11 @@ sealed class ServerForm : BorderlessForm
                             if (_cls.TryGetValue(msg.PawTarget, out var pawTarget))
                             {
                                 var pc = msg.PawCmd;
-                                if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - pc.IssuedAtMs > 60_000) break;
+                                var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                                if (nowMs - pc.IssuedAtMs > 60_000) break;
+                                if (pc.Nonce == null || !_pawSeenNonces.TryAdd(pc.Nonce, nowMs)) break;
+                                foreach (var kv in _pawSeenNonces.Where(kv => nowMs - kv.Value > 60_000).ToList())
+                                    _pawSeenNonces.TryRemove(kv.Key, out _);
                                 if (pc.Cmd == "rdp_open" && pc.RdpId != null)
                                     pawTarget.PawRdpSessionOwners[pc.RdpId] = cl.MachineName;
                                 else if (pc.Cmd == "rdp_close" && pc.RdpId != null)
