@@ -192,6 +192,13 @@ public sealed class RdpViewerDialog : Form
         refreshBtn.Click += (_, _) => _sendCmd(new ServerCommand { Cmd = "rdp_refresh", RdpId = _rdpId });
         top.Controls.Add(refreshBtn);
 
+        top.Controls.Add(new Label { Text = "Mon:", ForeColor = Th.Dim, Font = new Font("Segoe UI", 7.5f), AutoSize = true, Location = new Point(812, 10) });
+        var monPicker = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Th.Card, ForeColor = Th.Brt, FlatStyle = FlatStyle.Flat, Location = new Point(840, 5), Size = new Size(56, 22), Font = new Font("Segoe UI", 8f) };
+        monPicker.Items.AddRange(new object[] { "1", "2", "3", "4" });
+        monPicker.SelectedIndex = 0;
+        monPicker.SelectedIndexChanged += (_, _) => { _sendCmd(new ServerCommand { Cmd = "rdp_set_monitor", RdpId = _rdpId, RdpMonitorIndex = monPicker.SelectedIndex }); _sendCmd(new ServerCommand { Cmd = "rdp_refresh", RdpId = _rdpId }); };
+        top.Controls.Add(monPicker);
+
         // Canvas
         _canvas = new PictureBox
         {

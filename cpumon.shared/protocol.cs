@@ -244,6 +244,7 @@ public sealed class ServerCommand
     [JsonPropertyName("rdpId")] public string? RdpId { get; set; }
     [JsonPropertyName("rdpFps")] public int RdpFps { get; set; }
     [JsonPropertyName("rdpQuality")] public int RdpQuality { get; set; }
+    [JsonPropertyName("rdpMonitor")] public int RdpMonitorIndex { get; set; }
     [JsonPropertyName("rdpInput")] public RdpInputEvent? RdpInput { get; set; }
     [JsonPropertyName("rdpFrame")] public RdpFrameData? RdpFrame { get; set; }
     [JsonPropertyName("rdpScreenW")] public int RdpScreenW { get; set; }

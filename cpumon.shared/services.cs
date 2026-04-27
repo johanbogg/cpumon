@@ -46,6 +46,7 @@ public sealed class RdpCaptureSession : IDisposable
     int _screenW, _screenH;
     bool _disposed;
     bool _needFull = true;
+    int _monitorIndex;
 
     public RdpCaptureSession(string id, int fps, int quality, object netLock, StreamWriter? netWriter)
     {
@@ -57,6 +58,7 @@ public sealed class RdpCaptureSession : IDisposable
     public void SetFps(int fps) => _fps = Math.Clamp(fps, 1, 30);
     public void SetQuality(int q) => _quality = Math.Clamp(q, 10, 95);
     public void RequestFull() => _needFull = true;
+    public void SetMonitor(int n) { _monitorIndex = Math.Clamp(n, 0, Screen.AllScreens.Length - 1); _screenW = 0; _screenH = 0; _needFull = true; }
 
     async Task CaptureLoop(CancellationToken ct)
     {
@@ -79,7 +81,8 @@ public sealed class RdpCaptureSession : IDisposable
     {
         if (_disposed) return;
 
-        var bounds = Screen.PrimaryScreen!.Bounds;
+        var screens = Screen.AllScreens; var screen = screens[Math.Clamp(_monitorIndex, 0, screens.Length - 1)];
+        var bounds = screen.Bounds;
         int sw = bounds.Width, sh = bounds.Height;
 
         if (sw != _screenW || sh != _screenH)
@@ -460,6 +463,8 @@ public static class CmdExec
                 if (cmd.RdpId != null && RdpSessions.TryGetValue(cmd.RdpId, out var rdpQ)) rdpQ.SetQuality(cmd.RdpQuality); break;
             case "rdp_refresh":
                 if (cmd.RdpId != null && RdpSessions.TryGetValue(cmd.RdpId, out var rdpRef)) rdpRef.RequestFull(); break;
+            case "rdp_set_monitor":
+                if (cmd.RdpId != null && RdpSessions.TryGetValue(cmd.RdpId, out var rdpMon)) rdpMon.SetMonitor(cmd.RdpMonitorIndex); break;
             case "rdp_input":
                 if (cmd.RdpId != null && cmd.RdpInput != null && RdpSessions.ContainsKey(cmd.RdpId))
                     InputInjector.InjectInput(cmd.RdpInput);
