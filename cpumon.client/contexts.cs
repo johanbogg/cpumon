@@ -36,6 +36,7 @@ sealed class AgentContext : ApplicationContext
     StreamWriter? _pipeWriter;
     readonly object _pipeLock = new();
     volatile bool _connected;
+    Color _lastTrayCol = Color.Empty;
 
     public AgentContext()
     {
@@ -92,9 +93,13 @@ sealed class AgentContext : ApplicationContext
             {
                 try
                 {
-                    var old = _tray.Icon;
-                    _tray.Icon = MkIco(col);
-                    old?.Dispose();
+                    if (col != _lastTrayCol)
+                    {
+                        var old = _tray.Icon;
+                        _tray.Icon = MkIco(col);
+                        old?.Dispose();
+                        _lastTrayCol = col;
+                    }
                     _tray.Text = status;
                     if (_tray.ContextMenuStrip?.Items.Count > 0)
                         _tray.ContextMenuStrip.Items[0].Text = status;
@@ -251,6 +256,7 @@ sealed class DaemonContext : ApplicationContext
     readonly SendPacer _pacer = new();
     volatile bool _isPaw;
     long _authFailedAt;
+    Color _lastTrayCol = Color.Empty;
 
     public DaemonContext(string? forceIp, string? token)
     {
@@ -295,7 +301,7 @@ sealed class DaemonContext : ApplicationContext
             string st = _ns switch { NetState.Connected => $"Connected {_sa} ↑{_sc}{(_isPaw ? " [PAW]" : "")}", NetState.AuthFailed => "Auth failed!", NetState.Searching => "Searching...", _ => $"{_ns} {_sa}" };
             _uiCtx.Post(_ =>
             {
-                try { var old = _tray.Icon; _tray.Icon = MkIco(col); old?.Dispose(); _tray.Text = $"CPU Monitor — {st}"; if (_tray.ContextMenuStrip?.Items.Count > 0) _tray.ContextMenuStrip.Items[0].Text = st; } catch { }
+                try { if (col != _lastTrayCol) { var old = _tray.Icon; _tray.Icon = MkIco(col); old?.Dispose(); _lastTrayCol = col; } _tray.Text = $"CPU Monitor — {st}"; if (_tray.ContextMenuStrip?.Items.Count > 0) _tray.ContextMenuStrip.Items[0].Text = st; } catch { }
             }, null);
         }
     }
@@ -353,7 +359,7 @@ sealed class DaemonContext : ApplicationContext
                 else { var snap = _mon.GetSnapshot(); var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu), MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m)); _wr?.Flush(); } }
                 _sc++; _ns = NetState.Connected;
             }
-            catch { _ns = NetState.Reconnecting; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } try { _pacer.Wait(ct); } catch { } }
+            catch { _ns = NetState.Reconnecting; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } CmdExec.DisposeAll(); try { _pacer.Wait(ct); } catch { } }
         }
     }
 
