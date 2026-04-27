@@ -65,6 +65,7 @@ def save_state(token, key, server_id):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w") as f:
         json.dump({"t": token, "k": key, "s": server_id}, f)
+    os.chmod(STATE_FILE, 0o600)
 
 def clear_state():
     try:
@@ -679,10 +680,15 @@ class Client:
     # ── Main loops ─────────────────────────────────────────────────────────
 
     def _send_loop(self):
+        _primed = False
         while self._running:
             if not self._authenticated or not self._ssl:
+                _primed = False
                 time.sleep(0.2)
                 continue
+            if not _primed and _PSUTIL:
+                psutil.cpu_percent(interval=None)
+                _primed = True
             try:
                 if self._mode == "keepalive":
                     self._send({"type": "keepalive", "machine": self._machine, "authKey": self._ak})
@@ -698,10 +704,6 @@ class Client:
 
     def run(self):
         threading.Thread(target=self._send_loop, daemon=True).start()
-
-        # Prime cpu_percent baseline (first call always returns 0.0)
-        if _PSUTIL:
-            psutil.cpu_percent(interval=None)
 
         while self._running:
             host = self._server_ip
