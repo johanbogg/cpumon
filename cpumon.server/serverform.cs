@@ -280,6 +280,8 @@ sealed class ServerForm : BorderlessForm
                         case "sysinfo" when msg.SysInfo != null:
                             cl.LastSysInfo = msg.SysInfo;
                             _log.Add($"{cl.MachineName}: sysinfo", Th.Cyan);
+                            var firstMac = msg.SysInfo.MacAddresses.FirstOrDefault(m => !string.IsNullOrEmpty(m));
+                            if (firstMac != null) _store.SetMac(cl.MachineName, firstMac);
                             BeginInvoke(() => { using var d = new SysInfoDialog(cl); d.ShowDialog(this); });
                             break;
 
@@ -379,6 +381,28 @@ sealed class ServerForm : BorderlessForm
             {
                 if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
                 { _store.Forget(m); _ct.Invalidate(); }
+                break;
+            }
+            if (a == "wake_offline")
+            {
+                var mac = _store.GetMac(m);
+                if (!string.IsNullOrEmpty(mac))
+                {
+                    try
+                    {
+                        var bytes = mac.Split(':', '-').Select(s => Convert.ToByte(s, 16)).ToArray();
+                        if (bytes.Length == 6)
+                        {
+                            var pkt = new byte[102];
+                            for (int i = 0; i < 6; i++) pkt[i] = 0xFF;
+                            for (int rep = 0; rep < 16; rep++) Array.Copy(bytes, 0, pkt, 6 + rep * 6, 6);
+                            using var u = new UdpClient(); u.EnableBroadcast = true;
+                            u.Send(pkt, pkt.Length, new IPEndPoint(IPAddress.Broadcast, 9));
+                            _log.Add($"WoL sent to {m} ({mac})", Th.Yel);
+                        }
+                    }
+                    catch (Exception ex) { _log.Add($"WoL failed: {ex.Message}", Th.Red); }
+                }
                 break;
             }
 
@@ -716,6 +740,7 @@ sealed class ServerForm : BorderlessForm
         using (var sf2 = new Font("Segoe UI", 7.5f)) using (var sb2 = new SolidBrush(Color.FromArgb(90, 90, 100)))
             g.DrawString($"Offline · {agoStr}", sf2, sb2, x + 140, y + 8);
         if (!string.IsNullOrEmpty(ac.Ip)) { using var if2 = new Font("Segoe UI", 7f); using var ib = new SolidBrush(Color.FromArgb(55, 75, 95)); g.DrawString(ac.Ip, if2, ib, x + 270, y + 8); }
+        if (!string.IsNullOrEmpty(ac.Mac)) DrawBtn(g, x + w - 158, y + 4, 72, 20, "⚡ Wake", Th.Yel, ac.Name, "wake_offline");
         DrawBtn(g, x + w - 78, y + 4, 68, 20, "🗑 Forget", Th.Dim, ac.Name, "forget_offline");
     }
 

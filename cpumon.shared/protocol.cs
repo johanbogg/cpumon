@@ -141,10 +141,12 @@ public sealed class ApprovedClientStore
     public void Revoke(string n) { lock (_l) { if (_c.TryGetValue(n, out var c)) { c.Revoked = true; Save(); } } }
     public bool IsPaw(string n) { lock (_l) { return _c.TryGetValue(n, out var c) && c.Paw && !c.Revoked; } }
     public void SetPaw(string n, bool v) { lock (_l) { if (_c.TryGetValue(n, out var c)) { c.Paw = v; Save(); } } }
+    public void SetMac(string n, string mac) { lock (_l) { if (_c.TryGetValue(n, out var c) && c.Mac != mac) { c.Mac = mac; Save(); } } }
+    public string GetMac(string n) { lock (_l) { return _c.TryGetValue(n, out var c) ? c.Mac : ""; } }
     public List<ApprovedClient> All() { lock (_l) { return _c.Values.ToList(); } }
     public void Prune(int daysOld) { lock (_l) { var cutoff = DateTime.UtcNow.AddDays(-daysOld); var stale = _c.Values.Where(c => !c.Paw && !c.Revoked && c.Seen < cutoff).Select(c => c.Name).ToList(); foreach (var n in stale) _c.Remove(n); if (stale.Count > 0) Save(); } }
     void Load() { try { if (File.Exists(_path)) { var list = JsonSerializer.Deserialize<List<ApprovedClient>>(File.ReadAllText(_path)); if (list != null) foreach (var c in list) { c.Key = DecryptKey(c.Key); _c[c.Name] = c; } } } catch { } }
-    void Save() { try { var list = _c.Values.Select(c => new ApprovedClient { Name = c.Name, Key = EncryptKey(c.Key), At = c.At, Seen = c.Seen, Ip = c.Ip, Revoked = c.Revoked, Paw = c.Paw }).ToList(); File.WriteAllText(_path, JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true })); } catch { } }
+    void Save() { try { var list = _c.Values.Select(c => new ApprovedClient { Name = c.Name, Key = EncryptKey(c.Key), At = c.At, Seen = c.Seen, Ip = c.Ip, Revoked = c.Revoked, Paw = c.Paw, Mac = c.Mac }).ToList(); File.WriteAllText(_path, JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true })); } catch { } }
     static string EncryptKey(string k) { return Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(k), null, DataProtectionScope.LocalMachine)); }
     static string DecryptKey(string k) { try { return Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(k), null, DataProtectionScope.LocalMachine)); } catch { return ""; } }
 }
@@ -158,6 +160,7 @@ public sealed class ApprovedClient
     [JsonPropertyName("i")] public string Ip { get; set; } = "";
     [JsonPropertyName("r")] public bool Revoked { get; set; }
     [JsonPropertyName("p")] public bool Paw { get; set; }
+    [JsonPropertyName("m")] public string Mac { get; set; } = "";
 }
 
 public static class TokenStore
