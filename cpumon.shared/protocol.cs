@@ -56,8 +56,40 @@ public sealed class CLog
     readonly Queue<(DateTime T, string M, Color C)> _e = new();
     readonly object _l = new();
     readonly int _mx;
-    public CLog(int mx = 50) => _mx = mx;
-    public void Add(string m, Color c) { lock (_l) { _e.Enqueue((DateTime.Now, m, c)); if (_e.Count > _mx) _e.Dequeue(); } }
+    readonly StreamWriter? _fw;
+
+    public CLog(int mx = 50, string? file = null)
+    {
+        _mx = mx;
+        if (file == null) return;
+        try
+        {
+            if (File.Exists(file) && new FileInfo(file).Length > 2 * 1024 * 1024)
+                File.Move(file, file + ".1", overwrite: true);
+        }
+        catch { }
+        try
+        {
+            if (File.Exists(file))
+                foreach (var line in File.ReadLines(file).TakeLast(mx))
+                    if (line.Length > 20)
+                        _e.Enqueue((DateTime.TryParse(line[..19], out var dt) ? dt : DateTime.Now, line[20..], Color.Gray));
+        }
+        catch { }
+        try { _fw = new StreamWriter(file, append: true, Encoding.UTF8) { AutoFlush = true }; } catch { }
+    }
+
+    public void Add(string m, Color c)
+    {
+        var now = DateTime.Now;
+        lock (_l)
+        {
+            _e.Enqueue((now, m, c));
+            if (_e.Count > _mx) _e.Dequeue();
+            try { _fw?.WriteLine($"{now:yyyy-MM-dd HH:mm:ss} {m}"); } catch { }
+        }
+    }
+
     public List<(DateTime T, string M, Color C)> Recent(int n) { lock (_l) { return _e.TakeLast(n).ToList(); } }
 }
 

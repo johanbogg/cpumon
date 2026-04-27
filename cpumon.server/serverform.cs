@@ -21,7 +21,7 @@ sealed class ServerForm : BorderlessForm
     readonly Panel _ct;
     readonly Timer _tm;
     readonly CancellationTokenSource _cts = new();
-    readonly CLog _log = new();
+    readonly CLog _log = new(50, "cpumon_server.log");
     readonly ConcurrentDictionary<string, RemoteClient> _cls = new();
     readonly ApprovedClientStore _store = new();
     const int MaxConnections = 50;
