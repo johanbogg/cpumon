@@ -47,6 +47,9 @@ public sealed class RdpCaptureSession : IDisposable
     bool _disposed;
     bool _needFull = true;
     int _monitorIndex;
+    int _maxKBps;
+    long _bwBytesThisSec;
+    long _bwSecTicks = DateTime.UtcNow.Ticks;
 
     public RdpCaptureSession(string id, int fps, int quality, object netLock, StreamWriter? netWriter)
     {
@@ -59,6 +62,7 @@ public sealed class RdpCaptureSession : IDisposable
     public void SetQuality(int q) => _quality = Math.Clamp(q, 10, 95);
     public void RequestFull() => _needFull = true;
     public void SetMonitor(int n) { _monitorIndex = Math.Clamp(n, 0, Screen.AllScreens.Length - 1); _screenW = 0; _screenH = 0; _needFull = true; }
+    public void SetBandwidthCap(int kbps) => _maxKBps = Math.Max(0, kbps);
 
     async Task CaptureLoop(CancellationToken ct)
     {
@@ -152,8 +156,24 @@ public sealed class RdpCaptureSession : IDisposable
             CursorX = cur.X, CursorY = cur.Y
         };
 
-        var msg = new ClientMessage { Type = "rdp_frame", RdpId = Id, RdpFrame = frame };
-        lock (_netLock) { try { _netWriter?.WriteLine(JsonSerializer.Serialize(msg)); _netWriter?.Flush(); } catch { } }
+        var json = JsonSerializer.Serialize(new ClientMessage { Type = "rdp_frame", RdpId = Id, RdpFrame = frame });
+        lock (_netLock) { try { _netWriter?.WriteLine(json); _netWriter?.Flush(); } catch { } }
+        ThrottleBandwidth(json.Length);
+    }
+
+    void ThrottleBandwidth(int bytesSent)
+    {
+        if (_maxKBps <= 0) return;
+        long now = DateTime.UtcNow.Ticks;
+        if (now - _bwSecTicks >= TimeSpan.TicksPerSecond) { _bwBytesThisSec = bytesSent; _bwSecTicks = now; return; }
+        _bwBytesThisSec += bytesSent;
+        long cap = (long)_maxKBps * 1024;
+        if (_bwBytesThisSec >= cap)
+        {
+            long msLeft = (TimeSpan.TicksPerSecond - (now - _bwSecTicks)) / TimeSpan.TicksPerMillisecond;
+            if (msLeft > 0) Thread.Sleep((int)msLeft);
+            _bwBytesThisSec = 0; _bwSecTicks = DateTime.UtcNow.Ticks;
+        }
     }
 
     static ulong HashTile(nint scan0, int stride, int tx, int ty, int tw, int th)
@@ -465,6 +485,8 @@ public static class CmdExec
                 if (cmd.RdpId != null && RdpSessions.TryGetValue(cmd.RdpId, out var rdpRef)) rdpRef.RequestFull(); break;
             case "rdp_set_monitor":
                 if (cmd.RdpId != null && RdpSessions.TryGetValue(cmd.RdpId, out var rdpMon)) rdpMon.SetMonitor(cmd.RdpMonitorIndex); break;
+            case "rdp_set_bandwidth":
+                if (cmd.RdpId != null && RdpSessions.TryGetValue(cmd.RdpId, out var rdpBw)) rdpBw.SetBandwidthCap(cmd.RdpBandwidthKBps); break;
             case "rdp_input":
                 if (cmd.RdpId != null && cmd.RdpInput != null && RdpSessions.ContainsKey(cmd.RdpId))
                     InputInjector.InjectInput(cmd.RdpInput);

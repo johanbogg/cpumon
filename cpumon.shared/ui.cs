@@ -199,6 +199,17 @@ public sealed class RdpViewerDialog : Form
         monPicker.SelectedIndexChanged += (_, _) => { _sendCmd(new ServerCommand { Cmd = "rdp_set_monitor", RdpId = _rdpId, RdpMonitorIndex = monPicker.SelectedIndex }); _sendCmd(new ServerCommand { Cmd = "rdp_refresh", RdpId = _rdpId }); };
         top.Controls.Add(monPicker);
 
+        var bwLabel = new Label { Text = "BW:∞", ForeColor = Th.Dim, Font = new Font("Segoe UI", 7.5f), AutoSize = true, Location = new Point(904, 10) };
+        top.Controls.Add(bwLabel);
+        var bwSlider = new TrackBar { Minimum = 0, Maximum = 20, Value = 0, TickFrequency = 5, SmallChange = 1, Size = new Size(90, 20), Location = new Point(932, 5), BackColor = Th.TBg };
+        bwSlider.ValueChanged += (_, _) =>
+        {
+            int kbps = bwSlider.Value * 100;
+            bwLabel.Text = kbps == 0 ? "BW:∞" : $"BW:{kbps}K";
+            _sendCmd(new ServerCommand { Cmd = "rdp_set_bandwidth", RdpId = _rdpId, RdpBandwidthKBps = kbps });
+        };
+        top.Controls.Add(bwSlider);
+
         // Canvas
         _canvas = new PictureBox
         {
