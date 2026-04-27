@@ -107,6 +107,11 @@ sealed class ClientForm : BorderlessForm
             _mon.Dispose(); CmdExec.DisposeAll();
             _pawForm?.Close();
         };
+
+        Action? onTh = null;
+        onTh = () => { if (!IsDisposed) BeginInvoke(() => { BackColor = Th.Bg; _netP.BackColor = Th.Bg; _cpuP.BackColor = Th.Bg; _cpuP.Invalidate(); _netP.Invalidate(); }); };
+        Th.ThemeChanged += onTh;
+        FormClosed += (_, _) => Th.ThemeChanged -= onTh;
     }
 
     // ── Network loops ──

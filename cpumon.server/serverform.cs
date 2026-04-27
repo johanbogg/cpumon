@@ -81,6 +81,11 @@ sealed class ServerForm : BorderlessForm
             foreach (var c in _cls.Values) c.Dispose();
             CmdExec.DisposeAll();
         };
+
+        Action? onTh = null;
+        onTh = () => { if (!IsDisposed) BeginInvoke(() => { BackColor = Th.Bg; _ct.BackColor = Th.Bg; _ct.Invalidate(); }); };
+        Th.ThemeChanged += onTh;
+        FormClosed += (_, _) => Th.ThemeChanged -= onTh;
     }
 
     void UpdateModes()
@@ -377,6 +382,7 @@ sealed class ServerForm : BorderlessForm
             if (a == "newtoken") { _tok = Security.GenToken(); _tokAt = DateTime.UtcNow; _log.Add($"New token: {_tok}", Th.Yel); _ct.Invalidate(); break; }
             if (a == "copytoken") { Clipboard.SetText(_tok); _log.Add("Token copied", Th.Grn); break; }
             if (a == "showapproved") { BeginInvoke(() => { using var d = new ApprovedClientsDialog(_store, _cls, _log); d.ShowDialog(this); }); break; }
+            if (a == "theme") { Th.Toggle(); break; }
             if (a == "forget_offline")
             {
                 if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
@@ -593,7 +599,8 @@ sealed class ServerForm : BorderlessForm
         int bx = x + 260;
         DrawBtn(g, bx, y + 28, 70, 20, "📋 Copy", Th.Blu, "", "copytoken"); bx += 78;
         DrawBtn(g, bx, y + 28, 70, 20, "🔄 New", Th.Org, "", "newtoken"); bx += 78;
-        DrawBtn(g, bx, y + 28, 80, 20, "👥 Clients", Th.Cyan, "", "showapproved");
+        DrawBtn(g, bx, y + 28, 80, 20, "👥 Clients", Th.Cyan, "", "showapproved"); bx += 88;
+        DrawBtn(g, bx, y + 28, 68, 20, Th.IsDark ? "☀ Light" : "🌙 Dark", Th.Dim, "", "theme");
 
         using (var cf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var ccb = new SolidBrush(_cc > 0 ? Th.Grn : Th.Dim))

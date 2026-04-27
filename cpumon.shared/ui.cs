@@ -31,19 +31,29 @@ using System.ServiceProcess;
 // ═══════════════════════════════════════════════════
 public static class Th
 {
-    public static readonly Color Bg = Color.FromArgb(18, 18, 22);
-    public static readonly Color TBg = Color.FromArgb(22, 22, 28);
-    public static readonly Color Card = Color.FromArgb(36, 36, 44);
-    public static readonly Color Brd = Color.FromArgb(55, 55, 65);
-    public static readonly Color Blu = Color.FromArgb(80, 160, 255);
-    public static readonly Color Grn = Color.FromArgb(80, 220, 140);
-    public static readonly Color Org = Color.FromArgb(255, 180, 60);
-    public static readonly Color Red = Color.FromArgb(255, 80, 80);
-    public static readonly Color Yel = Color.FromArgb(255, 220, 80);
-    public static readonly Color Dim = Color.FromArgb(140, 140, 155);
-    public static readonly Color Brt = Color.FromArgb(230, 230, 240);
-    public static readonly Color Cyan = Color.FromArgb(80, 220, 240);
-    public static readonly Color Mag = Color.FromArgb(200, 120, 255);
+    public static bool IsDark = true;
+    public static event Action? ThemeChanged;
+    public static Color Bg = Color.FromArgb(18, 18, 22);
+    public static Color TBg = Color.FromArgb(22, 22, 28);
+    public static Color Card = Color.FromArgb(36, 36, 44);
+    public static Color Brd = Color.FromArgb(55, 55, 65);
+    public static Color Blu = Color.FromArgb(80, 160, 255);
+    public static Color Grn = Color.FromArgb(80, 220, 140);
+    public static Color Org = Color.FromArgb(255, 180, 60);
+    public static Color Red = Color.FromArgb(255, 80, 80);
+    public static Color Yel = Color.FromArgb(255, 220, 80);
+    public static Color Dim = Color.FromArgb(140, 140, 155);
+    public static Color Brt = Color.FromArgb(230, 230, 240);
+    public static Color Cyan = Color.FromArgb(80, 220, 240);
+    public static Color Mag = Color.FromArgb(200, 120, 255);
+
+    public static void Toggle()
+    {
+        IsDark = !IsDark;
+        if (IsDark) { Bg = Color.FromArgb(18, 18, 22); TBg = Color.FromArgb(22, 22, 28); Card = Color.FromArgb(36, 36, 44); Brd = Color.FromArgb(55, 55, 65); Brt = Color.FromArgb(230, 230, 240); Dim = Color.FromArgb(140, 140, 155); Blu = Color.FromArgb(80, 160, 255); Grn = Color.FromArgb(80, 220, 140); Org = Color.FromArgb(255, 180, 60); Red = Color.FromArgb(255, 80, 80); Yel = Color.FromArgb(255, 220, 80); Cyan = Color.FromArgb(80, 220, 240); Mag = Color.FromArgb(200, 120, 255); }
+        else { Bg = Color.FromArgb(245, 245, 250); TBg = Color.FromArgb(235, 235, 242); Card = Color.FromArgb(215, 215, 225); Brd = Color.FromArgb(185, 185, 200); Brt = Color.FromArgb(20, 20, 30); Dim = Color.FromArgb(100, 100, 115); Blu = Color.FromArgb(0, 110, 210); Grn = Color.FromArgb(0, 155, 90); Org = Color.FromArgb(185, 110, 0); Red = Color.FromArgb(190, 40, 40); Yel = Color.FromArgb(145, 120, 0); Cyan = Color.FromArgb(0, 155, 175); Mag = Color.FromArgb(130, 55, 195); }
+        ThemeChanged?.Invoke();
+    }
 
     public static Color LdC(float p) => p switch { > 90 => Red, > 70 => Org, > 40 => Blu, _ => Grn };
     public static Color TpC(float c) => c switch { > 90 => Red, > 75 => Org, > 55 => Blu, _ => Grn };
@@ -393,5 +403,5 @@ public class BorderlessForm : Form
     protected void DD(object? s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { _dragging = true; _dms = Cursor.Position; _dfs = Location; } }
     protected void DM(object? s, MouseEventArgs e) { if (_dragging) { var c = Cursor.Position; Location = new Point(_dfs.X + c.X - _dms.X, _dfs.Y + c.Y - _dms.Y); } }
     protected void DU(object? s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) _dragging = false; }
-    protected Panel MkTitle(string title, Color col) { var tp = new Panel { Dock = DockStyle.Top, Height = 42, BackColor = Th.TBg }; var tl = new Label { Text = title, Font = new Font("Segoe UI", 11f, FontStyle.Bold), ForeColor = col, AutoSize = true, Location = new Point(12, 11) }; var (cb, mb) = Th.MkWB(this); cb.Click += (_, _) => Close(); tp.Controls.AddRange(new Control[] { tl, cb, mb }); tp.Resize += (_, _) => Th.LB(tp, cb, mb); foreach (Control c in new Control[] { tp, tl }) { c.MouseDown += DD; c.MouseMove += DM; c.MouseUp += DU; } Th.LB(tp, cb, mb); return tp; }
+    protected Panel MkTitle(string title, Color col) { var tp = new Panel { Dock = DockStyle.Top, Height = 42, BackColor = Th.TBg }; var tl = new Label { Text = title, Font = new Font("Segoe UI", 11f, FontStyle.Bold), ForeColor = col, AutoSize = true, Location = new Point(12, 11) }; var (cb, mb) = Th.MkWB(this); cb.Click += (_, _) => Close(); tp.Controls.AddRange(new Control[] { tl, cb, mb }); tp.Resize += (_, _) => Th.LB(tp, cb, mb); foreach (Control c in new Control[] { tp, tl }) { c.MouseDown += DD; c.MouseMove += DM; c.MouseUp += DU; } Th.LB(tp, cb, mb); Action? onTh = null; onTh = () => { if (!tp.IsDisposed) tp.BackColor = Th.TBg; }; Th.ThemeChanged += onTh; tp.Disposed += (_, _) => Th.ThemeChanged -= onTh; return tp; }
 }
