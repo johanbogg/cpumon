@@ -191,7 +191,11 @@ sealed class ServerForm : BorderlessForm
                     var ssl = new SslStream(tcp.GetStream(), false);
                     try
                     {
-                        await ssl.AuthenticateAsServerAsync(cert, false, false);
+                        using var tlsCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        tlsCts.CancelAfter(TimeSpan.FromSeconds(10));
+                        await ssl.AuthenticateAsServerAsync(
+                            new SslServerAuthenticationOptions { ServerCertificate = cert, ClientCertificateRequired = false, CertificateRevocationCheckMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck },
+                            tlsCts.Token);
                         await HandleClient(tcp, ssl, remote, ct);
                     }
                     catch { ssl.Dispose(); tcp.Dispose(); Interlocked.Decrement(ref _cc); }
