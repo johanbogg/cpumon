@@ -451,8 +451,13 @@ class Client:
 
         if c == "auth_response":
             if cmd.get("authOk"):
+                sid = cmd.get("serverId")
+                if sid and getattr(self, "_seen_thumb", None):
+                    if sid.upper() != self._seen_thumb.upper():
+                        print("✗ ServerId mismatch — possible MITM relay, dropping", flush=True)
+                        self._close()
+                        return
                 self._ak  = cmd.get("authKey") or self._ak
-                sid       = cmd.get("serverId")
                 if sid:
                     self._sid = sid
                 if self._tok:
