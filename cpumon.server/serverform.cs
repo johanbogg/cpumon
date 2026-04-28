@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Net.Security;
+using System.Security.Cryptography;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -509,6 +510,9 @@ sealed class ServerForm : BorderlessForm
             long offset = 0;
             var buf = new byte[Proto.FileChunkSize];
             string tid = Guid.NewGuid().ToString("N")[..12];
+            string fileHash;
+            using (var hashFs = fi.OpenRead())
+                fileHash = Convert.ToBase64String(SHA256.HashData(hashFs));
             using var fs = fi.OpenRead();
             while (true)
             {
@@ -521,7 +525,8 @@ sealed class ServerForm : BorderlessForm
                     {
                         TransferId = tid, FileName = fi.Name,
                         Data = n > 0 ? Convert.ToBase64String(buf, 0, n) : "",
-                        Offset = offset, TotalSize = total, IsLast = last
+                        Offset = offset, TotalSize = total, IsLast = last,
+                        Hash = last ? fileHash : null
                     }
                 });
                 offset += n;

@@ -226,9 +226,9 @@ sealed class CpuMonService : ServiceBase
 
     void HandleUpdateChunk(FileChunkData chunk)
     {
+        string updatePath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe");
         try
         {
-            string updatePath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe");
             if (_updateStream == null)
                 _updateStream = new FileStream(updatePath, FileMode.Create, FileAccess.Write);
             if (!string.IsNullOrEmpty(chunk.Data))
@@ -236,10 +236,20 @@ sealed class CpuMonService : ServiceBase
             if (chunk.IsLast)
             {
                 _updateStream.Flush(); _updateStream.Dispose(); _updateStream = null;
+                if (!string.IsNullOrEmpty(chunk.Hash))
+                {
+                    using var fs = File.OpenRead(updatePath);
+                    string actual = Convert.ToBase64String(SHA256.HashData(fs));
+                    if (!string.Equals(actual, chunk.Hash, StringComparison.Ordinal))
+                    {
+                        File.Delete(updatePath);
+                        return;
+                    }
+                }
                 ApplyUpdate(updatePath);
             }
         }
-        catch { _updateStream?.Dispose(); _updateStream = null; }
+        catch { _updateStream?.Dispose(); _updateStream = null; try { File.Delete(updatePath); } catch { } }
     }
 
     void ApplyUpdate(string updatePath)

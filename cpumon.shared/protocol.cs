@@ -345,6 +345,8 @@ public sealed class FileChunkData
     [JsonPropertyName("totalSize")] public long TotalSize { get; set; }
     [JsonPropertyName("isLast")] public bool IsLast { get; set; }
     [JsonPropertyName("error")] public string? Error { get; set; }
+    // SHA-256 of the complete file; present on the last chunk of update_push transfers
+    [JsonPropertyName("hash")] public string? Hash { get; set; }
 }
 
 public sealed class FileNavInfo
