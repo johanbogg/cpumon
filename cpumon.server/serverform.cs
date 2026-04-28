@@ -36,6 +36,18 @@ sealed class ServerForm : BorderlessForm
     readonly Dictionary<string, ProcDialog> _procDialogs = new();
     readonly ConcurrentDictionary<string, long> _pawSeenNonces = new();
 
+    // Explicit allow-list for commands relayed through PAW; update_push and auth_response are never relayed
+    static readonly HashSet<string> PawAllowedCmds = new(StringComparer.Ordinal)
+    {
+        "restart", "shutdown", "send_message",
+        "listprocesses", "kill", "start",
+        "sysinfo", "list_services", "service_start", "service_stop", "service_restart",
+        "get_events",
+        "terminal_open", "terminal_input", "terminal_close",
+        "file_list", "file_download", "file_upload_chunk", "file_delete", "file_mkdir", "file_rename",
+        "rdp_open", "rdp_close", "rdp_set_fps", "rdp_set_quality", "rdp_refresh", "rdp_input",
+    };
+
     public ServerForm(bool noBroadcast)
     {
         _nb = noBroadcast;
@@ -350,6 +362,7 @@ sealed class ServerForm : BorderlessForm
                             if (_cls.TryGetValue(msg.PawTarget, out var pawTarget))
                             {
                                 var pc = msg.PawCmd;
+                                if (!PawAllowedCmds.Contains(pc.Cmd)) break;
                                 var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                                 if (nowMs - pc.IssuedAtMs > 60_000) break;
                                 if (pc.Nonce == null || !_pawSeenNonces.TryAdd(pc.Nonce, nowMs)) break;
