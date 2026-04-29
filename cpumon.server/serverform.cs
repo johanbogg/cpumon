@@ -103,6 +103,11 @@ sealed class ServerForm : BorderlessForm
 
     void UpdateModes()
     {
+        // Periodically purge expired nonces so _pawSeenNonces cannot grow unbounded
+        var nowMs2 = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var kv in _pawSeenNonces.Where(kv => nowMs2 - kv.Value > 60_000).ToList())
+            _pawSeenNonces.TryRemove(kv.Key, out _);
+
         var onlineNames = _cls.Keys.ToList();
         var offlineNames = _store.All()
             .Where(a => !a.Revoked && !_cls.ContainsKey(a.Name))
