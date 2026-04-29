@@ -57,8 +57,8 @@ sealed class ServerForm : BorderlessForm
         Text = "CPU Monitor — Server";
         StartPosition = FormStartPosition.Manual;
         Location = new Point(50, 50);
-        ClientSize = new Size(700, 620);
-        MinimumSize = new Size(500, 380);
+        ClientSize = new Size(820, 640);
+        MinimumSize = new Size(560, 400);
         BackColor = Th.Bg; ForeColor = Th.Brt;
         Font = new Font("Segoe UI", 9f);
         DoubleBuffered = true; ShowInTaskbar = true;
@@ -574,9 +574,8 @@ sealed class ServerForm : BorderlessForm
 
         int x = 10, y = 6 - _sy, w = _ct.Width - 20;
 
-        // Status bar
         DrawStatusBar(g, x, y, w);
-        y += 70;
+        y += 76;
 
         if (_cls.IsEmpty)
         {
@@ -605,7 +604,7 @@ sealed class ServerForm : BorderlessForm
                 g.DrawString("OFFLINE", hf, hb, x + 4, y + 4);
             y += 18;
             foreach (var ac in offlineClients)
-            { DrawOffline(g, x, y, w, ac); y += 34; }
+            { DrawOffline(g, x, y, w, ac); y += 38; }
         }
 
         int logY = Math.Max(y + 8, _ct.Height - 110);
@@ -614,78 +613,96 @@ sealed class ServerForm : BorderlessForm
 
     void DrawStatusBar(Graphics g, int x, int y, int w)
     {
-        using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, 62, 8); g.FillPath(bg, p); }
-        using (var d = new SolidBrush(_nb ? Th.Org : Th.Grn)) g.FillEllipse(d, x + 12, y + 10, 10, 10);
+        using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, 70, 8); g.FillPath(bg, p); }
+        Color accentClr = _nb ? Th.Org : Th.Grn;
+        using (var ac = new SolidBrush(Color.FromArgb(180, accentClr)))
+            g.FillRectangle(ac, x + 1, y + 8, 4, 54);
+
+        using (var d = new SolidBrush(accentClr)) g.FillEllipse(d, x + 14, y + 11, 9, 9);
         using (var sf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var sb = new SolidBrush(Th.Brt))
-            g.DrawString(_nb ? "DIRECT ONLY" : "BROADCASTING", sf, sb, x + 28, y + 8);
+            g.DrawString(_nb ? "DIRECT ONLY" : "BROADCASTING", sf, sb, x + 30, y + 9);
         using (var df = new Font("Segoe UI", 7.5f))
         using (var db = new SolidBrush(Th.Dim))
-            g.DrawString($"TCP :{Proto.DataPort}" + (_nb ? "" : $" | UDP :{Proto.DiscPort}"), df, db, x + 150, y + 10);
+            g.DrawString($"TCP :{Proto.DataPort}" + (_nb ? "" : $" | UDP :{Proto.DiscPort}"), df, db, x + 155, y + 11);
+
         bool tokExpired = (DateTime.UtcNow - _tokAt).TotalMinutes >= 10;
         int minsLeft = Math.Max(0, 10 - (int)(DateTime.UtcNow - _tokAt).TotalMinutes);
         using (var tf = new Font("Consolas", 8.5f, FontStyle.Bold))
         using (var tb = new SolidBrush(tokExpired ? Th.Red : Th.Yel))
-            g.DrawString($"Token: {_tok}", tf, tb, x + 12, y + 30);
+            g.DrawString($"Token: {_tok}", tf, tb, x + 14, y + 32);
         using (var xf = new Font("Segoe UI", 6.5f))
         using (var xb = new SolidBrush(tokExpired ? Th.Red : Th.Dim))
-            g.DrawString(tokExpired ? "⚠ EXPIRED — click New" : $"expires in {minsLeft}m", xf, xb, x + 12, y + 46);
+            g.DrawString(tokExpired ? "⚠ EXPIRED — click New" : $"expires in {minsLeft}m", xf, xb, x + 14, y + 50);
 
         int bx = x + 260;
-        DrawBtn(g, bx, y + 28, 70, 20, "📋 Copy", Th.Blu, "", "copytoken"); bx += 78;
-        DrawBtn(g, bx, y + 28, 70, 20, "🔄 New", Th.Org, "", "newtoken"); bx += 78;
-        DrawBtn(g, bx, y + 28, 80, 20, "👥 Clients", Th.Cyan, "", "showapproved"); bx += 88;
-        DrawBtn(g, bx, y + 28, 68, 20, Th.IsDark ? "☀ Light" : "🌙 Dark", Th.Dim, "", "theme");
+        DrawBtn(g, bx, y + 23, 70, 24, "📋 Copy", Th.Blu, "", "copytoken"); bx += 78;
+        DrawBtn(g, bx, y + 23, 70, 24, "🔄 New", Th.Org, "", "newtoken"); bx += 78;
+        DrawBtn(g, bx, y + 23, 84, 24, "👥 Clients", Th.Cyan, "", "showapproved"); bx += 92;
+        DrawBtn(g, bx, y + 23, 68, 24, Th.IsDark ? "☀ Light" : "🌙 Dark", Th.Dim, "", "theme");
 
         using (var cf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var ccb = new SolidBrush(_cc > 0 ? Th.Grn : Th.Dim))
         {
             string ct = $"{_cc} conn · {_cls.Count} auth";
             var sz = g.MeasureString(ct, cf);
-            g.DrawString(ct, cf, ccb, x + w - sz.Width - 12, y + 8);
+            g.DrawString(ct, cf, ccb, x + w - sz.Width - 12, y + 9);
         }
     }
 
     int DrawCollapsed(Graphics g, int x, int y, int w, RemoteClient cl, bool stale)
     {
         var r = cl.LastReport!;
-        int h = 36;
+        int h = 42;
         Color brd = stale ? Th.Org : Th.Grn;
 
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
-        using (var bp = new Pen(Color.FromArgb(60, brd), 1f)) { using var p = Th.RR(x, y, w, h, 6); g.DrawPath(bp, p); }
+        using (var bp = new Pen(Color.FromArgb(50, brd), 1f)) { using var p = Th.RR(x, y, w, h, 6); g.DrawPath(bp, p); }
+        using (var ac = new SolidBrush(Color.FromArgb(200, brd)))
+            g.FillRectangle(ac, x + 1, y + 6, 4, h - 12);
 
         _btns.Add((new Rectangle(x, y, w, h), r.MachineName, "toggle"));
 
-        using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 10, y + 13, 8, 8);
+        using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 17, 8, 8);
         using var nf = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
         using var nb = new SolidBrush(Th.Brt);
-        g.DrawString(r.MachineName, nf, nb, x + 24, y + 8);
+        g.DrawString(r.MachineName, nf, nb, x + 26, y + 13);
 
         var nsz = g.MeasureString(r.MachineName, nf);
-        int mx = x + 28 + (int)nsz.Width + 16;
+        int mx = x + 30 + (int)nsz.Width + 14;
         using var mf = new Font("Segoe UI", 8f);
 
         if (r.TotalLoadPercent.HasValue)
-        { using var lb = new SolidBrush(Th.LdC(r.TotalLoadPercent.Value)); g.DrawString($"{r.TotalLoadPercent.Value:0}%", mf, lb, mx, y + 10); mx += 48; }
+        { using var lb = new SolidBrush(Th.LdC(r.TotalLoadPercent.Value)); g.DrawString($"{r.TotalLoadPercent.Value:0}%", mf, lb, mx, y + 14); mx += 48; }
         if (r.PackageTemperatureC is > 0)
-        { using var tb = new SolidBrush(Th.TpC(r.PackageTemperatureC.Value)); g.DrawString($"{r.PackageTemperatureC.Value:0}°C", mf, tb, mx, y + 10); mx += 52; }
+        { using var tb = new SolidBrush(Th.TpC(r.PackageTemperatureC.Value)); g.DrawString($"{r.PackageTemperatureC.Value:0}°C", mf, tb, mx, y + 14); mx += 52; }
         if (r.PackageFrequencyMHz is > 0)
-        { using var fb = new SolidBrush(Th.Blu); g.DrawString(Th.FF(r.PackageFrequencyMHz), mf, fb, mx, y + 10); mx += 60; }
+        { using var fb = new SolidBrush(Th.Blu); g.DrawString(Th.FF(r.PackageFrequencyMHz), mf, fb, mx, y + 14); mx += 60; }
         if (r.RamTotalGB > 0)
-        { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); using var rb = new SolidBrush(pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); g.DrawString($"RAM {pct}%", mf, rb, mx, y + 10); mx += 56; }
+        { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); using var rb = new SolidBrush(pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); g.DrawString($"RAM {pct}%", mf, rb, mx, y + 14); mx += 56; }
         if (r.Drives.Count > 0)
-        { var d0 = r.Drives[0]; int dpct = d0.TotalGB > 0 ? (int)((d0.TotalGB - d0.FreeGB) / d0.TotalGB * 100) : 0; using var db = new SolidBrush(dpct > 90 ? Th.Red : dpct > 75 ? Th.Org : Th.Dim); g.DrawString($"{d0.Name} {d0.FreeGB:0.0}G", mf, db, mx, y + 10); mx += 72; }
+        { var d0 = r.Drives[0]; int dpct = d0.TotalGB > 0 ? (int)((d0.TotalGB - d0.FreeGB) / d0.TotalGB * 100) : 0; using var db = new SolidBrush(dpct > 90 ? Th.Red : dpct > 75 ? Th.Org : Th.Dim); g.DrawString($"{d0.Name} {d0.FreeGB:0.0}G", mf, db, mx, y + 14); mx += 72; }
         if (r.NetUpKBps + r.NetDownKBps > 0.5)
-        { using var netb = new SolidBrush(Th.Dim); g.DrawString($"↑{FmtNet(r.NetUpKBps)} ↓{FmtNet(r.NetDownKBps)}", mf, netb, mx, y + 10); }
+        { using var netb = new SolidBrush(Th.Dim); g.DrawString($"↑{FmtNet(r.NetUpKBps)} ↓{FmtNet(r.NetDownKBps)}", mf, netb, mx, y + 14); }
 
-        using var modf = new Font("Segoe UI", 7f);
-        using var modb = new SolidBrush(cl.SendMode == "keepalive" ? Th.Dim : Th.Grn);
-        g.DrawString(cl.SendMode == "keepalive" ? "💤" : "📡", modf, modb, x + w - 44, y + 10);
+        // LIVE / IDLE chip
+        bool live = cl.SendMode != "keepalive";
+        Color chipC = live ? Th.Grn : Th.Dim;
+        string chipTxt = live ? "● LIVE" : "○ IDLE";
+        using (var chipF = new Font("Segoe UI", 6.5f, FontStyle.Bold))
+        {
+            var csz = g.MeasureString(chipTxt, chipF);
+            int cx = x + w - (int)csz.Width - 36, cy = y + 14;
+            using (var chipBg = new SolidBrush(Color.FromArgb(35, chipC)))
+            using (var chipPath = Th.RR(cx - 4, cy - 2, (int)csz.Width + 8, (int)csz.Height + 4, 4))
+            { g.FillPath(chipBg, chipPath); using var chipPen = new Pen(Color.FromArgb(60, chipC), 1f); g.DrawPath(chipPen, chipPath); }
+            using var chipBr = new SolidBrush(chipC);
+            g.DrawString(chipTxt, chipF, chipBr, cx, cy);
+        }
 
         using var ef = new Font("Segoe UI", 10f);
         using var eb = new SolidBrush(Th.Dim);
-        g.DrawString("▾", ef, eb, x + w - 24, y + 8);
+        g.DrawString("▾", ef, eb, x + w - 22, y + 12);
 
         return h;
     }
@@ -693,64 +710,97 @@ sealed class ServerForm : BorderlessForm
     int DrawExpanded(Graphics g, int x, int y, int w, RemoteClient cl, bool stale)
     {
         var r = cl.LastReport!;
-        int hdrH = 80, btnH = 84, h = hdrH + btnH + 4;
+        int hdrH = 80, h = hdrH + 4 + 26 + 4 + 26 + 4;
         Color brd = stale ? Th.Org : Th.Grn;
 
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 8); g.FillPath(bg, p); }
-        using (var bp = new Pen(brd, 1.5f)) { using var p = Th.RR(x, y, w, h, 8); g.DrawPath(bp, p); }
+        using (var bp = new Pen(Color.FromArgb(50, brd), 1f)) { using var p = Th.RR(x, y, w, h, 8); g.DrawPath(bp, p); }
+        using (var ac = new SolidBrush(Color.FromArgb(200, brd)))
+            g.FillRectangle(ac, x + 1, y + 8, 4, h - 16);
 
-        _btns.Add((new Rectangle(x, y, w, 30), r.MachineName, "toggle"));
+        _btns.Add((new Rectangle(x, y, w, 32), r.MachineName, "toggle"));
 
         using (var ef = new Font("Segoe UI", 10f)) using (var eb = new SolidBrush(Th.Dim))
-            g.DrawString("▴", ef, eb, x + w - 24, y + 8);
-        using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 12, 8, 8);
+            g.DrawString("▴", ef, eb, x + w - 22, y + 8);
+        using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 12, 9, 9);
         using (var nf = new Font("Segoe UI Semibold", 11f, FontStyle.Bold)) using (var nb = new SolidBrush(Th.Brt))
-            g.DrawString(r.MachineName, nf, nb, x + 26, y + 7);
+            g.DrawString(r.MachineName, nf, nb, x + 28, y + 7);
         if (!string.IsNullOrEmpty(cl.ClientVersion))
         {
             bool outdated = ClientNeedsUpdate(cl.ClientVersion);
             using var vf = new Font("Segoe UI", 7f);
             using var vb = new SolidBrush(outdated ? Th.Org : Th.Dim);
             var nsz = g.MeasureString(r.MachineName, new Font("Segoe UI Semibold", 11f, FontStyle.Bold));
-            g.DrawString($"v{cl.ClientVersion}" + (outdated ? " ⚠" : ""), vf, vb, x + 28 + nsz.Width, y + 11);
+            g.DrawString($"v{cl.ClientVersion}" + (outdated ? " ⚠" : ""), vf, vb, x + 30 + nsz.Width, y + 11);
         }
         using (var cf = new Font("Segoe UI", 7.5f)) using (var cb = new SolidBrush(Th.Dim))
-            g.DrawString(r.CpuName, cf, cb, x + 26, y + 27);
+            g.DrawString(r.CpuName, cf, cb, x + 28, y + 27);
 
-        int my = y + 46, mx = x + 12;
-        DrawMetric(g, mx, my, "LOAD", Th.F(r.TotalLoadPercent, "0", "%"), Th.LdC(r.TotalLoadPercent ?? 0)); mx += 110;
-        DrawMetric(g, mx, my, "FREQ", Th.FF(r.PackageFrequencyMHz), Th.Blu); mx += 110;
-        DrawMetric(g, mx, my, "TEMP", Th.F(r.PackageTemperatureC, "0.0", "°C"), Th.TpC(r.PackageTemperatureC ?? 0)); mx += 110;
-        if (r.PackagePowerW is > 0) { DrawMetric(g, mx, my, "PWR", Th.F(r.PackagePowerW, "0.0", "W"), Th.Org); mx += 110; }
+        // LIVE / IDLE chip
+        bool live = cl.SendMode != "keepalive";
+        Color chipC = live ? Th.Grn : Th.Dim;
+        string chipTxt = live ? "● LIVE" : "○ IDLE";
+        using (var chipF = new Font("Segoe UI", 6.5f, FontStyle.Bold))
+        {
+            var csz = g.MeasureString(chipTxt, chipF);
+            int cx = x + w - (int)csz.Width - 42, cy = y + 10;
+            using (var chipBg = new SolidBrush(Color.FromArgb(35, chipC)))
+            using (var chipPath = Th.RR(cx - 4, cy - 2, (int)csz.Width + 8, (int)csz.Height + 4, 4))
+            { g.FillPath(chipBg, chipPath); using var chipPen = new Pen(Color.FromArgb(60, chipC), 1f); g.DrawPath(chipPen, chipPath); }
+            using var chipBr = new SolidBrush(chipC);
+            g.DrawString(chipTxt, chipF, chipBr, cx, cy);
+        }
+
+        // Separator: header / metrics
+        using (var sep = new Pen(Color.FromArgb(35, Th.Brd), 1f))
+            g.DrawLine(sep, x + 12, y + 43, x + w - 12, y + 43);
+
+        // Metrics row 1 — CPU
+        int my = y + 47, mx = x + 14;
+        DrawMetric(g, mx, my, "LOAD", Th.F(r.TotalLoadPercent, "0", "%"), Th.LdC(r.TotalLoadPercent ?? 0)); mx += 112;
+        DrawMetric(g, mx, my, "FREQ", Th.FF(r.PackageFrequencyMHz), Th.Blu); mx += 112;
+        DrawMetric(g, mx, my, "TEMP", Th.F(r.PackageTemperatureC, "0.0", "°C"), Th.TpC(r.PackageTemperatureC ?? 0)); mx += 112;
+        if (r.PackagePowerW is > 0) { DrawMetric(g, mx, my, "PWR", Th.F(r.PackagePowerW, "0.0", "W"), Th.Org); mx += 112; }
         if (r.GpuLoadPercent.HasValue) DrawMetric(g, mx, my, "GPU", Th.F(r.GpuLoadPercent, "0", "%"), Th.LdC(r.GpuLoadPercent ?? 0));
 
-        int my2 = y + 63, mx2 = x + 12;
+        // Metrics row 2 — storage & net
+        int my2 = y + 63, mx2 = x + 14;
         if (r.RamTotalGB > 0) { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); DrawMetric(g, mx2, my2, "RAM", $"{r.RamUsedGB:0.1}/{r.RamTotalGB:0.0} GB", pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); mx2 += 140; }
-        foreach (var drv in r.Drives.Take(3)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); mx2 += 100; }
-        if (r.GpuVramTotalMB is > 0 && r.GpuVramUsedMB.HasValue) { string vram = r.GpuVramTotalMB > 1024 ? $"{r.GpuVramUsedMB/1024:0.1}/{r.GpuVramTotalMB/1024:0.0}G" : $"{r.GpuVramUsedMB:0}/{r.GpuVramTotalMB:0}M"; DrawMetric(g, mx2, my2, "VRAM", vram, Th.Blu); mx2 += 110; }
+        foreach (var drv in r.Drives.Take(3)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); mx2 += 104; }
+        if (r.GpuVramTotalMB is > 0 && r.GpuVramUsedMB.HasValue) { string vram = r.GpuVramTotalMB > 1024 ? $"{r.GpuVramUsedMB/1024:0.1}/{r.GpuVramTotalMB/1024:0.0}G" : $"{r.GpuVramUsedMB:0}/{r.GpuVramTotalMB:0}M"; DrawMetric(g, mx2, my2, "VRAM", vram, Th.Blu); mx2 += 112; }
         if (r.NetUpKBps + r.NetDownKBps > 0.5) DrawMetric(g, mx2, my2, "NET ↑↓", $"{FmtNet(r.NetUpKBps)}/{FmtNet(r.NetDownKBps)}", Th.Dim);
 
-        // Row 1
-        int by = y + hdrH, bx = x + 12;
-        DrawBtn(g, bx, by, 72, 22, "⟳ Restart", Th.Org, r.MachineName, "restart"); bx += 80;
-        DrawBtn(g, bx, by, 78, 22, "☰ Procs", Th.Blu, r.MachineName, "processes"); bx += 86;
-        DrawBtn(g, bx, by, 68, 22, "ℹ Info", Th.Cyan, r.MachineName, "sysinfo"); bx += 76;
-        DrawBtn(g, bx, by, 74, 22, "⚠ Events", Th.Yel, r.MachineName, "events"); bx += 82;
-        DrawBtn(g, bx, by, 72, 22, "⏻ Off", Th.Red, r.MachineName, "shutdown"); bx += 80;
-        DrawBtn(g, bx, by, 68, 22, "🗑 Forget", Th.Dim, r.MachineName, "forget"); bx += 76;
-        bool isPaw = _store.IsPaw(r.MachineName);
-        DrawBtn(g, bx, by, 64, 22, isPaw ? "🔑 PAW ✓" : "🔑 PAW", isPaw ? Th.Mag : Th.Dim, r.MachineName, "paw");
+        // Separator: metrics / buttons
+        using (var sep2 = new Pen(Color.FromArgb(35, Th.Brd), 1f))
+            g.DrawLine(sep2, x + 12, y + hdrH, x + w - 12, y + hdrH);
 
-        // Row 2: terminals + RDP
-        int by2 = by + 28; bx = x + 12;
-        DrawBtn(g, bx, by2, 100, 22, "🖥 CMD", Th.Cyan, r.MachineName, "cmd"); bx += 108;
-        DrawBtn(g, bx, by2, 120, 22, "🖥 PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 128;
-        DrawBtn(g, bx, by2, 100, 22, "📁 Files", Th.Yel, r.MachineName, "files"); bx += 108;
-        DrawBtn(g, bx, by2, 80, 22, "🖥 RDP", Th.Cyan, r.MachineName, "rdp"); bx += 88;
-        DrawBtn(g, bx, by2, 68, 22, "⚙ Svcs", Th.Grn, r.MachineName, "services"); bx += 76;
-        DrawBtn(g, bx, by2, 68, 22, "💬 Msg", Th.Yel, r.MachineName, "msg"); bx += 76;
+        // Row 1 — session launchers
+        int by = y + hdrH + 4, bx = x + 14;
+        DrawBtn(g, bx, by, 72, 26, "🖥 CMD", Th.Cyan, r.MachineName, "cmd"); bx += 80;
+        DrawBtn(g, bx, by, 104, 26, "🖥 PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 112;
+        DrawBtn(g, bx, by, 74, 26, "📁 Files", Th.Yel, r.MachineName, "files"); bx += 82;
+        DrawBtn(g, bx, by, 68, 26, "🖥 RDP", Th.Cyan, r.MachineName, "rdp"); bx += 76;
+        DrawBtn(g, bx, by, 68, 26, "⚙ Svcs", Th.Grn, r.MachineName, "services"); bx += 76;
         if (ClientNeedsUpdate(cl.ClientVersion))
-            DrawBtn(g, bx, by2, 80, 22, "⬆ Update", Th.Org, r.MachineName, "update");
+            DrawBtn(g, bx, by, 80, 26, "⬆ Update", Th.Org, r.MachineName, "update");
+
+        // Row 2 — info tools (left) + danger zone (right-aligned)
+        int by2 = by + 30, bx2 = x + 14;
+        DrawBtn(g, bx2, by2, 80, 26, "☰ Procs", Th.Blu, r.MachineName, "processes"); bx2 += 88;
+        DrawBtn(g, bx2, by2, 60, 26, "ℹ Info", Th.Cyan, r.MachineName, "sysinfo"); bx2 += 68;
+        DrawBtn(g, bx2, by2, 74, 26, "⚠ Events", Th.Yel, r.MachineName, "events"); bx2 += 82;
+        DrawBtn(g, bx2, by2, 68, 26, "💬 Msg", Th.Dim, r.MachineName, "msg");
+
+        // Danger zone — right-aligned: PAW | vline | Restart Off Forget
+        bool isPaw = _store.IsPaw(r.MachineName);
+        int dx = x + w - 14;
+        dx -= 74; DrawDangerBtn(g, dx, by2, 72, 26, "🗑 Forget", Th.Dim, r.MachineName, "forget");
+        dx -= 68; DrawDangerBtn(g, dx, by2, 66, 26, "⏻ Off", Th.Red, r.MachineName, "shutdown");
+        dx -= 82; DrawDangerBtn(g, dx, by2, 80, 26, "⟳ Restart", Th.Org, r.MachineName, "restart");
+        dx -= 14;
+        using (var vsp = new Pen(Color.FromArgb(45, Th.Brd), 1f))
+            g.DrawLine(vsp, dx + 6, by2 + 4, dx + 6, by2 + 22);
+        dx -= 78; DrawBtn(g, dx, by2, 76, 26, isPaw ? "🔑 PAW ✓" : "🔑 PAW", isPaw ? Th.Mag : Th.Dim, r.MachineName, "paw");
 
         return h;
     }
@@ -759,40 +809,57 @@ sealed class ServerForm : BorderlessForm
     {
         var rect = new Rectangle(x, y, w, h);
         _btns.Add((rect, machine, action));
-        using var bg = new SolidBrush(Color.FromArgb(25, c));
-        using var p = Th.RR(x, y, w, h, 4);
+        using var bg = new SolidBrush(Color.FromArgb(28, c));
+        using var p = Th.RR(x, y, w, h, 6);
         g.FillPath(bg, p);
-        using var pen = new Pen(Color.FromArgb(70, c), 1f);
+        using var pen = new Pen(Color.FromArgb(80, c), 1f);
         g.DrawPath(pen, p);
-        using var f = new Font("Segoe UI", 7f, FontStyle.Bold);
+        using var f = new Font("Segoe UI", 7.5f, FontStyle.Bold);
         using var b = new SolidBrush(c);
+        var sz = g.MeasureString(text, f);
+        g.DrawString(text, f, b, x + (w - sz.Width) / 2, y + (h - sz.Height) / 2);
+    }
+
+    void DrawDangerBtn(Graphics g, int x, int y, int w, int h, string text, Color c, string machine, string action)
+    {
+        var rect = new Rectangle(x, y, w, h);
+        _btns.Add((rect, machine, action));
+        using var bg = new SolidBrush(Color.FromArgb(16, c));
+        using var p = Th.RR(x, y, w, h, 6);
+        g.FillPath(bg, p);
+        using var pen = new Pen(Color.FromArgb(55, c), 1f);
+        g.DrawPath(pen, p);
+        using var f = new Font("Segoe UI", 7.5f, FontStyle.Bold);
+        using var b = new SolidBrush(Color.FromArgb(180, c));
         var sz = g.MeasureString(text, f);
         g.DrawString(text, f, b, x + (w - sz.Width) / 2, y + (h - sz.Height) / 2);
     }
 
     void DrawOffline(Graphics g, int x, int y, int w, ApprovedClient ac)
     {
-        int h = 28;
-        using (var bg = new SolidBrush(Color.FromArgb(28, 28, 34))) { using var p = Th.RR(x, y, w, h, 5); g.FillPath(bg, p); }
-        using (var bp = new Pen(Color.FromArgb(40, Th.Dim), 1f)) { using var p = Th.RR(x, y, w, h, 5); g.DrawPath(bp, p); }
-        using (var dot = new SolidBrush(Th.Dim)) g.FillEllipse(dot, x + 10, y + 10, 7, 7);
+        int h = 34;
+        using (var bg = new SolidBrush(Color.FromArgb(24, 24, 30))) { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
+        using (var bp = new Pen(Color.FromArgb(35, Th.Dim), 1f)) { using var p = Th.RR(x, y, w, h, 6); g.DrawPath(bp, p); }
+        using (var ac2 = new SolidBrush(Color.FromArgb(80, Th.Dim)))
+            g.FillRectangle(ac2, x + 1, y + 6, 4, h - 12);
+        using (var dot = new SolidBrush(Th.Dim)) g.FillEllipse(dot, x + 12, y + 13, 7, 7);
         using (var nf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold)) using (var nb = new SolidBrush(Th.Dim))
-            g.DrawString(ac.Name, nf, nb, x + 22, y + 5);
+            g.DrawString(ac.Name, nf, nb, x + 24, y + 8);
         var ago = DateTime.UtcNow - ac.Seen;
         string agoStr = ago.TotalDays >= 1 ? $"{(int)ago.TotalDays}d ago" : ago.TotalHours >= 1 ? $"{(int)ago.TotalHours}h ago" : $"{(int)ago.TotalMinutes}m ago";
-        using (var sf2 = new Font("Segoe UI", 7.5f)) using (var sb2 = new SolidBrush(Color.FromArgb(90, 90, 100)))
-            g.DrawString($"Offline · {agoStr}", sf2, sb2, x + 140, y + 8);
-        if (!string.IsNullOrEmpty(ac.Ip)) { using var if2 = new Font("Segoe UI", 7f); using var ib = new SolidBrush(Color.FromArgb(55, 75, 95)); g.DrawString(ac.Ip, if2, ib, x + 270, y + 8); }
-        if (!string.IsNullOrEmpty(ac.Mac)) DrawBtn(g, x + w - 158, y + 4, 72, 20, "⚡ Wake", Th.Yel, ac.Name, "wake_offline");
-        DrawBtn(g, x + w - 78, y + 4, 68, 20, "🗑 Forget", Th.Dim, ac.Name, "forget_offline");
+        using (var sf2 = new Font("Segoe UI", 7.5f)) using (var sb2 = new SolidBrush(Color.FromArgb(80, 80, 95)))
+            g.DrawString($"Offline · {agoStr}", sf2, sb2, x + 150, y + 11);
+        if (!string.IsNullOrEmpty(ac.Ip)) { using var if2 = new Font("Segoe UI", 7f); using var ib = new SolidBrush(Color.FromArgb(55, 75, 95)); g.DrawString(ac.Ip, if2, ib, x + 290, y + 11); }
+        if (!string.IsNullOrEmpty(ac.Mac)) DrawBtn(g, x + w - 162, y + 5, 72, 24, "⚡ Wake", Th.Yel, ac.Name, "wake_offline");
+        DrawBtn(g, x + w - 82, y + 5, 72, 24, "🗑 Forget", Th.Dim, ac.Name, "forget_offline");
     }
 
     static string FmtNet(double kbps) => kbps >= 1024 ? $"{kbps / 1024.0:0.0}M" : $"{kbps:0}K";
     static void DrawMetric(Graphics g, int x, int y, string l, string v, Color c)
     {
-        using var lf = new Font("Segoe UI", 6.5f); using var lb = new SolidBrush(Th.Dim);
-        g.DrawString(l, lf, lb, x, y - 12);
-        using var vf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold); using var vb = new SolidBrush(c);
+        using var lf = new Font("Segoe UI", 6f); using var lb = new SolidBrush(Color.FromArgb(110, Th.Brt));
+        g.DrawString(l, lf, lb, x, y - 11);
+        using var vf = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold); using var vb = new SolidBrush(c);
         g.DrawString(v, vf, vb, x, y);
     }
 
