@@ -250,8 +250,9 @@ sealed class ServerForm : BorderlessForm
 
                         if (!string.IsNullOrEmpty(msg.Token) && msg.Token == _tok && (DateTime.UtcNow - _tokAt).TotalMinutes < 10)
                         {
-                            string ak = Security.DeriveKey(msg.Token, mn);
-                            _store.Approve(mn, ak, ip);
+                            string salt = Security.GenSalt();
+                            string ak = Security.DeriveKey(msg.Token, mn, salt);
+                            _store.Approve(mn, ak, ip, salt);
                             cl.Authenticated = true; cl.AuthKey = ak; cl.MachineName = mn;
                             cl.ClientVersion = msg.AppVersion ?? "";
                             cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = ak, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });

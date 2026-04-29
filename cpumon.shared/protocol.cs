@@ -108,7 +108,11 @@ public sealed class SendPacer
 public static class Security
 {
     public static string GenToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(18)).Replace('+', 'A').Replace('/', 'B')[..24];
-    public static string DeriveKey(string tok, string machine) => Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes($"{tok}:{machine}:cpumon_v2")))[..32];
+    public static string GenSalt() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
+    // salt is a random per-enrollment value stored server-side; client never needs to derive this
+    public static string DeriveKey(string tok, string machine, string salt = "") =>
+        Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(
+            string.IsNullOrEmpty(salt) ? $"{tok}:{machine}:cpumon_v2" : $"{tok}:{machine}:{salt}:cpumon_v2")))[..32];
 }
 
 public static class CertificateStore
@@ -137,7 +141,7 @@ public sealed class ApprovedClientStore
     readonly string _path; readonly Dictionary<string, ApprovedClient> _c = new(); readonly object _l = new();
     public ApprovedClientStore(string path = "approved_clients.json") { _path = path; Load(); }
     public bool IsOk(string n, string k) { lock (_l) { return _c.TryGetValue(n, out var c) && c.Key == k && !c.Revoked; } }
-    public void Approve(string n, string k, string ip) { lock (_l) { _c[n] = new ApprovedClient { Name = n, Key = k, At = DateTime.UtcNow, Seen = DateTime.UtcNow, Ip = ip }; Save(); } }
+    public void Approve(string n, string k, string ip, string salt = "") { lock (_l) { _c[n] = new ApprovedClient { Name = n, Key = k, At = DateTime.UtcNow, Seen = DateTime.UtcNow, Ip = ip, Salt = salt }; Save(); } }
     public void Seen(string n) { lock (_l) { if (_c.TryGetValue(n, out var c)) { c.Seen = DateTime.UtcNow; Save(); } } }
     public void Forget(string n) { lock (_l) { _c.Remove(n); Save(); } }
     public void Revoke(string n) { lock (_l) { if (_c.TryGetValue(n, out var c)) { c.Revoked = true; Save(); } } }
@@ -152,7 +156,7 @@ public sealed class ApprovedClientStore
     {
         try
         {
-            var list = _c.Values.Select(c => new ApprovedClient { Name = c.Name, Key = EncryptKey(c.Key), At = c.At, Seen = c.Seen, Ip = c.Ip, Revoked = c.Revoked, Paw = c.Paw, Mac = c.Mac }).ToList();
+            var list = _c.Values.Select(c => new ApprovedClient { Name = c.Name, Key = EncryptKey(c.Key), At = c.At, Seen = c.Seen, Ip = c.Ip, Revoked = c.Revoked, Paw = c.Paw, Mac = c.Mac, Salt = c.Salt }).ToList();
             string json = JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true });
             string tmp = _path + ".tmp";
             File.WriteAllText(tmp, json);
@@ -174,6 +178,8 @@ public sealed class ApprovedClient
     [JsonPropertyName("r")] public bool Revoked { get; set; }
     [JsonPropertyName("p")] public bool Paw { get; set; }
     [JsonPropertyName("m")] public string Mac { get; set; } = "";
+    // Random salt used during DeriveKey at enrollment; prevents key derivation from token alone
+    [JsonPropertyName("sl")] public string Salt { get; set; } = "";
 }
 
 public static class TokenStore
