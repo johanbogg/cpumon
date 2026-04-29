@@ -81,6 +81,8 @@ public sealed class CLog
 
     public void Add(string m, Color c)
     {
+        // Strip control characters to prevent log injection via client-controlled strings
+        m = string.Concat(m.Where(ch => ch >= ' ' || ch == '\t'));
         var now = DateTime.Now;
         lock (_l)
         {

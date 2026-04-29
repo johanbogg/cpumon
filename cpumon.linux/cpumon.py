@@ -450,6 +450,8 @@ class Client:
         cid    = cmd.get("cmdId")
 
         if c == "auth_response":
+            if self._authenticated:
+                return  # Only accept auth_response once per connection
             if cmd.get("authOk"):
                 sid = cmd.get("serverId")
                 if sid and getattr(self, "_seen_thumb", None):

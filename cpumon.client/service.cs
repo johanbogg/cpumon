@@ -34,6 +34,7 @@ sealed class CpuMonService : ServiceBase
     TcpClient? _tcp; SslStream? _ssl; StreamWriter? _wr; StreamReader? _rd;
     readonly object _tl = new();
     string _cpu = "", _ak = "", _sid = "", _connThumb = "";
+    bool _authConfirmed;
     readonly SendPacer _pacer = new();
     FileStream? _updateStream;
 
@@ -382,20 +383,25 @@ sealed class CpuMonService : ServiceBase
 
                 if (cmd.Cmd == "auth_response")
                 {
-                    if (cmd.AuthOk && cmd.AuthKey != null)
+                    // Only accept auth_response once per connection
+                    bool alreadyAuth; lock (_tl) { alreadyAuth = _authConfirmed; }
+                    if (!alreadyAuth)
                     {
-                        string ct2; lock (_tl) { ct2 = _connThumb; }
-                        if (!string.IsNullOrEmpty(cmd.ServerId) && !string.IsNullOrEmpty(ct2) &&
-                            !string.Equals(cmd.ServerId, ct2, StringComparison.OrdinalIgnoreCase))
+                        if (cmd.AuthOk && cmd.AuthKey != null)
                         {
-                            // ServerId in auth_response doesn't match the TLS cert we connected to — likely MITM relay
-                            _ns = NetState.Reconnecting;
-                            lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                            string ct2; lock (_tl) { ct2 = _connThumb; }
+                            if (!string.IsNullOrEmpty(cmd.ServerId) && !string.IsNullOrEmpty(ct2) &&
+                                !string.Equals(cmd.ServerId, ct2, StringComparison.OrdinalIgnoreCase))
+                            {
+                                // ServerId in auth_response doesn't match the TLS cert we connected to — likely MITM relay
+                                _ns = NetState.Reconnecting;
+                                lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                            }
+                            else
+                            { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; }
                         }
-                        else
-                        { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _ns = NetState.Connected; }
+                        else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); }
                     }
-                    else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); }
                 }
                 else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
                 else if (cmd.Cmd == "rdp_open" && cmd.RdpId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_start", RdpId = cmd.RdpId, Fps = cmd.RdpFps, Quality = cmd.RdpQuality });
@@ -433,6 +439,7 @@ sealed class CpuMonService : ServiceBase
             _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false };
             _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8);
             _connThumb = seenThumb ?? "";
+            _authConfirmed = false;
         }
         var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, AppVersion = Proto.AppVersion };
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }

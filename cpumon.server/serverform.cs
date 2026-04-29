@@ -77,7 +77,7 @@ sealed class ServerForm : BorderlessForm
         _tm.Tick += (_, _) => { UpdateModes(); _ct.Invalidate(); };
 
         _log.Add("Server starting...", Th.Dim);
-        _log.Add($"Token: {_tok}", Th.Yel);
+        _log.Add($"Token: {_tok[..4]}****", Th.Yel);
         if (_nb) _log.Add("Broadcast disabled", Th.Org);
 
         Load += (_, _) =>
@@ -403,7 +403,7 @@ sealed class ServerForm : BorderlessForm
         {
             if (!r.Contains(e.Location)) continue;
 
-            if (a == "newtoken") { _tok = Security.GenToken(); _tokAt = DateTime.UtcNow; _log.Add($"New token: {_tok}", Th.Yel); _ct.Invalidate(); break; }
+            if (a == "newtoken") { _tok = Security.GenToken(); _tokAt = DateTime.UtcNow; _log.Add($"New token: {_tok[..4]}****", Th.Yel); _ct.Invalidate(); break; }
             if (a == "copytoken") { Clipboard.SetText(_tok); _log.Add("Token copied", Th.Grn); break; }
             if (a == "showapproved") { BeginInvoke(() => { using var d = new ApprovedClientsDialog(_store, _cls, _log); d.ShowDialog(this); }); break; }
             if (a == "theme") { Th.Toggle(); break; }
