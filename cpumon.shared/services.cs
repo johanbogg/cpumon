@@ -329,6 +329,59 @@ public static class FileBrowserService
 }
 
 // ═══════════════════════════════════════════════════
+//  Stream wrapper that enforces a per-line byte limit.
+//  Throws IOException if any single line exceeds MaxLineBytes.
+// ═══════════════════════════════════════════════════
+public sealed class LineLengthLimitedStream : Stream
+{
+    readonly Stream _inner;
+    int _lineBytes;
+    // 4 MB covers the largest legitimate message (many-tile RDP frame)
+    public const int MaxLineBytes = 4 * 1024 * 1024;
+
+    public LineLengthLimitedStream(Stream inner) { _inner = inner; }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        int n = _inner.Read(buffer, offset, count);
+        for (int i = 0; i < n; i++)
+        {
+            if (buffer[offset + i] == (byte)'\n') { _lineBytes = 0; }
+            else if (++_lineBytes > MaxLineBytes) throw new IOException("Protocol line exceeded maximum length");
+        }
+        return n;
+    }
+
+    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+    {
+        int n = await _inner.ReadAsync(buffer, ct).ConfigureAwait(false);
+        var span = buffer.Span;
+        for (int i = 0; i < n; i++)
+        {
+            if (span[i] == (byte)'\n') { _lineBytes = 0; }
+            else if (++_lineBytes > MaxLineBytes) throw new IOException("Protocol line exceeded maximum length");
+        }
+        return n;
+    }
+
+    public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
+        => await ReadAsync(buffer.AsMemory(offset, count), ct).ConfigureAwait(false);
+
+    public override bool CanRead => _inner.CanRead;
+    public override bool CanSeek => false;
+    public override bool CanWrite => _inner.CanWrite;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+    public override void Flush() => _inner.Flush();
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => _inner.Write(buffer, offset, count);
+    public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) => _inner.WriteAsync(buffer, ct);
+    public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken ct) => _inner.WriteAsync(buffer, offset, count, ct);
+    protected override void Dispose(bool disposing) { if (disposing) _inner.Dispose(); base.Dispose(disposing); }
+}
+
+// ═══════════════════════════════════════════════════
 //  Remote client handle (server side)
 // ═══════════════════════════════════════════════════
 public sealed class RemoteClient : IDisposable
@@ -355,7 +408,7 @@ public sealed class RemoteClient : IDisposable
     public readonly ConcurrentQueue<ServerCommand> PendingCmds = new();
     public Action<bool, string>? ServiceResultCallback;
     readonly TcpClient _tcp; readonly SslStream _ssl; readonly StreamReader _rd; readonly StreamWriter _wr; readonly object _wl = new();
-    public RemoteClient(TcpClient tcp, SslStream ssl) { _tcp = tcp; _ssl = ssl; _rd = new StreamReader(ssl, Encoding.UTF8); _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; LastSeen = DateTime.UtcNow; }
+    public RemoteClient(TcpClient tcp, SslStream ssl) { _tcp = tcp; _ssl = ssl; _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8); _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; LastSeen = DateTime.UtcNow; }
     public Task<string?> ReadLineAsync(CancellationToken ct) => _rd.ReadLineAsync(ct).AsTask();
     public void Send(ServerCommand cmd) { lock (_wl) { try { _wr.WriteLine(JsonSerializer.Serialize(cmd)); _wr.Flush(); } catch { if (PendingCmds.Count < 5) PendingCmds.Enqueue(cmd); } } }
     public void FlushPending() { while (PendingCmds.TryDequeue(out var cmd)) { try { Send(cmd); } catch { break; } } }

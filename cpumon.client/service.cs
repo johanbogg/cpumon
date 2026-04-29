@@ -431,7 +431,7 @@ sealed class CpuMonService : ServiceBase
             _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose();
             _tcp = c; _ssl = ssl;
             _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false };
-            _rd = new StreamReader(ssl, Encoding.UTF8);
+            _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8);
             _connThumb = seenThumb ?? "";
         }
         var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, AppVersion = Proto.AppVersion };
