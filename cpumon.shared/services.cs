@@ -38,16 +38,16 @@ public sealed class RdpCaptureSession : IDisposable
     readonly object _netLock;
     readonly StreamWriter? _netWriter;
     readonly CancellationTokenSource _cts = new();
-    int _fps;
-    int _quality;
+    volatile int _fps;
+    volatile int _quality;
     long _seq;
     ulong[]? _prevHashes;
     int _tileColCount, _tileRowCount;
     int _screenW, _screenH;
-    bool _disposed;
-    bool _needFull = true;
-    int _monitorIndex;
-    int _maxKBps;
+    volatile bool _disposed;
+    volatile bool _needFull = true;
+    volatile int _monitorIndex;
+    volatile int _maxKBps;
     long _bwBytesThisSec;
     long _bwSecTicks = DateTime.UtcNow.Ticks;
 

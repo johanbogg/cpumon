@@ -31,7 +31,7 @@ sealed class ClientForm : BorderlessForm
     TcpClient? _tcp; SslStream? _ssl; StreamWriter? _wr; StreamReader? _rd; readonly object _tl = new();
     volatile IPEndPoint? _ep;
     const int HL = 120; readonly Queue<float> _lh = new();
-    string _cpu = "", _ak = "", _sid = "";
+    string _cpu = "", _ak = "", _sid = "", _connThumb = ""; bool _authConfirmed;
     readonly SendPacer _pacer = new();
 
     // PAW state
@@ -196,8 +196,20 @@ sealed class ClientForm : BorderlessForm
                     {
                         if (cmd.Cmd == "auth_response")
                         {
-                            if (cmd.AuthOk && cmd.AuthKey != null) { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _ns = NetState.Connected; _log.Add("✓ Auth OK", Th.Grn); }
-                            else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); _log.Add("✕ Auth failed — will retry in 5 min", Th.Red); }
+                            bool alreadyAuth; lock (_tl) { alreadyAuth = _authConfirmed; }
+                            if (!alreadyAuth)
+                            {
+                                if (cmd.AuthOk && cmd.AuthKey != null)
+                                {
+                                    string thumb; lock (_tl) { thumb = _connThumb; }
+                                    if (!string.IsNullOrEmpty(cmd.ServerId) && !string.IsNullOrEmpty(thumb) &&
+                                        !string.Equals(cmd.ServerId, thumb, StringComparison.OrdinalIgnoreCase))
+                                    { _ns = NetState.Reconnecting; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } _log.Add("✕ MITM detected — reconnecting", Th.Red); }
+                                    else
+                                    { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; _log.Add("✓ Auth OK", Th.Grn); }
+                                }
+                                else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); _log.Add("✕ Auth failed — will retry in 5 min", Th.Red); }
+                            }
                         }
                         else if (cmd.Cmd == "mode" && cmd.Mode != null) { _pacer.Mode = cmd.Mode; _log.Add($"Mode: {cmd.Mode}", Th.Dim); }
                         else if (cmd.Cmd == "paw_granted") { _isPaw = true; _log.Add("🔑 PAW granted", Th.Mag); BeginInvoke(ShowPawDashboard); }
@@ -276,8 +288,8 @@ sealed class ClientForm : BorderlessForm
             return string.IsNullOrEmpty(_sid) || string.Equals(seenThumb, _sid, StringComparison.OrdinalIgnoreCase);
         });
         await ssl.AuthenticateAsClientAsync("cpumon-server");
-        lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _tcp = c; _ssl = ssl; _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8); }
-        var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak };
+        lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _tcp = c; _ssl = ssl; _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8); _connThumb = seenThumb ?? ""; _authConfirmed = false; }
+        var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, AppVersion = Proto.AppVersion };
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }
         _log.Add("Auth sent", Th.Blu);
     }

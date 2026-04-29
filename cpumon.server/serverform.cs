@@ -43,7 +43,7 @@ sealed class ServerForm : BorderlessForm
         "restart", "shutdown", "send_message",
         "listprocesses", "kill", "start",
         "sysinfo", "list_services", "service_start", "service_stop", "service_restart",
-        "get_events",
+        "list_events",
         "terminal_open", "terminal_input", "terminal_close",
         "file_list", "file_download", "file_upload_chunk", "file_delete", "file_mkdir", "file_rename",
         "rdp_open", "rdp_close", "rdp_set_fps", "rdp_set_quality", "rdp_refresh", "rdp_input",

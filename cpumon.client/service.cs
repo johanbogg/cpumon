@@ -200,7 +200,7 @@ sealed class CpuMonService : ServiceBase
                 while (!ct.IsCancellationRequested && pipe.IsConnected)
                 {
                     string? line;
-                    lock (_agentLock) { line = _agentReader?.ReadLine(); }
+                    line = _agentReader?.ReadLine();
                     if (line == null) break;
                     try
                     {
