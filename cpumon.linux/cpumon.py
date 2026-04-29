@@ -380,9 +380,12 @@ class Client:
         raw = socket.create_connection((host, port), timeout=10)
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
-        ctx.verify_mode    = ssl.CERT_NONE
+        ctx.verify_mode    = ssl.CERT_NONE  # self-signed; TOFU via thumbprint
         s = ctx.wrap_socket(raw, server_hostname="cpumon-server")
-        der   = s.getpeercert(binary_form=True)
+        der = s.getpeercert(binary_form=True)
+        if not der:
+            s.close()
+            raise ConnectionError("Server did not present a TLS certificate")
         thumb = cert_thumbprint(der)
         if self._sid and thumb.upper() != self._sid.upper():
             s.close()
