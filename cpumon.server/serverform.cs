@@ -710,7 +710,7 @@ sealed class ServerForm : BorderlessForm
     int DrawExpanded(Graphics g, int x, int y, int w, RemoteClient cl, bool stale)
     {
         var r = cl.LastReport!;
-        int hdrH = 80, h = hdrH + 4 + 26 + 4 + 26 + 4;
+        int hdrH = 100, h = hdrH + 4 + 26 + 4 + 26 + 4;
         Color brd = stale ? Th.Org : Th.Grn;
 
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 8); g.FillPath(bg, p); }
@@ -756,7 +756,7 @@ sealed class ServerForm : BorderlessForm
             g.DrawLine(sep, x + 12, y + 43, x + w - 12, y + 43);
 
         // Metrics row 1 — CPU
-        int my = y + 47, mx = x + 14;
+        int my = y + 59, mx = x + 14;
         DrawMetric(g, mx, my, "LOAD", Th.F(r.TotalLoadPercent, "0", "%"), Th.LdC(r.TotalLoadPercent ?? 0)); mx += 112;
         DrawMetric(g, mx, my, "FREQ", Th.FF(r.PackageFrequencyMHz), Th.Blu); mx += 112;
         DrawMetric(g, mx, my, "TEMP", Th.F(r.PackageTemperatureC, "0.0", "°C"), Th.TpC(r.PackageTemperatureC ?? 0)); mx += 112;
@@ -764,7 +764,7 @@ sealed class ServerForm : BorderlessForm
         if (r.GpuLoadPercent.HasValue) DrawMetric(g, mx, my, "GPU", Th.F(r.GpuLoadPercent, "0", "%"), Th.LdC(r.GpuLoadPercent ?? 0));
 
         // Metrics row 2 — storage & net
-        int my2 = y + 63, mx2 = x + 14;
+        int my2 = y + 87, mx2 = x + 14;
         if (r.RamTotalGB > 0) { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); DrawMetric(g, mx2, my2, "RAM", $"{r.RamUsedGB:0.1}/{r.RamTotalGB:0.0} GB", pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); mx2 += 140; }
         foreach (var drv in r.Drives.Take(3)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); mx2 += 104; }
         if (r.GpuVramTotalMB is > 0 && r.GpuVramUsedMB.HasValue) { string vram = r.GpuVramTotalMB > 1024 ? $"{r.GpuVramUsedMB/1024:0.1}/{r.GpuVramTotalMB/1024:0.0}G" : $"{r.GpuVramUsedMB:0}/{r.GpuVramTotalMB:0}M"; DrawMetric(g, mx2, my2, "VRAM", vram, Th.Blu); mx2 += 112; }
