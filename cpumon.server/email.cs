@@ -4,10 +4,12 @@ using System;
 using System.Collections.Concurrent;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using MailKit.Net.Smtp;
@@ -89,13 +91,15 @@ public sealed class AlertService
     {
         var cfg = _cfg;
         if (!cfg.EmailConfigured) return;
+        // Strip control chars from client-supplied machine name before embedding in email content
+        string m = string.Concat(machine.Where(ch => ch >= ' '));
 
         if (cfg.AlertRamPct.HasValue && r.RamTotalGB > 0)
         {
             int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100);
             if (pct >= cfg.AlertRamPct.Value)
-                TrySend(machine, "ram", $"{machine}: RAM {pct}%",
-                    $"RAM usage on {machine} is {pct}% ({r.RamUsedGB:0.1}/{r.RamTotalGB:0.0} GB).");
+                TrySend(machine, "ram", $"{m}: RAM {pct}%",
+                    $"RAM usage on {m} is {pct}% ({r.RamUsedGB:0.1}/{r.RamTotalGB:0.0} GB).");
         }
 
         if (cfg.AlertDiskPct.HasValue)
@@ -104,14 +108,14 @@ public sealed class AlertService
                 if (drv.TotalGB <= 0) continue;
                 int pct = (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100);
                 if (pct >= cfg.AlertDiskPct.Value)
-                    TrySend(machine, $"disk:{drv.Name}", $"{machine}: {drv.Name} disk {pct}%",
-                        $"Disk usage on {machine} ({drv.Name}) is {pct}% ({drv.FreeGB:0.1} GB free of {drv.TotalGB:0.0} GB).");
+                    TrySend(machine, $"disk:{drv.Name}", $"{m}: {drv.Name} disk {pct}%",
+                        $"Disk usage on {m} ({drv.Name}) is {pct}% ({drv.FreeGB:0.1} GB free of {drv.TotalGB:0.0} GB).");
             }
 
         if (cfg.AlertTempC.HasValue && r.PackageTemperatureC is > 0)
             if (r.PackageTemperatureC.Value >= cfg.AlertTempC.Value)
-                TrySend(machine, "temp", $"{machine}: CPU {r.PackageTemperatureC.Value:0}°C",
-                    $"CPU temperature on {machine} is {r.PackageTemperatureC.Value:0.0}°C (threshold: {cfg.AlertTempC.Value:0.0}°C).");
+                TrySend(machine, "temp", $"{m}: CPU {r.PackageTemperatureC.Value:0}°C",
+                    $"CPU temperature on {m} is {r.PackageTemperatureC.Value:0.0}°C (threshold: {cfg.AlertTempC.Value:0.0}°C).");
     }
 
     void TrySend(string machine, string kind, string subject, string body)
@@ -145,12 +149,13 @@ public sealed class AlertService
             _                      => SecureSocketOptions.None,
         };
 
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         using var smtp = new SmtpClient();
-        await smtp.ConnectAsync(cfg.SmtpHost!, cfg.SmtpPort, opts);
+        await smtp.ConnectAsync(cfg.SmtpHost!, cfg.SmtpPort, opts, cts.Token);
         if (!string.IsNullOrEmpty(cfg.Username) && !string.IsNullOrEmpty(cfg.EncryptedPassword))
-            await smtp.AuthenticateAsync(cfg.Username, AlertConfigStore.Decrypt(cfg.EncryptedPassword));
-        await smtp.SendAsync(msg);
-        await smtp.DisconnectAsync(true);
+            await smtp.AuthenticateAsync(cfg.Username, AlertConfigStore.Decrypt(cfg.EncryptedPassword), cts.Token);
+        await smtp.SendAsync(msg, cts.Token);
+        await smtp.DisconnectAsync(true, cts.Token);
     }
 }
 
@@ -304,14 +309,16 @@ public sealed class AlertConfigDialog : Form
         {
             await AlertService.SendAsync(cfg, "Test alert",
                 "This is a test alert from cpumon. Email delivery is working correctly.");
+            if (IsDisposed) return;
             _lblStatus.ForeColor = Th.Grn;
             _lblStatus.Text = "Test email sent successfully.";
         }
         catch (Exception ex)
         {
+            if (IsDisposed) return;
             _lblStatus.ForeColor = Th.Red;
             _lblStatus.Text = ex.Message;
         }
-        _btnTest.Enabled = true;
+        if (!IsDisposed) _btnTest.Enabled = true;
     }
 }
