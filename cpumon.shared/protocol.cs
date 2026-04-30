@@ -34,8 +34,9 @@ public static class Proto
     public const int DiscPort = 47200;
     public const int DataPort = 47201;
     public const string Beacon = "CPUMON_V2";
-    public const int FullMs = 1000;
-    public const int KAMs = 60000;
+    public const int FullMs    = 1_000;
+    public const int MonitorMs = 30_000;
+    public const int KAMs      = 60_000;
     public const int FileChunkSize = 65536;
     public const int RdpFpsDefault = 10;
     public const int RdpTileSize = 128;
@@ -102,7 +103,7 @@ public sealed class SendPacer
     readonly ManualResetEventSlim _wake = new(false);
     volatile string _mode = "full";
     public string Mode { get => _mode; set { if (_mode == value) return; _mode = value; _wake.Set(); } }
-    public void Wait(CancellationToken ct) { int ms = _mode == "keepalive" ? Proto.KAMs : Proto.FullMs; _wake.Reset(); _wake.Wait(ms, ct); }
+    public void Wait(CancellationToken ct) { int ms = _mode == "keepalive" ? Proto.KAMs : _mode == "monitor" ? Proto.MonitorMs : Proto.FullMs; _wake.Reset(); _wake.Wait(ms, ct); }
 }
 
 public static class Security

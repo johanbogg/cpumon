@@ -39,6 +39,7 @@ DISC_PORT   = 47200
 DATA_PORT   = 47201
 BEACON      = "CPUMON_V2"
 FULL_MS     = 1.0
+MONITOR_MS  = 30.0
 KA_MS       = 60.0
 VERSION     = "1.0.0-linux"
 
@@ -707,7 +708,7 @@ class Client:
                     report = build_report(self._machine, self._cpu_name)
                     self._send({"type": "report", "report": report,
                                 "machine": self._machine, "authKey": self._ak})
-                    time.sleep(FULL_MS)
+                    time.sleep(MONITOR_MS if self._mode == "monitor" else FULL_MS)
             except Exception as e:
                 print(f"Send error: {e}", flush=True)
                 break

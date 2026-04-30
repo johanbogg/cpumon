@@ -36,6 +36,7 @@ sealed class ServerForm : BorderlessForm
     readonly List<(Rectangle R, string M, string A)> _btns = new();
     readonly Dictionary<string, ProcDialog> _procDialogs = new();
     readonly ConcurrentDictionary<string, long> _pawSeenNonces = new();
+    readonly AlertService _alertSvc;
 
     // Explicit allow-list for commands relayed through PAW; update_push and auth_response are never relayed
     static readonly HashSet<string> PawAllowedCmds = new(StringComparer.Ordinal)
@@ -52,6 +53,7 @@ sealed class ServerForm : BorderlessForm
     public ServerForm(bool noBroadcast)
     {
         _nb = noBroadcast;
+        _alertSvc = new AlertService(_log);
         _tok = Security.GenToken(); _tokAt = DateTime.UtcNow;
 
         Text = "CPU Monitor — Server";
@@ -119,7 +121,7 @@ sealed class ServerForm : BorderlessForm
             var cl = kv.Value;
             if (!cl.Authenticated) continue;
             if (cl.LastSeen < idleCutoff) { _log.Add($"Idle timeout: {kv.Key}", Th.Org); cl.Kick(); continue; }
-            string desired = cl.Expanded ? "full" : "keepalive";
+            string desired = cl.Expanded ? "full" : _alertSvc.IdleMode;
             if (cl.SendMode != desired)
             {
                 cl.SendMode = desired;
@@ -282,6 +284,7 @@ sealed class ServerForm : BorderlessForm
                             cl.MachineName = msg.Report.MachineName; cl.LastReport = msg.Report;
                             cl.LastSeen = DateTime.UtcNow; _cls[cl.MachineName] = cl;
                             _store.Seen(cl.MachineName); rx++;
+                            _alertSvc.Check(cl.MachineName, msg.Report);
                             foreach (var paw in _cls.Values.Where(c => c.IsPaw && c != cl))
                                 try { paw.Send(new ServerCommand { Cmd = "paw_report", PawSource = cl.MachineName, PawReport = msg.Report }); } catch { }
                             break;
@@ -413,6 +416,7 @@ sealed class ServerForm : BorderlessForm
             if (a == "copytoken") { Clipboard.SetText(_tok); _log.Add("Token copied", Th.Grn); break; }
             if (a == "showapproved") { BeginInvoke(() => { using var d = new ApprovedClientsDialog(_store, _cls, _log); d.ShowDialog(this); }); break; }
             if (a == "theme") { Th.Toggle(); break; }
+            if (a == "alerts") { BeginInvoke(() => { using var d = new AlertConfigDialog(_alertSvc); if (d.ShowDialog(this) == DialogResult.OK) _ct.Invalidate(); }); break; }
             if (a == "forget_offline")
             {
                 if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
@@ -639,7 +643,8 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, bx, y + 23, 70, 24, "📋 Copy", Th.Blu, "", "copytoken"); bx += 78;
         DrawBtn(g, bx, y + 23, 70, 24, "🔄 New", Th.Org, "", "newtoken"); bx += 78;
         DrawBtn(g, bx, y + 23, 84, 24, "👥 Clients", Th.Cyan, "", "showapproved"); bx += 92;
-        DrawBtn(g, bx, y + 23, 68, 24, Th.IsDark ? "☀ Light" : "🌙 Dark", Th.Dim, "", "theme");
+        DrawBtn(g, bx, y + 23, 68, 24, Th.IsDark ? "☀ Light" : "🌙 Dark", Th.Dim, "", "theme"); bx += 76;
+        DrawBtn(g, bx, y + 23, 80, 24, "🔔 Alerts", _alertSvc.ThresholdsConfigured ? Th.Org : Th.Dim, "", "alerts");
 
         using (var cf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var ccb = new SolidBrush(_cc > 0 ? Th.Grn : Th.Dim))
@@ -685,10 +690,9 @@ sealed class ServerForm : BorderlessForm
         if (r.NetUpKBps + r.NetDownKBps > 0.5)
         { using var netb = new SolidBrush(Th.Dim); g.DrawString($"↑{FmtNet(r.NetUpKBps)} ↓{FmtNet(r.NetDownKBps)}", mf, netb, mx, y + 14); }
 
-        // LIVE / IDLE chip
-        bool live = cl.SendMode != "keepalive";
-        Color chipC = live ? Th.Grn : Th.Dim;
-        string chipTxt = live ? "● LIVE" : "○ IDLE";
+        // LIVE / MON / IDLE chip
+        Color chipC = cl.SendMode == "full" ? Th.Grn : cl.SendMode == "monitor" ? Th.Org : Th.Dim;
+        string chipTxt = cl.SendMode == "full" ? "● LIVE" : cl.SendMode == "monitor" ? "◉ MON" : "○ IDLE";
         using (var chipF = new Font("Segoe UI", 6.5f, FontStyle.Bold))
         {
             var csz = g.MeasureString(chipTxt, chipF);
@@ -736,10 +740,9 @@ sealed class ServerForm : BorderlessForm
         using (var cf = new Font("Segoe UI", 7.5f)) using (var cb = new SolidBrush(Th.Dim))
             g.DrawString(r.CpuName, cf, cb, x + 28, y + 27);
 
-        // LIVE / IDLE chip
-        bool live = cl.SendMode != "keepalive";
-        Color chipC = live ? Th.Grn : Th.Dim;
-        string chipTxt = live ? "● LIVE" : "○ IDLE";
+        // LIVE / MON / IDLE chip
+        Color chipC = cl.SendMode == "full" ? Th.Grn : cl.SendMode == "monitor" ? Th.Org : Th.Dim;
+        string chipTxt = cl.SendMode == "full" ? "● LIVE" : cl.SendMode == "monitor" ? "◉ MON" : "○ IDLE";
         using (var chipF = new Font("Segoe UI", 6.5f, FontStyle.Bold))
         {
             var csz = g.MeasureString(chipTxt, chipF);

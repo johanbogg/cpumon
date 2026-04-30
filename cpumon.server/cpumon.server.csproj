@@ -16,6 +16,9 @@
   <ItemGroup>
     <ProjectReference Include="..\CpuMon.Shared\CpuMon.Shared.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MailKit" Version="4.16.0" />
+  </ItemGroup>
 
   <Target Name="GitVersion" BeforeTargets="CoreCompile;GetAssemblyVersion">
     <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low">
