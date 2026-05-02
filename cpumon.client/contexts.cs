@@ -57,6 +57,8 @@ sealed class AgentContext : ApplicationContext
             _cts.Cancel();
             _tray.Visible = false;
             foreach (var r in _rdpSessions.Values) r.Dispose();
+            foreach (var s in CmdExec.Sessions.Values) s.Dispose();
+            CmdExec.Sessions.Clear();
             ExitThread();
         });
         _tray.ContextMenuStrip = menu;
@@ -191,6 +193,48 @@ sealed class AgentContext : ApplicationContext
                                     refS.RequestFull();
                                 break;
 
+                            case "rdp_set_monitor":
+                                if (msg.RdpId != null && _rdpSessions.TryGetValue(msg.RdpId, out var rdpM))
+                                    rdpM.SetMonitor(msg.Fps);
+                                break;
+
+                            case "rdp_set_bandwidth":
+                                if (msg.RdpId != null && _rdpSessions.TryGetValue(msg.RdpId, out var rdpB))
+                                    rdpB.SetBandwidthCap(msg.Quality);
+                                break;
+
+                            case "terminal_open":
+                                if (msg.TermId != null)
+                                {
+                                    if (CmdExec.Sessions.TryRemove(msg.TermId, out var oldTs)) oldTs.Dispose();
+                                    try { CmdExec.Sessions[msg.TermId] = new TerminalSession(msg.TermId, msg.Shell ?? "cmd", _pipeLock, _pipeWriter); }
+                                    catch (Exception ex)
+                                    {
+                                        var err = new ClientMessage { Type = "cmdresult", CmdId = msg.CmdId, Success = false, Message = $"Terminal: {ex.Message}" };
+                                        lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(err)); _pipeWriter?.Flush(); } catch { } }
+                                    }
+                                }
+                                break;
+
+                            case "terminal_input":
+                                if (msg.TermId != null && msg.CmdInput != null && CmdExec.Sessions.TryGetValue(msg.TermId, out var termTs))
+                                    termTs.WriteInput(msg.CmdInput);
+                                break;
+
+                            case "terminal_close":
+                                if (msg.TermId != null && CmdExec.Sessions.TryRemove(msg.TermId, out var termClose))
+                                    termClose.Dispose();
+                                break;
+
+                            case "start":
+                            {
+                                ClientMessage r;
+                                try { var p = Process.Start(new ProcessStartInfo { FileName = msg.FileName ?? "", Arguments = msg.CmdInput ?? "", UseShellExecute = true }); r = new ClientMessage { Type = "cmdresult", CmdId = msg.CmdId, Success = true, Message = $"PID {p?.Id}" }; }
+                                catch (Exception ex) { r = new ClientMessage { Type = "cmdresult", CmdId = msg.CmdId, Success = false, Message = ex.Message }; }
+                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(r)); _pipeWriter?.Flush(); } catch { } }
+                                break;
+                            }
+
                             case "rdp_input":
                                 if (msg.Input != null)
                                     InputInjector.InjectInput(msg.Input);
@@ -236,6 +280,8 @@ sealed class AgentContext : ApplicationContext
                 _connected = false;
                 foreach (var r in _rdpSessions.Values) r.Dispose();
                 _rdpSessions.Clear();
+                foreach (var s in CmdExec.Sessions.Values) s.Dispose();
+                CmdExec.Sessions.Clear();
                 lock (_pipeLock)
                 {
                     _pipeReader?.Dispose(); _pipeWriter?.Dispose();
@@ -255,6 +301,8 @@ sealed class AgentContext : ApplicationContext
             _tray.Visible = false;
             _tray.Dispose();
             foreach (var r in _rdpSessions.Values) r.Dispose();
+            foreach (var s in CmdExec.Sessions.Values) s.Dispose();
+            CmdExec.Sessions.Clear();
             lock (_pipeLock)
             {
                 _pipeReader?.Dispose();
@@ -387,7 +435,7 @@ sealed class DaemonContext : ApplicationContext
                 else { var snap = _mon.GetSnapshot(); var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu, _mon), MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m)); _wr?.Flush(); } }
                 _sc++; _ns = NetState.Connected;
             }
-            catch { _ns = NetState.Reconnecting; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } CmdExec.DisposeAll(); try { _pacer.Wait(ct); } catch { } }
+            catch { if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } CmdExec.DisposeAll(); try { _pacer.Wait(ct); } catch { } }
         }
     }
 
@@ -452,7 +500,6 @@ sealed class DaemonContext : ApplicationContext
             if (dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
             {
                 _tok = txt.Text.Trim(); _ak = "";
-                Interlocked.Exchange(ref _authFailedAt, 0);
                 _ns = NetState.Reconnecting;
             }
         }

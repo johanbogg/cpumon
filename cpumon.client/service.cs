@@ -45,6 +45,7 @@ sealed class CpuMonService : ServiceBase
     volatile bool _agentConnected;
     long _agentLastPong = DateTime.UtcNow.Ticks;
     long _authFailedAt;
+    volatile bool _authRequestPending;
 
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool GetNamedPipeClientProcessId(IntPtr hPipe, out uint clientProcessId);
@@ -183,6 +184,7 @@ sealed class CpuMonService : ServiceBase
 
                 _agentConnected = true;
                 Interlocked.Exchange(ref _agentLastPong, DateTime.UtcNow.Ticks);
+                if (_authRequestPending) SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" });
 
                 _ = Task.Run(async () =>
                 {
@@ -206,14 +208,16 @@ sealed class CpuMonService : ServiceBase
                     {
                         var msg = JsonSerializer.Deserialize<ClientMessage>(line);
                         if (msg?.Type == "rdp_frame") { lock (_tl) { _wr?.WriteLine(line); _wr?.Flush(); } }
+                        else if (msg?.Type is "terminal_output" or "terminal_closed" or "cmdresult")
+                        { lock (_tl) { try { _wr?.WriteLine(line); _wr?.Flush(); } catch { } } }
                         else if (msg?.Type == "pong") Interlocked.Exchange(ref _agentLastPong, DateTime.UtcNow.Ticks);
                         else if (msg?.Type == "token_reply")
                         {
                             var am = JsonSerializer.Deserialize<AgentIpc.AgentMessage>(line);
+                            _authRequestPending = false;
                             if (!string.IsNullOrEmpty(am?.Secret))
                             {
                                 _tok = am.Secret; _ak = "";
-                                Interlocked.Exchange(ref _authFailedAt, 0);
                                 _ns = NetState.Reconnecting;
                                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
                             }
@@ -369,7 +373,7 @@ sealed class CpuMonService : ServiceBase
             }
             catch
             {
-                _ns = NetState.Reconnecting;
+                if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting;
                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
                 CmdExec.DisposeAll();
                 try { _pacer.Wait(ct); } catch { }
@@ -411,7 +415,7 @@ sealed class CpuMonService : ServiceBase
                             else
                             { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; }
                         }
-                        else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" }); }
+                        else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); if (!_authRequestPending) { _authRequestPending = true; SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" }); } }
                     }
                 }
                 else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
@@ -421,6 +425,12 @@ sealed class CpuMonService : ServiceBase
                 else if (cmd.Cmd == "rdp_set_quality" && cmd.RdpId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_set_quality", RdpId = cmd.RdpId, Quality = cmd.RdpQuality });
                 else if (cmd.Cmd == "rdp_refresh" && cmd.RdpId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_refresh", RdpId = cmd.RdpId });
                 else if (cmd.Cmd == "rdp_input" && cmd.RdpInput != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_input", Input = cmd.RdpInput });
+                else if (cmd.Cmd == "rdp_set_monitor" && cmd.RdpId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_set_monitor", RdpId = cmd.RdpId, Fps = cmd.RdpMonitorIndex });
+                else if (cmd.Cmd == "rdp_set_bandwidth" && cmd.RdpId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_set_bandwidth", RdpId = cmd.RdpId, Quality = cmd.RdpBandwidthKBps });
+                else if (cmd.Cmd == "terminal_open" && cmd.TermId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_open", TermId = cmd.TermId, Shell = cmd.Shell });
+                else if (cmd.Cmd == "terminal_input" && cmd.TermId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_input", TermId = cmd.TermId, CmdInput = cmd.Input });
+                else if (cmd.Cmd == "terminal_close" && cmd.TermId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_close", TermId = cmd.TermId });
+                else if (cmd.Cmd == "start") SendToAgent(new AgentIpc.AgentMessage { Type = "start", FileName = cmd.FileName, CmdInput = cmd.Args, CmdId = cmd.CmdId });
                 else if (cmd.Cmd == "send_message" && cmd.Message != null) SendToAgent(new AgentIpc.AgentMessage { Type = "msg_popup", Message = cmd.Message });
                 else if (cmd.Cmd == "update_push" && cmd.UpdateChunk != null) HandleUpdateChunk(cmd.UpdateChunk);
                 else CmdExec.Run(cmd, _tl, ref _wr);

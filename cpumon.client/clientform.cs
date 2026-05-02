@@ -172,7 +172,7 @@ sealed class ClientForm : BorderlessForm
             }
             catch (Exception ex)
             {
-                _ec++; _ns = NetState.Reconnecting; _log.Add($"Send: {ex.Message}", Th.Red);
+                _ec++; if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting; _log.Add($"Send: {ex.Message}", Th.Red);
                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
                 CmdExec.DisposeAll();
                 try { _pacer.Wait(ct); } catch { }
@@ -294,7 +294,6 @@ sealed class ClientForm : BorderlessForm
             {
                 _tok = txt.Text.Trim(); _ak = "";
                 _log.Add("Re-auth: retrying...", Th.Yel);
-                Interlocked.Exchange(ref _authFailedAt, 0);
                 _ns = NetState.Reconnecting;
             }
         }
