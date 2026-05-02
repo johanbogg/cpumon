@@ -36,6 +36,7 @@ sealed class AgentContext : ApplicationContext
     StreamWriter? _pipeWriter;
     readonly object _pipeLock = new();
     volatile bool _connected;
+    bool _authDialogOpen;
     Color _lastTrayCol = Color.Empty;
 
     public AgentContext()
@@ -199,6 +200,28 @@ sealed class AgentContext : ApplicationContext
                             case "msg_popup":
                                 if (msg.Message != null) { var t = msg.Message; Task.Run(() => MessageBox.Show(t, "Server Message", MessageBoxButtons.OK, MessageBoxIcon.Information)); }
                                 break;
+
+                            case "auth_request":
+                                _uiCtx.Post(_ =>
+                                {
+                                    if (_authDialogOpen) return;
+                                    _authDialogOpen = true;
+                                    try
+                                    {
+                                        var dlg = new Form { Text = "Re-Authorize", Size = new Size(400, 150), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt };
+                                        var lbl = new Label { Text = "Authorization failed. Enter a new invite token:", Location = new Point(12, 12), AutoSize = true };
+                                        var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle };
+                                        var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Location = new Point(12, 72), Size = new Size(100, 32), BackColor = Color.FromArgb(30, 50, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat };
+                                        ok.FlatAppearance.BorderColor = Th.Grn;
+                                        var skip = new Button { Text = "Skip", DialogResult = DialogResult.Cancel, Location = new Point(120, 72), Size = new Size(80, 32), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
+                                        dlg.Controls.AddRange(new Control[] { lbl, txt, ok, skip });
+                                        dlg.AcceptButton = ok;
+                                        string reply = dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text) ? txt.Text.Trim() : "";
+                                        lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "token_reply", Secret = reply })); _pipeWriter?.Flush(); } catch { } }
+                                    }
+                                    finally { _authDialogOpen = false; }
+                                }, null);
+                                break;
                         }
                     }
                     catch { }
@@ -257,6 +280,7 @@ sealed class DaemonContext : ApplicationContext
     volatile bool _isPaw;
     volatile int _peerCount;
     long _authFailedAt;
+    bool _reAuthPending;
     Color _lastTrayCol = Color.Empty;
 
     public DaemonContext(string? forceIp, string? token)
@@ -393,7 +417,7 @@ sealed class DaemonContext : ApplicationContext
                                     else
                                     { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _peerCount = cmd.PeerCount; lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; }
                                 }
-                                else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); }
+                                else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); _uiCtx.Post(_ => ShowReAuthDialog(), null); }
                             }
                         }
                         else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
@@ -406,6 +430,30 @@ sealed class DaemonContext : ApplicationContext
             }
             catch { }
         }
+    }
+
+    void ShowReAuthDialog()
+    {
+        if (_reAuthPending) return;
+        _reAuthPending = true;
+        try
+        {
+            var dlg = new Form { Text = "Re-Authorize", Size = new Size(400, 150), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt };
+            var lbl = new Label { Text = "Authorization failed. Enter a new invite token:", Location = new Point(12, 12), AutoSize = true };
+            var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle };
+            var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Location = new Point(12, 72), Size = new Size(100, 32), BackColor = Color.FromArgb(30, 50, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat };
+            ok.FlatAppearance.BorderColor = Th.Grn;
+            var skip = new Button { Text = "Skip", DialogResult = DialogResult.Cancel, Location = new Point(120, 72), Size = new Size(80, 32), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
+            dlg.Controls.AddRange(new Control[] { lbl, txt, ok, skip });
+            dlg.AcceptButton = ok;
+            if (dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
+            {
+                _tok = txt.Text.Trim(); _ak = "";
+                Interlocked.Exchange(ref _authFailedAt, 0);
+                _ns = NetState.Reconnecting;
+            }
+        }
+        finally { _reAuthPending = false; }
     }
 
     async Task EnsureConn(IPEndPoint ep, CancellationToken ct)

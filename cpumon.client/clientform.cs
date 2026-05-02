@@ -37,6 +37,7 @@ sealed class ClientForm : BorderlessForm
     // PAW state
     volatile bool _isPaw;
     long _authFailedAt;
+    bool _reAuthPending;
     readonly ConcurrentDictionary<string, PawRemoteClient> _pawClients = new();
     PawDashboardForm? _pawForm;
 
@@ -208,7 +209,7 @@ sealed class ClientForm : BorderlessForm
                                     else
                                     { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; _log.Add("✓ Auth OK", Th.Grn); }
                                 }
-                                else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); _log.Add("✕ Auth failed — will retry in 5 min", Th.Red); }
+                                else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); _log.Add("✕ Auth failed", Th.Red); BeginInvoke(ShowReAuthDialog); }
                             }
                         }
                         else if (cmd.Cmd == "mode" && cmd.Mode != null) { _pacer.Mode = cmd.Mode; _log.Add($"Mode: {cmd.Mode}", Th.Dim); }
@@ -273,6 +274,31 @@ sealed class ClientForm : BorderlessForm
         cmd.Nonce = Guid.NewGuid().ToString("N");
         var msg = new ClientMessage { Type = "paw_command", PawTarget = target, PawCmd = cmd };
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(msg)); _wr?.Flush(); }
+    }
+
+    void ShowReAuthDialog()
+    {
+        if (_reAuthPending) return;
+        _reAuthPending = true;
+        try
+        {
+            var dlg = new Form { Text = "Re-Authorize", Size = new Size(400, 150), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt };
+            var lbl = new Label { Text = "Authorization failed. Enter a new invite token:", Location = new Point(12, 12), AutoSize = true };
+            var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle };
+            var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Location = new Point(12, 72), Size = new Size(100, 32), BackColor = Color.FromArgb(30, 50, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat };
+            ok.FlatAppearance.BorderColor = Th.Grn;
+            var skip = new Button { Text = "Skip", DialogResult = DialogResult.Cancel, Location = new Point(120, 72), Size = new Size(80, 32), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
+            dlg.Controls.AddRange(new Control[] { lbl, txt, ok, skip });
+            dlg.AcceptButton = ok;
+            if (dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
+            {
+                _tok = txt.Text.Trim(); _ak = "";
+                _log.Add("Re-auth: retrying...", Th.Yel);
+                Interlocked.Exchange(ref _authFailedAt, 0);
+                _ns = NetState.Reconnecting;
+            }
+        }
+        finally { _reAuthPending = false; }
     }
 
     async Task EnsureConn(IPEndPoint ep, CancellationToken ct)

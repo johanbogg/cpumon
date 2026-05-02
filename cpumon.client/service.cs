@@ -207,6 +207,17 @@ sealed class CpuMonService : ServiceBase
                         var msg = JsonSerializer.Deserialize<ClientMessage>(line);
                         if (msg?.Type == "rdp_frame") { lock (_tl) { _wr?.WriteLine(line); _wr?.Flush(); } }
                         else if (msg?.Type == "pong") Interlocked.Exchange(ref _agentLastPong, DateTime.UtcNow.Ticks);
+                        else if (msg?.Type == "token_reply")
+                        {
+                            var am = JsonSerializer.Deserialize<AgentIpc.AgentMessage>(line);
+                            if (!string.IsNullOrEmpty(am?.Secret))
+                            {
+                                _tok = am.Secret; _ak = "";
+                                Interlocked.Exchange(ref _authFailedAt, 0);
+                                _ns = NetState.Reconnecting;
+                                lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                            }
+                        }
                     }
                     catch { }
                 }
@@ -400,7 +411,7 @@ sealed class CpuMonService : ServiceBase
                             else
                             { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; }
                         }
-                        else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); }
+                        else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" }); }
                     }
                 }
                 else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
