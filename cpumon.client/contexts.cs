@@ -275,7 +275,8 @@ sealed class AgentContext : ApplicationContext
                 }
             }
             catch (OperationCanceledException) { break; }
-            catch
+            catch { }
+            finally
             {
                 _connected = false;
                 foreach (var r in _rdpSessions.Values) r.Dispose();
@@ -288,8 +289,8 @@ sealed class AgentContext : ApplicationContext
                     _pipe?.Dispose();
                     _pipeReader = null; _pipeWriter = null; _pipe = null;
                 }
-                await Task.Delay(3000, ct).ConfigureAwait(false);
             }
+            try { await Task.Delay(3000, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
         }
     }
 

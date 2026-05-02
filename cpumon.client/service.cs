@@ -427,10 +427,18 @@ sealed class CpuMonService : ServiceBase
                 else if (cmd.Cmd == "rdp_input" && cmd.RdpInput != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_input", Input = cmd.RdpInput });
                 else if (cmd.Cmd == "rdp_set_monitor" && cmd.RdpId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_set_monitor", RdpId = cmd.RdpId, Fps = cmd.RdpMonitorIndex });
                 else if (cmd.Cmd == "rdp_set_bandwidth" && cmd.RdpId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_set_bandwidth", RdpId = cmd.RdpId, Quality = cmd.RdpBandwidthKBps });
-                else if (cmd.Cmd == "terminal_open" && cmd.TermId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_open", TermId = cmd.TermId, Shell = cmd.Shell });
+                else if (cmd.Cmd == "terminal_open" && cmd.TermId != null)
+                {
+                    if (!_agentConnected) { var e = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = "Agent not connected" }; lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(e)); _wr?.Flush(); } catch { } } }
+                    else SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_open", TermId = cmd.TermId, Shell = cmd.Shell });
+                }
                 else if (cmd.Cmd == "terminal_input" && cmd.TermId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_input", TermId = cmd.TermId, CmdInput = cmd.Input });
                 else if (cmd.Cmd == "terminal_close" && cmd.TermId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_close", TermId = cmd.TermId });
-                else if (cmd.Cmd == "start") SendToAgent(new AgentIpc.AgentMessage { Type = "start", FileName = cmd.FileName, CmdInput = cmd.Args, CmdId = cmd.CmdId });
+                else if (cmd.Cmd == "start")
+                {
+                    if (!_agentConnected) { var e = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = "Agent not connected" }; lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(e)); _wr?.Flush(); } catch { } } }
+                    else SendToAgent(new AgentIpc.AgentMessage { Type = "start", FileName = cmd.FileName, CmdInput = cmd.Args, CmdId = cmd.CmdId });
+                }
                 else if (cmd.Cmd == "send_message" && cmd.Message != null) SendToAgent(new AgentIpc.AgentMessage { Type = "msg_popup", Message = cmd.Message });
                 else if (cmd.Cmd == "update_push" && cmd.UpdateChunk != null) HandleUpdateChunk(cmd.UpdateChunk);
                 else CmdExec.Run(cmd, _tl, ref _wr);
