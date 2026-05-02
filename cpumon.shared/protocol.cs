@@ -321,6 +321,11 @@ public static class AgentIpc
         [JsonPropertyName("frame")] public RdpFrameData? Frame { get; set; }
         [JsonPropertyName("msg")] public string? Message { get; set; }
         [JsonPropertyName("secret")] public string? Secret { get; set; }
+        [JsonPropertyName("termId")] public string? TermId { get; set; }
+        [JsonPropertyName("shell")] public string? Shell { get; set; }
+        [JsonPropertyName("cmdInput")] public string? CmdInput { get; set; }
+        [JsonPropertyName("cmdId")] public string? CmdId { get; set; }
+        [JsonPropertyName("fileName")] public string? FileName { get; set; }
     }
 }
 
