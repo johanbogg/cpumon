@@ -131,6 +131,7 @@ public sealed class RdpViewerDialog : Form
     long _frameCount;
     readonly Stopwatch _fpsSw = Stopwatch.StartNew();
     bool _inputEnabled = true;
+    volatile bool _repaintPending;
 
     public string RdpId => _rdpId;
 
@@ -345,28 +346,34 @@ public sealed class RdpViewerDialog : Form
 
         _frameCount++;
 
-        BeginInvoke(() =>
+        if (!_repaintPending)
         {
-            Bitmap? display;
-            lock (_fbLock)
+            _repaintPending = true;
+            BeginInvoke(() =>
             {
-                if (_framebuffer == null) return;
-                display = (Bitmap)_framebuffer.Clone();
-            }
+                Bitmap? display;
+                lock (_fbLock)
+                {
+                    if (_framebuffer == null) { _repaintPending = false; return; }
+                    display = (Bitmap)_framebuffer.Clone();
+                }
 
-            var old = _canvas.Image;
-            _canvas.Image = display;
-            old?.Dispose();
+                var old = _canvas.Image;
+                _canvas.Image = display;
+                old?.Dispose();
 
-            if (_fpsSw.ElapsedMilliseconds > 1000)
-            {
-                double fps = _frameCount * 1000.0 / _fpsSw.ElapsedMilliseconds;
-                _statusLbl.Text = $"{_remoteW}×{_remoteH} | {fps:0.0} fps | {frame.Tiles.Count} tiles";
-                _statusLbl.ForeColor = Th.Grn;
-                _frameCount = 0;
-                _fpsSw.Restart();
-            }
-        });
+                if (_fpsSw.ElapsedMilliseconds > 1000)
+                {
+                    double fps = _frameCount * 1000.0 / _fpsSw.ElapsedMilliseconds;
+                    _statusLbl.Text = $"{_remoteW}×{_remoteH} | {fps:0.0} fps | {frame.Tiles.Count} tiles";
+                    _statusLbl.ForeColor = Th.Grn;
+                    _frameCount = 0;
+                    _fpsSw.Restart();
+                }
+
+                _repaintPending = false;
+            });
+        }
     }
 }
 
