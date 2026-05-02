@@ -141,8 +141,11 @@ sealed class AgentContext : ApplicationContext
                 // Read commands from service
                 while (!ct.IsCancellationRequested)
                 {
-                    string? line;
-                    lock (_pipeLock) { line = _pipeReader?.ReadLine(); }
+                    // Snapshot reader reference under lock but read outside it — holding
+                    // _pipeLock across a blocking ReadLine() deadlocks RdpCaptureSession
+                    // which needs the same lock to write frames on its capture thread.
+                    StreamReader? reader; lock (_pipeLock) { reader = _pipeReader; }
+                    string? line = reader?.ReadLine();
                     if (line == null) break;
 
                     try
