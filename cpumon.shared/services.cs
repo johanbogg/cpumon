@@ -516,30 +516,35 @@ public static class CmdExec
                 {
                     var chunk = cmd.UpdateChunk;
                     string updPath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe");
+                    string updTmp = updPath + ".tmp";
                     try
                     {
                         if (chunk.Offset == 0 && ActiveUploads.TryRemove("__update__", out var oldUpdate))
                             oldUpdate.Dispose();
                         if (!ActiveUploads.TryGetValue("__update__", out var us))
                         {
-                            ActiveUploads["__update__"] = us = new FileStream(updPath, FileMode.Create, FileAccess.Write);
+                            ActiveUploads["__update__"] = us = new FileStream(updTmp, FileMode.Create, FileAccess.Write);
                         }
                         if (us.Position != chunk.Offset)
                         {
+                            long expected = us.Position;
                             us.Dispose();
                             ActiveUploads.TryRemove("__update__", out _);
+                            LogSink.Warn("CmdExec.Update", $"Update offset mismatch: expected={expected} got={chunk.Offset}");
+                            try { File.Delete(updTmp); } catch { }
                             break;
                         }
                         if (!string.IsNullOrEmpty(chunk.Data)) { var b = Convert.FromBase64String(chunk.Data); us.Write(b); }
                         if (chunk.IsLast)
                         {
                             us.Flush(); us.Dispose(); ActiveUploads.TryRemove("__update__", out _);
-                            if (!UpdateIntegrity.VerifySha256Base64(updPath, chunk.Hash, out var actualHash))
+                            if (!UpdateIntegrity.VerifySha256Base64(updTmp, chunk.Hash, out var actualHash))
                             {
                                 LogSink.Error("CmdExec.Update", $"Update hash verification failed. expected={chunk.Hash ?? "<missing>"} actual={actualHash}");
-                                try { File.Delete(updPath); } catch { }
+                                try { File.Delete(updTmp); } catch { }
                                 break;
                             }
+                            File.Move(updTmp, updPath, overwrite: true);
                             string exePath = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "cpumon.client.exe");
                             string batPath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.bat");
                             File.WriteAllText(batPath,
@@ -550,7 +555,7 @@ public static class CmdExec
                             Environment.Exit(0);
                         }
                     }
-                    catch (Exception ex) { LogSink.Error("CmdExec.Update", "Update push failed", ex); if (ActiveUploads.TryRemove("__update__", out var bad)) bad.Dispose(); }
+                    catch (Exception ex) { LogSink.Error("CmdExec.Update", "Update push failed", ex); if (ActiveUploads.TryRemove("__update__", out var bad)) bad.Dispose(); try { File.Delete(updTmp); } catch { } }
                 }
                 break;
             case "restart": Res(cmd.CmdId, true, "Restarting...", lk, wr); Task.Delay(500).ContinueWith(_ => { try { Process.Start("shutdown", "/r /t 3 /c \"Remote restart\""); } catch { } }); break;
@@ -628,6 +633,7 @@ public static class CmdExec
         foreach (var s in Sessions.Values) s.Dispose(); Sessions.Clear();
         foreach (var u in ActiveUploads.Values) u.Dispose(); ActiveUploads.Clear();
         foreach (var r in RdpSessions.Values) r.Dispose(); RdpSessions.Clear();
+        try { string t = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe.tmp"); if (File.Exists(t)) File.Delete(t); } catch { }
     }
 }
 

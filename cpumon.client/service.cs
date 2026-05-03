@@ -97,6 +97,7 @@ sealed class CpuMonService : ServiceBase
         lock (_agentLock) { _agentReader?.Dispose(); _agentWriter?.Dispose(); _agentPipe?.Dispose(); }
         _updateStream?.Dispose();
         _updateStream = null;
+        try { string t = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe.tmp"); if (File.Exists(t)) File.Delete(t); } catch { }
         _mon.Dispose();
         CmdExec.DisposeAll();
     }
@@ -251,6 +252,7 @@ sealed class CpuMonService : ServiceBase
     void HandleUpdateChunk(FileChunkData chunk)
     {
         string updatePath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe");
+        string updateTmp = updatePath + ".tmp";
         try
         {
             if (chunk.Offset == 0 && _updateStream != null)
@@ -259,12 +261,14 @@ sealed class CpuMonService : ServiceBase
                 _updateStream = null;
             }
             if (_updateStream == null)
-                _updateStream = new FileStream(updatePath, FileMode.Create, FileAccess.Write);
+                _updateStream = new FileStream(updateTmp, FileMode.Create, FileAccess.Write);
             if (_updateStream.Position != chunk.Offset)
             {
+                long expected = _updateStream.Position;
                 _updateStream.Dispose();
                 _updateStream = null;
-                File.Delete(updatePath);
+                LogSink.Warn("Service.Update", $"Update offset mismatch: expected={expected} got={chunk.Offset}");
+                try { File.Delete(updateTmp); } catch { }
                 return;
             }
             if (!string.IsNullOrEmpty(chunk.Data))
@@ -275,19 +279,20 @@ sealed class CpuMonService : ServiceBase
                 if (chunk.Hash == null)
                 {
                     LogSink.Error("Service.Update", "Update refused because no SHA-256 hash was supplied");
-                    File.Delete(updatePath);
+                    try { File.Delete(updateTmp); } catch { }
                     return;
                 }
-                if (!UpdateIntegrity.VerifySha256Base64(updatePath, chunk.Hash, out var actual))
+                if (!UpdateIntegrity.VerifySha256Base64(updateTmp, chunk.Hash, out var actual))
                 {
                     LogSink.Error("Service.Update", $"Update hash verification failed. expected={chunk.Hash} actual={actual}");
-                    File.Delete(updatePath);
+                    try { File.Delete(updateTmp); } catch { }
                     return;
                 }
+                File.Move(updateTmp, updatePath, overwrite: true);
                 ApplyUpdate(updatePath);
             }
         }
-        catch (Exception ex) { LogSink.Error("Service.Update", "Update chunk handling failed", ex); _updateStream?.Dispose(); _updateStream = null; try { File.Delete(updatePath); } catch { } }
+        catch (Exception ex) { LogSink.Error("Service.Update", "Update chunk handling failed", ex); _updateStream?.Dispose(); _updateStream = null; try { File.Delete(updateTmp); } catch { } }
     }
 
     void ApplyUpdate(string updatePath)
