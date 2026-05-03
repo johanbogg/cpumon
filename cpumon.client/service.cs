@@ -95,6 +95,8 @@ sealed class CpuMonService : ServiceBase
         _cts.Cancel();
         lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); }
         lock (_agentLock) { _agentReader?.Dispose(); _agentWriter?.Dispose(); _agentPipe?.Dispose(); }
+        _updateStream?.Dispose();
+        _updateStream = null;
         _mon.Dispose();
         CmdExec.DisposeAll();
     }
@@ -245,8 +247,20 @@ sealed class CpuMonService : ServiceBase
         string updatePath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe");
         try
         {
+            if (chunk.Offset == 0 && _updateStream != null)
+            {
+                _updateStream.Dispose();
+                _updateStream = null;
+            }
             if (_updateStream == null)
                 _updateStream = new FileStream(updatePath, FileMode.Create, FileAccess.Write);
+            if (_updateStream.Position != chunk.Offset)
+            {
+                _updateStream.Dispose();
+                _updateStream = null;
+                File.Delete(updatePath);
+                return;
+            }
             if (!string.IsNullOrEmpty(chunk.Data))
                 _updateStream.Write(Convert.FromBase64String(chunk.Data));
             if (chunk.IsLast)
@@ -392,7 +406,12 @@ sealed class CpuMonService : ServiceBase
             try
             {
                 string? line = await r.ReadLineAsync(ct);
-                if (line == null) continue;
+                if (line == null)
+                {
+                    if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting;
+                    lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                    continue;
+                }
                 var cmd = JsonSerializer.Deserialize<ServerCommand>(line);
                 if (cmd == null) continue;
 
@@ -454,21 +473,32 @@ sealed class CpuMonService : ServiceBase
         var c = new TcpClient();
         await c.ConnectAsync(ep.Address, ep.Port, ct);
         string? seenThumb = null;
-        var ssl = new SslStream(c.GetStream(), false, (_, cert, _, _) =>
+        SslStream? ssl = null;
+        bool handedOff = false;
+        try
         {
-            if (cert == null) return false;
-            seenThumb = cert.GetCertHashString();
-            return string.IsNullOrEmpty(_sid) || string.Equals(seenThumb, _sid, StringComparison.OrdinalIgnoreCase);
-        });
-        await ssl.AuthenticateAsClientAsync("cpumon-server");
-        lock (_tl)
+            ssl = new SslStream(c.GetStream(), false, (_, cert, _, _) =>
+            {
+                if (cert == null) return false;
+                seenThumb = cert.GetCertHashString();
+                return string.IsNullOrEmpty(_sid) || string.Equals(seenThumb, _sid, StringComparison.OrdinalIgnoreCase);
+            });
+            await ssl.AuthenticateAsClientAsync("cpumon-server");
+            lock (_tl)
+            {
+                _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose();
+                _tcp = c; _ssl = ssl;
+                _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false };
+                _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8);
+                _connThumb = seenThumb ?? "";
+                _authConfirmed = false;
+            }
+            handedOff = true;
+        }
+        catch
         {
-            _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose();
-            _tcp = c; _ssl = ssl;
-            _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false };
-            _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8);
-            _connThumb = seenThumb ?? "";
-            _authConfirmed = false;
+            if (!handedOff) { ssl?.Dispose(); c.Dispose(); }
+            throw;
         }
         var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, AppVersion = Proto.AppVersion };
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }

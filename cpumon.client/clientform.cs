@@ -190,6 +190,12 @@ sealed class ClientForm : BorderlessForm
             try
             {
                 string? line = await r.ReadLineAsync(ct);
+                if (line == null)
+                {
+                    if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting;
+                    lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                    continue;
+                }
                 if (line != null)
                 {
                     var cmd = JsonSerializer.Deserialize<ServerCommand>(line);
@@ -306,14 +312,25 @@ sealed class ClientForm : BorderlessForm
         _ns = NetState.Connecting; _log.Add($"Connecting {ep}...", Th.Blu);
         var c = new TcpClient(); await c.ConnectAsync(ep.Address, ep.Port, ct);
         string? seenThumb = null;
-        var ssl = new SslStream(c.GetStream(), false, (_, cert, _, _) =>
+        SslStream? ssl = null;
+        bool handedOff = false;
+        try
         {
-            if (cert == null) return false;
-            seenThumb = cert.GetCertHashString();
-            return string.IsNullOrEmpty(_sid) || string.Equals(seenThumb, _sid, StringComparison.OrdinalIgnoreCase);
-        });
-        await ssl.AuthenticateAsClientAsync("cpumon-server");
-        lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _tcp = c; _ssl = ssl; _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8); _connThumb = seenThumb ?? ""; _authConfirmed = false; }
+            ssl = new SslStream(c.GetStream(), false, (_, cert, _, _) =>
+            {
+                if (cert == null) return false;
+                seenThumb = cert.GetCertHashString();
+                return string.IsNullOrEmpty(_sid) || string.Equals(seenThumb, _sid, StringComparison.OrdinalIgnoreCase);
+            });
+            await ssl.AuthenticateAsClientAsync("cpumon-server");
+            lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _tcp = c; _ssl = ssl; _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8); _connThumb = seenThumb ?? ""; _authConfirmed = false; }
+            handedOff = true;
+        }
+        catch
+        {
+            if (!handedOff) { ssl?.Dispose(); c.Dispose(); }
+            throw;
+        }
         var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, AppVersion = Proto.AppVersion };
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }
         _log.Add("Auth sent", Th.Blu);

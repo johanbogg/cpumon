@@ -322,7 +322,45 @@ public static class FileBrowserService
         return result;
     }
     public static void SendFile(string filePath, string transferId, object netLock, StreamWriter? writer) { Task.Run(() => { try { var fi = new FileInfo(filePath); if (!fi.Exists) { var err = new ClientMessage { Type = "file_chunk", TransferId = transferId, FileChunk = new FileChunkData { TransferId = transferId, FileName = System.IO.Path.GetFileName(filePath), Error = "File not found", IsLast = true } }; lock (netLock) { writer?.WriteLine(JsonSerializer.Serialize(err)); writer?.Flush(); } return; } long total = fi.Length; long offset = 0; var buf = new byte[Proto.FileChunkSize]; using var fs = fi.OpenRead(); while (true) { int read = fs.Read(buf, 0, buf.Length); bool last = read == 0 || offset + read >= total; var chunk = new FileChunkData { TransferId = transferId, FileName = fi.Name, Data = read > 0 ? Convert.ToBase64String(buf, 0, read) : "", Offset = offset, TotalSize = total, IsLast = last }; var msg = new ClientMessage { Type = "file_chunk", TransferId = transferId, FileChunk = chunk }; lock (netLock) { writer?.WriteLine(JsonSerializer.Serialize(msg)); writer?.Flush(); } offset += read; if (last) break; Thread.Sleep(5); } } catch (Exception ex) { var err = new ClientMessage { Type = "file_chunk", TransferId = transferId, FileChunk = new FileChunkData { TransferId = transferId, Error = ex.Message, IsLast = true } }; lock (netLock) { try { writer?.WriteLine(JsonSerializer.Serialize(err)); writer?.Flush(); } catch { } } } }); }
-    public static string ReceiveChunk(FileChunkData chunk, ConcurrentDictionary<string, FileStream> activeUploads, string basePath) { try { string baseFull = System.IO.Path.GetFullPath(basePath); string safeName = System.IO.Path.GetFileName(chunk.FileName); if (string.IsNullOrEmpty(safeName)) return "Upload error: invalid filename"; string destFile = System.IO.Path.Combine(baseFull, safeName); if (chunk.Offset == 0) { var fs = new FileStream(destFile, FileMode.Create, FileAccess.Write, FileShare.None); activeUploads[chunk.TransferId] = fs; } if (activeUploads.TryGetValue(chunk.TransferId, out var stream)) { if (!string.IsNullOrEmpty(chunk.Data)) { var data = Convert.FromBase64String(chunk.Data); stream.Write(data, 0, data.Length); } if (chunk.IsLast) { stream.Flush(); stream.Dispose(); activeUploads.TryRemove(chunk.TransferId, out _); return $"Upload complete: {chunk.FileName} ({chunk.TotalSize} bytes)"; } } return ""; } catch (Exception ex) { if (activeUploads.TryRemove(chunk.TransferId, out var s)) s.Dispose(); return $"Upload error: {ex.Message}"; } }
+    public static string ReceiveChunk(FileChunkData chunk, ConcurrentDictionary<string, FileStream> activeUploads, string basePath)
+    {
+        try
+        {
+            string baseFull = System.IO.Path.GetFullPath(basePath);
+            string safeName = System.IO.Path.GetFileName(chunk.FileName);
+            if (string.IsNullOrEmpty(safeName)) return "Upload error: invalid filename";
+            string destFile = System.IO.Path.Combine(baseFull, safeName);
+            if (chunk.Offset == 0)
+            {
+                if (activeUploads.TryRemove(chunk.TransferId, out var old))
+                    old.Dispose();
+                activeUploads[chunk.TransferId] = new FileStream(destFile, FileMode.Create, FileAccess.Write, FileShare.None);
+            }
+            if (activeUploads.TryGetValue(chunk.TransferId, out var stream))
+            {
+                if (stream.Position != chunk.Offset)
+                    return $"Upload error: unexpected offset {chunk.Offset}, expected {stream.Position}";
+                if (!string.IsNullOrEmpty(chunk.Data))
+                {
+                    var data = Convert.FromBase64String(chunk.Data);
+                    stream.Write(data, 0, data.Length);
+                }
+                if (chunk.IsLast)
+                {
+                    stream.Flush();
+                    stream.Dispose();
+                    activeUploads.TryRemove(chunk.TransferId, out _);
+                    return $"Upload complete: {chunk.FileName} ({chunk.TotalSize} bytes)";
+                }
+            }
+            return "";
+        }
+        catch (Exception ex)
+        {
+            if (activeUploads.TryRemove(chunk.TransferId, out var s)) s.Dispose();
+            return $"Upload error: {ex.Message}";
+        }
+    }
     public static string DeletePath(string path, bool recursive) { try { if (Directory.Exists(path)) { Directory.Delete(path, recursive); return $"Deleted directory: {path}"; } else if (File.Exists(path)) { File.Delete(path); return $"Deleted file: {path}"; } else return $"Not found: {path}"; } catch (Exception ex) { return $"Delete error: {ex.Message}"; } }
     public static string CreateDirectory(string path) { try { Directory.CreateDirectory(path); return $"Created: {path}"; } catch (Exception ex) { return $"Error: {ex.Message}"; } }
     public static string RenamePath(string path, string newName) { try { string? dir = System.IO.Path.GetDirectoryName(path); if (dir == null) return "Invalid path"; string dest = System.IO.Path.Combine(dir, newName); if (Directory.Exists(path)) Directory.Move(path, dest); else if (File.Exists(path)) File.Move(path, dest); else return $"Not found: {path}"; return $"Renamed to {newName}"; } catch (Exception ex) { return $"Rename error: {ex.Message}"; } }
@@ -464,8 +502,18 @@ public static class CmdExec
                     string updPath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe");
                     try
                     {
+                        if (chunk.Offset == 0 && ActiveUploads.TryRemove("__update__", out var oldUpdate))
+                            oldUpdate.Dispose();
                         if (!ActiveUploads.TryGetValue("__update__", out var us))
+                        {
                             ActiveUploads["__update__"] = us = new FileStream(updPath, FileMode.Create, FileAccess.Write);
+                        }
+                        if (us.Position != chunk.Offset)
+                        {
+                            us.Dispose();
+                            ActiveUploads.TryRemove("__update__", out _);
+                            break;
+                        }
                         if (!string.IsNullOrEmpty(chunk.Data)) { var b = Convert.FromBase64String(chunk.Data); us.Write(b); }
                         if (chunk.IsLast)
                         {
@@ -527,7 +575,7 @@ public static class CmdExec
 
             // Remote desktop
             case "rdp_open":
-                if (cmd.RdpId != null) { try { var session = new RdpCaptureSession(cmd.RdpId, cmd.RdpFps > 0 ? cmd.RdpFps : Proto.RdpFpsDefault, cmd.RdpQuality > 0 ? cmd.RdpQuality : Proto.RdpJpegQuality, lk, wr); RdpSessions[cmd.RdpId] = session; Res(cmd.CmdId, true, "RDP started", lk, wr); } catch (Exception ex) { Res(cmd.CmdId, false, $"RDP: {ex.Message}", lk, wr); } } break;
+                if (cmd.RdpId != null) { try { if (RdpSessions.TryRemove(cmd.RdpId, out var oldRdp)) oldRdp.Dispose(); var session = new RdpCaptureSession(cmd.RdpId, cmd.RdpFps > 0 ? cmd.RdpFps : Proto.RdpFpsDefault, cmd.RdpQuality > 0 ? cmd.RdpQuality : Proto.RdpJpegQuality, lk, wr); RdpSessions[cmd.RdpId] = session; Res(cmd.CmdId, true, "RDP started", lk, wr); } catch (Exception ex) { Res(cmd.CmdId, false, $"RDP: {ex.Message}", lk, wr); } } break;
             case "rdp_close":
                 if (cmd.RdpId != null && RdpSessions.TryRemove(cmd.RdpId, out var rdpClose)) rdpClose.Dispose(); break;
             case "rdp_set_fps":
