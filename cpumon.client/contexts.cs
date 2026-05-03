@@ -480,7 +480,7 @@ sealed class DaemonContext : ApplicationContext
                                         !string.Equals(cmd.ServerId, thumb, StringComparison.OrdinalIgnoreCase))
                                     { _ns = NetState.Reconnecting; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } }
                                     else
-                                    { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; TokenStore.Save(_tok ?? "", _ak, _sid); _approvalRequested = false; _peerCount = cmd.PeerCount; lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; }
+                                    { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; TokenStore.Save(_tok ?? "", _ak, _sid); _approvalRequested = false; _peerCount = cmd.PeerCount; lock (_tl) { _authConfirmed = true; } _pacer.Wake(); _ns = NetState.Connected; }
                                 }
                                 else { _approvalRequested = false; _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); _uiCtx.Post(_ => ShowReAuthDialog(), null); }
                             }

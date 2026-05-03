@@ -135,7 +135,7 @@ sealed class ServerForm : BorderlessForm
             var cl = kv.Value;
             if (!cl.Authenticated) continue;
             if (cl.LastSeen < idleCutoff) { _log.Add($"Idle timeout: {kv.Key}", Th.Org); cl.Kick(); continue; }
-            string desired = cl.Expanded ? "full" : _alertSvc.IdleMode;
+            string desired = cl.LastReport == null || cl.Expanded ? "full" : _alertSvc.IdleMode;
             if (cl.SendMode != desired)
             {
                 cl.SendMode = desired;

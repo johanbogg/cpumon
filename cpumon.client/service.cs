@@ -447,7 +447,7 @@ sealed class CpuMonService : ServiceBase
                                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
                             }
                             else
-                            { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; TokenStore.Save(_tok ?? "", _ak, _sid); _approvalRequested = false; lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; }
+                            { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; TokenStore.Save(_tok ?? "", _ak, _sid); _approvalRequested = false; lock (_tl) { _authConfirmed = true; } _pacer.Wake(); _ns = NetState.Connected; LogSink.Info("Service.Auth", "Auth accepted; reports enabled"); }
                         }
                         else { _approvalRequested = false; _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); if (!_authRequestPending) { _authRequestPending = true; SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" }); } }
                     }

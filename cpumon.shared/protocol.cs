@@ -180,6 +180,7 @@ public sealed class SendPacer
     readonly ManualResetEventSlim _wake = new(false);
     volatile string _mode = "full";
     public string Mode { get => _mode; set { if (_mode == value) return; _mode = value; _wake.Set(); } }
+    public void Wake() => _wake.Set();
     public void Wait(CancellationToken ct) { int ms = _mode == "keepalive" ? Proto.KAMs : _mode == "monitor" ? Proto.MonitorMs : Proto.FullMs; _wake.Reset(); _wake.Wait(ms, ct); }
 }
 
@@ -268,8 +269,8 @@ public static class TokenStore
     static string Path => System.IO.Path.Combine(AppContext.BaseDirectory, "client_auth.json");
     public static string AuthPath => Path;
     sealed class Data { [JsonPropertyName("t")] public string T { get; set; } = ""; [JsonPropertyName("k")] public string K { get; set; } = ""; [JsonPropertyName("s")] public string? S { get; set; } }
-    public static (string? token, string? key, string? serverId) Load() { try { if (File.Exists(Path)) { var d = JsonSerializer.Deserialize<Data>(File.ReadAllText(Path)); if (d == null) return (null, null, null); string key = ""; try { key = Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(d.K), null, DataProtectionScope.LocalMachine)); } catch { } return (d.T, key.Length > 0 ? key : null, d.S); } } catch { } return (null, null, null); }
-    public static void Save(string t, string k, string? sid = null) { try { string json = JsonSerializer.Serialize(new Data { T = t, K = Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(k), null, DataProtectionScope.LocalMachine)), S = sid }); string tmp = Path + ".tmp"; File.WriteAllText(tmp, json); File.Move(tmp, Path, overwrite: true); } catch { } }
+    public static (string? token, string? key, string? serverId) Load() { try { if (File.Exists(Path)) { var d = JsonSerializer.Deserialize<Data>(File.ReadAllText(Path)); if (d == null) return (null, null, null); string key = ""; try { key = Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(d.K), null, DataProtectionScope.LocalMachine)); } catch (Exception ex) { LogSink.Warn("TokenStore", "Failed to decrypt saved auth key", ex); } return (d.T, key.Length > 0 ? key : null, d.S); } } catch (Exception ex) { LogSink.Warn("TokenStore", "Failed to load client auth store", ex); } return (null, null, null); }
+    public static void Save(string t, string k, string? sid = null) { try { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!); string json = JsonSerializer.Serialize(new Data { T = t, K = Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(k), null, DataProtectionScope.LocalMachine)), S = sid }); string tmp = Path + ".tmp"; File.WriteAllText(tmp, json); File.Move(tmp, Path, overwrite: true); LogSink.Info("TokenStore", $"Saved client auth store: {Path}"); } catch (Exception ex) { LogSink.Warn("TokenStore", $"Failed to save client auth store: {Path}", ex); } }
     public static bool Clear() { try { if (File.Exists(Path)) File.Delete(Path); return true; } catch (Exception ex) { LogSink.Warn("TokenStore", "Failed to clear client auth store", ex); return false; } }
 }
 

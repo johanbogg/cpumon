@@ -219,7 +219,7 @@ sealed class ClientForm : BorderlessForm
                                         !string.Equals(cmd.ServerId, thumb, StringComparison.OrdinalIgnoreCase))
                                     { _ns = NetState.Reconnecting; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } _log.Add("✕ MITM detected — reconnecting", Th.Red); }
                                     else
-                                    { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; TokenStore.Save(_tok ?? "", _ak, _sid); _approvalRequested = false; lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; _log.Add("✓ Auth OK", Th.Grn); }
+                                    { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; TokenStore.Save(_tok ?? "", _ak, _sid); _approvalRequested = false; lock (_tl) { _authConfirmed = true; } _pacer.Wake(); _ns = NetState.Connected; _log.Add("✓ Auth OK", Th.Grn); }
                                 }
                                 else { _approvalRequested = false; _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); _log.Add("✕ Auth failed", Th.Red); BeginInvoke(ShowReAuthDialog); }
                             }

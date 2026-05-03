@@ -16,6 +16,7 @@ internal static class Program
             TestLineLengthLimitedStream();
             TestUpdateIntegrity();
             TestSendPacerWakesOnModeChange();
+            TestSendPacerWakesOnDemand();
             TestApprovedClientAliasPersists();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
@@ -132,6 +133,16 @@ internal static class Program
         Thread.Sleep(100);
         pacer.Mode = "monitor";
         Assert(task.Wait(1000), "mode change should wake pacer");
+    }
+
+    static void TestSendPacerWakesOnDemand()
+    {
+        var pacer = new SendPacer { Mode = "monitor" };
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var task = Task.Run(() => pacer.Wait(cts.Token));
+        Thread.Sleep(100);
+        pacer.Wake();
+        Assert(task.Wait(1000), "explicit wake should wake pacer");
     }
 
     static void TestApprovedClientAliasPersists()
