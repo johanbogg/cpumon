@@ -140,13 +140,13 @@ sealed class AgentContext : ApplicationContext
                 }
                 _connected = true;
 
-                // Read commands from service
+                // Read commands from service — snapshot reader once before the loop.
+                // CaptureAndSend holds _pipeLock for the entire duration of a pipe write
+                // (which can block if the service is slow to read), so acquiring _pipeLock
+                // on every iteration would deadlock when a large frame is in-flight.
+                StreamReader? reader; lock (_pipeLock) { reader = _pipeReader; }
                 while (!ct.IsCancellationRequested)
                 {
-                    // Snapshot reader reference under lock but read outside it — holding
-                    // _pipeLock across a blocking ReadLine() deadlocks RdpCaptureSession
-                    // which needs the same lock to write frames on its capture thread.
-                    StreamReader? reader; lock (_pipeLock) { reader = _pipeReader; }
                     string? line = reader?.ReadLine();
                     if (line == null) break;
 

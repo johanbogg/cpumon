@@ -132,6 +132,7 @@ public sealed class RdpViewerDialog : Form
     readonly Stopwatch _fpsSw = Stopwatch.StartNew();
     bool _inputEnabled = true;
     volatile bool _repaintPending;
+    long _lastMouseMoveTick;
 
     public string RdpId => _rdpId;
 
@@ -262,6 +263,9 @@ public sealed class RdpViewerDialog : Form
     void OnMouseMove(object? s, MouseEventArgs e)
     {
         if (!_inputEnabled || _remoteW == 0) return;
+        long now = Environment.TickCount64;
+        if (now - _lastMouseMoveTick < 16) return;
+        _lastMouseMoveTick = now;
         var (rx, ry) = ToRemote(e.X, e.Y);
         _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_move", X = rx, Y = ry } });
     }
