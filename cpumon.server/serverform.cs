@@ -425,7 +425,8 @@ sealed class ServerForm : BorderlessForm
         {
             if (name != null && _pendingApprovals.TryGetValue(name, out var pending) && ReferenceEquals(pending.Client, cl))
                 _pendingApprovals.TryRemove(name, out _);
-            if (name != null) _cls.TryRemove(name, out _);
+            if (name != null && _cls.TryGetValue(name, out var current) && ReferenceEquals(current, cl))
+                _cls.TryRemove(name, out _);
             cl.Dispose();
             Interlocked.Decrement(ref _cc);
             PendingPowerAction? powerAction = null;
@@ -720,7 +721,12 @@ sealed class ServerForm : BorderlessForm
             foreach (var kv in _cls.OrderBy(k => k.Key))
             {
                 var cl = kv.Value;
-                if (cl.LastReport == null) continue;
+                if (cl.LastReport == null)
+                {
+                    DrawConnectedWithoutReport(g, x, y, w, cl);
+                    y += 44;
+                    continue;
+                }
                 bool stale = (DateTime.UtcNow - cl.LastSeen).TotalSeconds > 70;
                 int ch = cl.Expanded ? DrawExpanded(g, x, y, w, cl, stale) : DrawCollapsed(g, x, y, w, cl, stale);
                 y += ch + 6;
@@ -779,6 +785,35 @@ sealed class ServerForm : BorderlessForm
             var sz = g.MeasureString(ct, cf);
             g.DrawString(ct, cf, ccb, x + w - sz.Width - 12, y + 9);
         }
+    }
+
+    void DrawConnectedWithoutReport(Graphics g, int x, int y, int w, RemoteClient cl)
+    {
+        int h = 38;
+        using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
+        using (var bp = new Pen(Color.FromArgb(45, Th.Yel), 1f)) { using var p = Th.RR(x, y, w, h, 6); g.DrawPath(bp, p); }
+        using (var ac = new SolidBrush(Color.FromArgb(160, Th.Yel)))
+            g.FillRectangle(ac, x + 1, y + 6, 4, h - 12);
+        using (var dot = new SolidBrush(Th.Yel)) g.FillEllipse(dot, x + 12, y + 14, 8, 8);
+
+        var alias = _store.GetAlias(cl.MachineName);
+        bool hasAlias = !string.IsNullOrEmpty(alias);
+        string displayName = hasAlias ? alias! : cl.MachineName;
+        using var nf = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
+        using (var nb = new SolidBrush(Th.Brt))
+            g.DrawString(displayName, nf, nb, x + 26, y + 7);
+        if (hasAlias)
+        {
+            using var hnf = new Font("Segoe UI", 7f);
+            using var hnb = new SolidBrush(Color.FromArgb(85, 85, 100));
+            var nsz = g.MeasureString(displayName, nf);
+            g.DrawString(cl.MachineName, hnf, hnb, x + 30 + (int)nsz.Width, y + 11);
+        }
+
+        using var sf = new Font("Segoe UI", 7.5f);
+        using var sb = new SolidBrush(Th.Yel);
+        string ver = string.IsNullOrEmpty(cl.ClientVersion) ? "" : $" · v{cl.ClientVersion}";
+        g.DrawString($"Connected · waiting for first report{ver}", sf, sb, x + 26, y + 23);
     }
 
     int DrawCollapsed(Graphics g, int x, int y, int w, RemoteClient cl, bool stale)
