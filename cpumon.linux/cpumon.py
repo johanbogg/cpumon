@@ -711,7 +711,7 @@ class Client:
                     time.sleep(MONITOR_MS if self._mode == "monitor" else FULL_MS)
             except Exception as e:
                 print(f"Send error: {e}", flush=True)
-                break
+                time.sleep(1)
 
     def run(self):
         threading.Thread(target=self._send_loop, daemon=True).start()

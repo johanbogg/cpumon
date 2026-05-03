@@ -408,7 +408,7 @@ public sealed class RemoteClient : IDisposable
     public readonly ConcurrentQueue<ServerCommand> PendingCmds = new();
     public Action<bool, string>? ServiceResultCallback;
     readonly TcpClient _tcp; readonly SslStream _ssl; readonly StreamReader _rd; readonly StreamWriter _wr; readonly object _wl = new();
-    public RemoteClient(TcpClient tcp, SslStream ssl) { _tcp = tcp; _ssl = ssl; _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8); _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; LastSeen = DateTime.UtcNow; }
+    public RemoteClient(TcpClient tcp, SslStream ssl) { _tcp = tcp; _ssl = ssl; _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8); _wr = new StreamWriter(ssl, new UTF8Encoding(false)) { AutoFlush = false }; LastSeen = DateTime.UtcNow; }
     public Task<string?> ReadLineAsync(CancellationToken ct) => _rd.ReadLineAsync(ct).AsTask();
     public void Send(ServerCommand cmd) { lock (_wl) { try { _wr.WriteLine(JsonSerializer.Serialize(cmd)); _wr.Flush(); } catch { if (PendingCmds.Count < 5) PendingCmds.Enqueue(cmd); } } }
     public void FlushPending() { while (PendingCmds.TryDequeue(out var cmd)) { try { Send(cmd); } catch { break; } } }
