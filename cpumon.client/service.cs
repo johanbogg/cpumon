@@ -34,7 +34,7 @@ sealed class CpuMonService : ServiceBase
     TcpClient? _tcp; SslStream? _ssl; StreamWriter? _wr; StreamReader? _rd;
     readonly object _tl = new();
     string _cpu = "", _ak = "", _sid = "", _connThumb = "";
-    bool _authConfirmed;
+    bool _authConfirmed, _approvalRequested;
     readonly SendPacer _pacer = new();
     FileStream? _updateStream;
 
@@ -217,9 +217,15 @@ sealed class CpuMonService : ServiceBase
                         {
                             var am = JsonSerializer.Deserialize<AgentIpc.AgentMessage>(line);
                             _authRequestPending = false;
-                            if (!string.IsNullOrEmpty(am?.Secret))
+                            if (am?.RequestApproval == true)
                             {
-                                _tok = am.Secret; _ak = "";
+                                _tok = null; _ak = ""; _approvalRequested = true;
+                                _ns = NetState.Reconnecting;
+                                lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                            }
+                            else if (!string.IsNullOrEmpty(am?.Secret))
+                            {
+                                _tok = am.Secret; _ak = ""; _approvalRequested = false;
                                 _ns = NetState.Reconnecting;
                                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
                             }
@@ -374,6 +380,8 @@ sealed class CpuMonService : ServiceBase
             try
             {
                 await EnsureConn(ep, ct);
+                bool authConfirmed; lock (_tl) { authConfirmed = _authConfirmed; }
+                if (!authConfirmed) { if (_approvalRequested) _ns = NetState.AuthPending; continue; }
                 if (_pacer.Mode == "keepalive")
                 {
                     var ka = new ClientMessage { Type = "keepalive", MachineName = Environment.MachineName, AuthKey = _ak };
@@ -434,11 +442,12 @@ sealed class CpuMonService : ServiceBase
                                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
                             }
                             else
-                            { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; }
+                            { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; TokenStore.Save(_tok ?? "", _ak, _sid); _approvalRequested = false; lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; }
                         }
-                        else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); if (!_authRequestPending) { _authRequestPending = true; SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" }); } }
+                        else { _approvalRequested = false; _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); if (!_authRequestPending) { _authRequestPending = true; SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" }); } }
                     }
                 }
+                else if (cmd.Cmd == "auth_pending") { _approvalRequested = true; _ns = NetState.AuthPending; }
                 else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
                 else if (cmd.Cmd == "rdp_open" && cmd.RdpId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_start", RdpId = cmd.RdpId, Fps = cmd.RdpFps, Quality = cmd.RdpQuality });
                 else if (cmd.Cmd == "rdp_close" && cmd.RdpId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_stop", RdpId = cmd.RdpId });
@@ -502,7 +511,7 @@ sealed class CpuMonService : ServiceBase
             if (!handedOff) { ssl?.Dispose(); c.Dispose(); }
             throw;
         }
-        var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, AppVersion = Proto.AppVersion };
+        var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, ApprovalRequested = _approvalRequested && string.IsNullOrEmpty(_ak), AppVersion = Proto.AppVersion };
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }
     }
 }

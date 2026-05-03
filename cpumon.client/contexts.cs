@@ -260,13 +260,16 @@ sealed class AgentContext : ApplicationContext
                                         var dlg = new Form { Text = "Re-Authorize", Size = new Size(400, 150), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt };
                                         var lbl = new Label { Text = "Authorization failed. Enter a new invite token:", Location = new Point(12, 12), AutoSize = true };
                                         var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle };
-                                        var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Location = new Point(12, 72), Size = new Size(100, 32), BackColor = Color.FromArgb(30, 50, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat };
-                                        ok.FlatAppearance.BorderColor = Th.Grn;
-                                        var skip = new Button { Text = "Skip", DialogResult = DialogResult.Cancel, Location = new Point(120, 72), Size = new Size(80, 32), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
-                                        dlg.Controls.AddRange(new Control[] { lbl, txt, ok, skip });
-                                        dlg.AcceptButton = ok;
-                                        string reply = dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text) ? txt.Text.Trim() : "";
-                                        lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "token_reply", Secret = reply })); _pipeWriter?.Flush(); } catch { } }
+                                         var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Location = new Point(12, 72), Size = new Size(100, 32), BackColor = Color.FromArgb(30, 50, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat };
+                                         ok.FlatAppearance.BorderColor = Th.Grn;
+                                         var approve = new Button { Text = "Approve on Server", DialogResult = DialogResult.Retry, Location = new Point(120, 72), Size = new Size(140, 32), BackColor = Color.FromArgb(34, 42, 56), ForeColor = Th.Cyan, FlatStyle = FlatStyle.Flat };
+                                         var skip = new Button { Text = "Skip", DialogResult = DialogResult.Cancel, Location = new Point(268, 72), Size = new Size(80, 32), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
+                                         dlg.Controls.AddRange(new Control[] { lbl, txt, ok, approve, skip });
+                                         dlg.AcceptButton = ok;
+                                         var result = dlg.ShowDialog();
+                                         string reply = result == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text) ? txt.Text.Trim() : "";
+                                         bool requestApproval = result == DialogResult.Retry;
+                                         lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "token_reply", Secret = reply, RequestApproval = requestApproval })); _pipeWriter?.Flush(); } catch { } }
                                     }
                                     finally { _authDialogOpen = false; }
                                 }, null);
@@ -329,7 +332,7 @@ sealed class DaemonContext : ApplicationContext
     readonly string? _fip; string? _tok;
     volatile NetState _ns = NetState.Idle; volatile string _sa = ""; volatile int _sc;
     volatile IPEndPoint? _ep; TcpClient? _tcp; SslStream? _ssl; StreamWriter? _wr; StreamReader? _rd;
-    readonly object _tl = new(); string _cpu = "", _ak = "", _sid = "", _connThumb = ""; bool _authConfirmed;
+    readonly object _tl = new(); string _cpu = "", _ak = "", _sid = "", _connThumb = ""; bool _authConfirmed, _approvalRequested;
     readonly SendPacer _pacer = new();
     volatile bool _isPaw;
     volatile int _peerCount;
@@ -434,6 +437,8 @@ sealed class DaemonContext : ApplicationContext
             try
             {
                 await EnsureConn(ep, ct);
+                bool authConfirmed; lock (_tl) { authConfirmed = _authConfirmed; }
+                if (!authConfirmed) { if (_approvalRequested) _ns = NetState.AuthPending; continue; }
                 if (_pacer.Mode == "keepalive") { var ka = new ClientMessage { Type = "keepalive", MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(ka)); _wr?.Flush(); } }
                 else { var snap = _mon.GetSnapshot(); var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu, _mon), MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m)); _wr?.Flush(); } }
                 _sc++; _ns = NetState.Connected;
@@ -475,11 +480,12 @@ sealed class DaemonContext : ApplicationContext
                                         !string.Equals(cmd.ServerId, thumb, StringComparison.OrdinalIgnoreCase))
                                     { _ns = NetState.Reconnecting; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } }
                                     else
-                                    { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; if (_tok != null) TokenStore.Save(_tok, _ak, _sid); _peerCount = cmd.PeerCount; lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; }
+                                    { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; TokenStore.Save(_tok ?? "", _ak, _sid); _approvalRequested = false; _peerCount = cmd.PeerCount; lock (_tl) { _authConfirmed = true; } _ns = NetState.Connected; }
                                 }
-                                else { _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); _uiCtx.Post(_ => ShowReAuthDialog(), null); }
+                                else { _approvalRequested = false; _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); _uiCtx.Post(_ => ShowReAuthDialog(), null); }
                             }
                         }
+                        else if (cmd.Cmd == "auth_pending") { _approvalRequested = true; _ns = NetState.AuthPending; }
                         else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
                         else if (cmd.Cmd == "paw_granted") _isPaw = true;
                         else if (cmd.Cmd == "paw_revoked") _isPaw = false;
@@ -503,12 +509,18 @@ sealed class DaemonContext : ApplicationContext
             var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle };
             var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Location = new Point(12, 72), Size = new Size(100, 32), BackColor = Color.FromArgb(30, 50, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat };
             ok.FlatAppearance.BorderColor = Th.Grn;
-            var skip = new Button { Text = "Skip", DialogResult = DialogResult.Cancel, Location = new Point(120, 72), Size = new Size(80, 32), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
-            dlg.Controls.AddRange(new Control[] { lbl, txt, ok, skip });
+            var approve = new Button { Text = "Approve on Server", DialogResult = DialogResult.Retry, Location = new Point(120, 72), Size = new Size(140, 32), BackColor = Color.FromArgb(34, 42, 56), ForeColor = Th.Cyan, FlatStyle = FlatStyle.Flat };
+            var skip = new Button { Text = "Skip", DialogResult = DialogResult.Cancel, Location = new Point(268, 72), Size = new Size(80, 32), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
+            dlg.Controls.AddRange(new Control[] { lbl, txt, ok, approve, skip });
             dlg.AcceptButton = ok;
             if (dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
             {
-                _tok = txt.Text.Trim(); _ak = "";
+                _tok = txt.Text.Trim(); _ak = ""; _approvalRequested = false;
+                _ns = NetState.Reconnecting;
+            }
+            else if (dlg.DialogResult == DialogResult.Retry)
+            {
+                _tok = null; _ak = ""; _approvalRequested = true;
                 _ns = NetState.Reconnecting;
             }
         }
@@ -540,7 +552,7 @@ sealed class DaemonContext : ApplicationContext
             if (!handedOff) { ssl?.Dispose(); c.Dispose(); }
             throw;
         }
-        var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, AppVersion = Proto.AppVersion };
+        var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, ApprovalRequested = _approvalRequested && string.IsNullOrEmpty(_ak), AppVersion = Proto.AppVersion };
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }
     }
 

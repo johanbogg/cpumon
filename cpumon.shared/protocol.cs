@@ -173,7 +173,7 @@ public static class LogSink
     }
 }
 
-public enum NetState { Idle, Searching, BeaconFound, Connecting, Connected, Sending, Reconnecting, AuthFailed }
+public enum NetState { Idle, Searching, BeaconFound, Connecting, Connected, Sending, Reconnecting, AuthPending, AuthFailed }
 
 public sealed class SendPacer
 {
@@ -285,6 +285,7 @@ public sealed class ClientMessage
     [JsonPropertyName("machine")] public string? MachineName { get; set; }
     [JsonPropertyName("authKey")] public string? AuthKey { get; set; }
     [JsonPropertyName("token")] public string? Token { get; set; }
+    [JsonPropertyName("approvalRequested")] public bool ApprovalRequested { get; set; }
     [JsonPropertyName("termId")] public string? TermId { get; set; }
     [JsonPropertyName("output")] public string? Output { get; set; }
     [JsonPropertyName("fileListing")] public FileListing? FileListing { get; set; }
@@ -399,6 +400,7 @@ public static class AgentIpc
         [JsonPropertyName("frame")] public RdpFrameData? Frame { get; set; }
         [JsonPropertyName("msg")] public string? Message { get; set; }
         [JsonPropertyName("secret")] public string? Secret { get; set; }
+        [JsonPropertyName("requestApproval")] public bool RequestApproval { get; set; }
         [JsonPropertyName("termId")] public string? TermId { get; set; }
         [JsonPropertyName("shell")] public string? Shell { get; set; }
         [JsonPropertyName("cmdInput")] public string? CmdInput { get; set; }

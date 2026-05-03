@@ -178,6 +178,12 @@ The systemd service is named `cpumon` — `systemctl status cpumon`, `journalctl
 
 ---
 
+Windows clients can also request server-side approval instead of typing the invite token locally:
+
+1. On the client prompt, choose **Approve on Server**.
+2. The server shows the machine under **AWAITING APPROVAL**.
+3. Click **Approve** on the server to issue and save a client key, or **Reject** to close the pending request.
+
 ## File structure
 
 ```

@@ -24,6 +24,7 @@ sealed class ServerForm : BorderlessForm
     readonly CancellationTokenSource _cts = new();
     readonly CLog _log = new(50, "cpumon_server.log");
     readonly ConcurrentDictionary<string, RemoteClient> _cls = new();
+    readonly ConcurrentDictionary<string, PendingClientApproval> _pendingApprovals = new();
     readonly ApprovedClientStore _store = new();
     const int MaxConnections = 50;
     const int IdleTimeoutMinutes = 3;
@@ -93,6 +94,7 @@ sealed class ServerForm : BorderlessForm
         FormClosed += (_, _) =>
         {
             _tm.Stop(); _tm.Dispose(); _cts.Cancel();
+            foreach (var p in _pendingApprovals.Values) p.Client.Dispose();
             foreach (var c in _cls.Values) c.Dispose();
             CmdExec.DisposeAll();
         };
@@ -226,6 +228,7 @@ sealed class ServerForm : BorderlessForm
         string? name = null;
         string ip = remote.Contains(':') ? remote[..remote.LastIndexOf(':')] : remote;
         int rx = 0;
+        bool pendingApproval = false;
         using var authCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         authCts.CancelAfter(TimeSpan.FromSeconds(AuthTimeoutSeconds));
 
@@ -233,7 +236,7 @@ sealed class ServerForm : BorderlessForm
         {
             while (!ct.IsCancellationRequested)
             {
-                string? line = await cl.ReadLineAsync(cl.Authenticated ? ct : authCts.Token);
+                string? line = await cl.ReadLineAsync(cl.Authenticated || pendingApproval ? ct : authCts.Token);
                 if (line == null) break;
 
                 try
@@ -274,6 +277,18 @@ sealed class ServerForm : BorderlessForm
                                 while (prev2.PendingCmds.TryDequeue(out var pc)) cl.PendingCmds.Enqueue(pc);
                             _cls[mn] = cl;
                             cl.FlushPending();
+                            continue;
+                        }
+
+                        if (msg.ApprovalRequested)
+                        {
+                            cl.MachineName = mn;
+                            cl.ClientVersion = msg.AppVersion ?? "";
+                            pendingApproval = true;
+                            RegisterPendingApproval(new PendingClientApproval { MachineName = mn, Ip = ip, Remote = remote, Client = cl, ClientVersion = cl.ClientVersion });
+                            cl.Send(new ServerCommand { Cmd = "auth_pending", Message = "Awaiting approval on server" });
+                            _log.Add($"Awaiting approval: {mn} ({ip})", Th.Yel);
+                            BeginInvoke(() => _ct.Invalidate());
                             continue;
                         }
 
@@ -403,11 +418,55 @@ sealed class ServerForm : BorderlessForm
         catch (Exception ex) { LogSink.Warn("Server.HandleClient", $"Client loop failed: {name ?? remote}", ex); }
         finally
         {
+            if (name != null && _pendingApprovals.TryGetValue(name, out var pending) && ReferenceEquals(pending.Client, cl))
+                _pendingApprovals.TryRemove(name, out _);
             if (name != null) _cls.TryRemove(name, out _);
             cl.Dispose();
             Interlocked.Decrement(ref _cc);
             _log.Add($"Disc: {name ?? remote} ({rx})", Th.Org);
         }
+    }
+
+    void RegisterPendingApproval(PendingClientApproval pending)
+    {
+        _pendingApprovals.AddOrUpdate(pending.MachineName, pending, (_, old) =>
+        {
+            if (!ReferenceEquals(old.Client, pending.Client))
+                old.Client.Dispose();
+            return pending;
+        });
+    }
+
+    void ApprovePending(string machine)
+    {
+        if (!_pendingApprovals.TryRemove(machine, out var pending)) return;
+        string key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24))[..32];
+        _store.Approve(pending.MachineName, key, pending.Ip, "server-approved");
+        var cl = pending.Client;
+        cl.Authenticated = true;
+        cl.AuthKey = key;
+        cl.MachineName = pending.MachineName;
+        cl.ClientVersion = pending.ClientVersion;
+        cl.LastSeen = DateTime.UtcNow;
+        cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = key, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
+        if (_cls.TryGetValue(pending.MachineName, out var prev) && !ReferenceEquals(prev, cl))
+        {
+            while (prev.PendingCmds.TryDequeue(out var pc)) cl.PendingCmds.Enqueue(pc);
+            prev.Dispose();
+        }
+        _cls[pending.MachineName] = cl;
+        cl.FlushPending();
+        _log.Add($"Approved pending client: {pending.MachineName}", Th.Grn);
+        _ct.Invalidate();
+    }
+
+    void RejectPending(string machine)
+    {
+        if (!_pendingApprovals.TryRemove(machine, out var pending)) return;
+        try { pending.Client.Send(new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Rejected" }); } catch { }
+        pending.Client.Dispose();
+        _log.Add($"Rejected pending client: {pending.MachineName}", Th.Red);
+        _ct.Invalidate();
     }
 
     void OnClick(object? sender, MouseEventArgs e)
@@ -423,6 +482,8 @@ sealed class ServerForm : BorderlessForm
             if (a == "showapproved") { BeginInvoke(() => { using var d = new ApprovedClientsDialog(_store, _cls, _log); d.ShowDialog(this); }); break; }
             if (a == "theme") { Th.Toggle(); break; }
             if (a == "alerts") { BeginInvoke(() => { using var d = new AlertConfigDialog(_alertSvc); if (d.ShowDialog(this) == DialogResult.OK) _ct.Invalidate(); }); break; }
+            if (a == "approve_pending") { ApprovePending(m); break; }
+            if (a == "reject_pending") { RejectPending(m); break; }
             if (a == "forget_offline")
             {
                 if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
@@ -587,7 +648,8 @@ sealed class ServerForm : BorderlessForm
         DrawStatusBar(g, x, y, w);
         y += 76;
 
-        if (_cls.IsEmpty)
+        var pendingClients = _pendingApprovals.Values.OrderBy(p => p.MachineName).ToList();
+        if (_cls.IsEmpty && pendingClients.Count == 0)
         {
             using var f = new Font("Segoe UI", 10f);
             using var b = new SolidBrush(Th.Dim);
@@ -595,7 +657,16 @@ sealed class ServerForm : BorderlessForm
             g.DrawString($"No clients.\nShare token: {_tok}", f, b, new RectangleF(x, y + 20, w, 80), sf);
             y += 80;
         }
-        else
+        if (pendingClients.Count > 0)
+        {
+            using (var hf = new Font("Segoe UI", 7f)) using (var hb = new SolidBrush(Th.Yel))
+                g.DrawString("AWAITING APPROVAL", hf, hb, x + 4, y + 4);
+            y += 18;
+            foreach (var pending in pendingClients)
+            { DrawPendingApproval(g, x, y, w, pending); y += 44; }
+        }
+
+        if (!_cls.IsEmpty)
         {
             foreach (var kv in _cls.OrderBy(k => k.Key))
             {
@@ -863,6 +934,27 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, x + w - 82, y + 5, 72, 24, "🗑 Forget", Th.Dim, ac.Name, "forget_offline");
     }
 
+    void DrawPendingApproval(Graphics g, int x, int y, int w, PendingClientApproval pending)
+    {
+        int h = 38;
+        using (var bg = new SolidBrush(Color.FromArgb(32, 30, 22))) { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
+        using (var bp = new Pen(Color.FromArgb(70, Th.Yel), 1f)) { using var p = Th.RR(x, y, w, h, 6); g.DrawPath(bp, p); }
+        using (var ac = new SolidBrush(Color.FromArgb(170, Th.Yel)))
+            g.FillRectangle(ac, x + 1, y + 6, 4, h - 12);
+
+        using (var dot = new SolidBrush(Th.Yel)) g.FillEllipse(dot, x + 12, y + 15, 8, 8);
+        using (var nf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold)) using (var nb = new SolidBrush(Th.Brt))
+            g.DrawString(pending.MachineName, nf, nb, x + 26, y + 8);
+        using (var sf = new Font("Segoe UI", 7.5f)) using (var sb = new SolidBrush(Th.Dim))
+        {
+            string age = $"{Math.Max(0, (int)(DateTime.UtcNow - pending.RequestedAt).TotalSeconds)}s ago";
+            string version = string.IsNullOrEmpty(pending.ClientVersion) ? "" : $" · v{pending.ClientVersion}";
+            g.DrawString($"Awaiting approval · {pending.Ip}{version} · {age}", sf, sb, x + 170, y + 11);
+        }
+        DrawBtn(g, x + w - 178, y + 7, 82, 24, "Approve", Th.Grn, pending.MachineName, "approve_pending");
+        DrawDangerBtn(g, x + w - 88, y + 7, 78, 24, "Reject", Th.Red, pending.MachineName, "reject_pending");
+    }
+
     static string FmtNet(double kbps) => kbps >= 1024 ? $"{kbps / 1024.0:0.0}M" : $"{kbps:0}K";
     static void DrawMetric(Graphics g, int x, int y, string l, string v, Color c)
     {
@@ -894,4 +986,14 @@ sealed class ServerForm : BorderlessForm
             ey += lh;
         }
     }
+}
+
+sealed class PendingClientApproval
+{
+    public required string MachineName { get; init; }
+    public required string Ip { get; init; }
+    public required string Remote { get; init; }
+    public required RemoteClient Client { get; init; }
+    public DateTime RequestedAt { get; init; } = DateTime.UtcNow;
+    public string ClientVersion { get; init; } = "";
 }
