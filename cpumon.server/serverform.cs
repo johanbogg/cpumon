@@ -26,7 +26,7 @@ sealed class ServerForm : BorderlessForm
     readonly ConcurrentDictionary<string, RemoteClient> _cls = new();
     readonly ConcurrentDictionary<string, PendingClientApproval> _pendingApprovals = new();
     readonly ApprovedClientStore _store = new();
-    readonly Dictionary<string, DateTime> _pendingReboots = new();
+    readonly Dictionary<string, PendingPowerAction> _pendingPowerActions = new();
     const int MaxConnections = 50;
     const int IdleTimeoutMinutes = 3;
     const int AuthTimeoutSeconds = 30;
@@ -428,9 +428,9 @@ sealed class ServerForm : BorderlessForm
             if (name != null) _cls.TryRemove(name, out _);
             cl.Dispose();
             Interlocked.Decrement(ref _cc);
-            bool wasRebooting = false;
-            if (name != null) lock (_pendingReboots) { wasRebooting = _pendingReboots.TryGetValue(name, out var req) && (DateTime.UtcNow - req).TotalMinutes < 5; _pendingReboots.Remove(name); }
-            if (wasRebooting) _log.Add($"Disc: {name} — restarting ✓ ({rx})", Th.Grn);
+            PendingPowerAction? powerAction = null;
+            if (name != null) lock (_pendingPowerActions) { if (_pendingPowerActions.TryGetValue(name, out var req) && (DateTime.UtcNow - req.RequestedAt).TotalMinutes < 5) powerAction = req; _pendingPowerActions.Remove(name); }
+            if (powerAction != null) _log.Add($"Disc: {name} — {powerAction.Label} ✓ ({rx})", Th.Grn);
             else _log.Add($"Disc: {name ?? remote} ({rx})", Th.Org);
         }
     }
@@ -563,7 +563,7 @@ sealed class ServerForm : BorderlessForm
                     if (MessageBox.Show($"Restart {m}?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                     {
                         cl.Send(new ServerCommand { Cmd = "restart", CmdId = Guid.NewGuid().ToString("N")[..8] });
-                        lock (_pendingReboots) _pendingReboots[m] = DateTime.UtcNow;
+                        lock (_pendingPowerActions) _pendingPowerActions[m] = new PendingPowerAction("restarting", DateTime.UtcNow);
                         _log.Add($"→ Restart requested: {m}", Th.Yel);
                     }
                     break;
@@ -572,7 +572,7 @@ sealed class ServerForm : BorderlessForm
                     if (MessageBox.Show($"SHUT DOWN {m}?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                     {
                         cl.Send(new ServerCommand { Cmd = "shutdown", CmdId = Guid.NewGuid().ToString("N")[..8] });
-                        lock (_pendingReboots) _pendingReboots[m] = DateTime.UtcNow;
+                        lock (_pendingPowerActions) _pendingPowerActions[m] = new PendingPowerAction("shutting down", DateTime.UtcNow);
                         _log.Add($"→ Shutdown requested: {m}", Th.Yel);
                     }
                     break;
@@ -1047,3 +1047,5 @@ sealed class PendingClientApproval
     public DateTime RequestedAt { get; init; } = DateTime.UtcNow;
     public string ClientVersion { get; init; } = "";
 }
+
+sealed record PendingPowerAction(string Label, DateTime RequestedAt);
