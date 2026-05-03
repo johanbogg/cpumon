@@ -31,6 +31,7 @@ sealed class ClientForm : BorderlessForm
     TcpClient? _tcp; SslStream? _ssl; StreamWriter? _wr; StreamReader? _rd; readonly object _tl = new();
     volatile IPEndPoint? _ep;
     const int HL = 120; readonly Queue<float> _lh = new();
+    CpuSnapshot _latestSnapshot = CpuSnapshot.Unavailable();
     string _cpu = "", _ak = "", _sid = "", _connThumb = ""; bool _authConfirmed, _approvalRequested;
     readonly SendPacer _pacer = new();
 
@@ -354,6 +355,7 @@ sealed class ClientForm : BorderlessForm
     void Tick()
     {
         var s = _mon.GetSnapshot();
+        _latestSnapshot = s;
         if (s.TotalLoadPercent.HasValue) { _lh.Enqueue(s.TotalLoadPercent.Value); if (_lh.Count > HL) _lh.Dequeue(); }
         _cpuP.Invalidate(); _netP.Invalidate();
         _pawForm?.RefreshView();
@@ -402,7 +404,7 @@ sealed class ClientForm : BorderlessForm
     void PaintCpu(object? sender, PaintEventArgs e)
     {
         var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-        var s = _mon.GetSnapshot();
+        var s = _latestSnapshot;
         if (!s.IsAvailable) { using var fb = new SolidBrush(Th.Dim); using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center }; g.DrawString("CPU unavailable.\nRun as Admin.", Font, fb, _cpuP.ClientRectangle, sf); return; }
         if (_md.SelectedIndex == 1) DrawPerCore(g, s); else DrawPackage(g, s);
     }

@@ -108,11 +108,11 @@ public sealed class RdpCaptureSession : IDisposable
         _needFull = false;
 
         var encoder = GetJpegEncoder();
-        var qualityParam = new EncoderParameters(1);
+        using var qualityParam = new EncoderParameters(1);
         qualityParam.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, _quality);
 
         // Single locked pass — identify changed tiles with a fast XOR hash, no per-tile allocation
-        var changed = new List<Rectangle>();
+        var changed = new List<Rectangle>(_tileColCount * _tileRowCount);
         var bmpData = bmp.LockBits(new Rectangle(0, 0, sw, sh), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
         try
         {
@@ -143,7 +143,7 @@ public sealed class RdpCaptureSession : IDisposable
             using var tile = bmp.Clone(rect, PixelFormat.Format24bppRgb);
             using var ms = new MemoryStream();
             tile.Save(ms, encoder!, qualityParam);
-            tiles.Add(new RdpTile { X = rect.X, Y = rect.Y, W = rect.Width, H = rect.Height, Data = Convert.ToBase64String(ms.ToArray()) });
+            tiles.Add(new RdpTile { X = rect.X, Y = rect.Y, W = rect.Width, H = rect.Height, Data = Convert.ToBase64String(ms.GetBuffer(), 0, (int)ms.Length) });
         }
 
         var frame = new RdpFrameData
