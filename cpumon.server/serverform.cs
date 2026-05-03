@@ -29,6 +29,7 @@ sealed class ServerForm : BorderlessForm
     const int MaxConnections = 50;
     const int IdleTimeoutMinutes = 3;
     const int AuthTimeoutSeconds = 30;
+    const int PendingApprovalTimeoutMinutes = 15;
     readonly bool _nb;
     string _tok;
     DateTime _tokAt;
@@ -111,6 +112,16 @@ sealed class ServerForm : BorderlessForm
         var nowMs2 = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         foreach (var kv in _pawSeenNonces.Where(kv => nowMs2 - kv.Value > 60_000).ToList())
             _pawSeenNonces.TryRemove(kv.Key, out _);
+
+        var pendingCutoff = DateTime.UtcNow.AddMinutes(-PendingApprovalTimeoutMinutes);
+        foreach (var kv in _pendingApprovals.Where(kv => kv.Value.RequestedAt < pendingCutoff).ToList())
+        {
+            if (!_pendingApprovals.TryRemove(kv.Key, out var pending)) continue;
+            try { pending.Client.Send(new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Approval request expired" }); } catch { }
+            pending.Client.Dispose();
+            _log.Add($"Expired pending approval: {pending.MachineName}", Th.Org);
+            LogSink.Info("Server.Auth", $"Expired pending approval for {pending.MachineName}");
+        }
 
         var onlineNames = _cls.Keys.ToList();
         var offlineNames = _store.All()
@@ -432,7 +443,10 @@ sealed class ServerForm : BorderlessForm
         _pendingApprovals.AddOrUpdate(pending.MachineName, pending, (_, old) =>
         {
             if (!ReferenceEquals(old.Client, pending.Client))
+            {
+                try { old.Client.Send(new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Superseded by a newer approval request" }); } catch { }
                 old.Client.Dispose();
+            }
             return pending;
         });
     }
