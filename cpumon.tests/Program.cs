@@ -16,6 +16,7 @@ internal static class Program
             TestLineLengthLimitedStream();
             TestUpdateIntegrity();
             TestSendPacerWakesOnModeChange();
+            TestApprovedClientAliasPersists();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -133,6 +134,22 @@ internal static class Program
         Assert(task.Wait(1000), "mode change should wake pacer");
     }
 
+    static void TestApprovedClientAliasPersists()
+    {
+        using var td = new TempDir();
+        string path = Path.Combine(td.Path, "approved_clients.json");
+        var store = new ApprovedClientStore(path);
+        store.Approve("DESKTOP-123", "key", "192.168.1.10", "salt");
+        Assert(store.GetAlias("DESKTOP-123") == "", "new approved client should not have an alias");
+
+        store.SetAlias("DESKTOP-123", "Kids PC");
+        Assert(store.GetAlias("DESKTOP-123") == "Kids PC", "alias should be returned immediately");
+
+        var reloaded = new ApprovedClientStore(path);
+        Assert(reloaded.GetAlias("DESKTOP-123") == "Kids PC", "alias should persist after reload");
+        Assert(reloaded.IsOk("DESKTOP-123", "key"), "alias persistence should not break stored key");
+    }
+
     static void Assert(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
@@ -152,4 +169,3 @@ internal static class Program
         public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
     }
 }
-
