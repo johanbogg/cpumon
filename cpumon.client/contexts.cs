@@ -213,7 +213,7 @@ sealed class AgentContext : ApplicationContext
                                     catch (Exception ex)
                                     {
                                         var err = new ClientMessage { Type = "cmdresult", CmdId = msg.CmdId, Success = false, Message = $"Terminal: {ex.Message}" };
-                                        lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(err)); _pipeWriter?.Flush(); } catch { } }
+                                        lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(err)); _pipeWriter?.Flush(); } catch (Exception writeEx) { LogSink.Warn("Agent.Pipe", "Failed to report terminal open error to service", writeEx); } }
                                     }
                                 }
                                 break;
@@ -233,7 +233,7 @@ sealed class AgentContext : ApplicationContext
                                 ClientMessage r;
                                 try { var p = Process.Start(new ProcessStartInfo { FileName = msg.FileName ?? "", Arguments = msg.CmdInput ?? "", UseShellExecute = true }); r = new ClientMessage { Type = "cmdresult", CmdId = msg.CmdId, Success = true, Message = $"PID {p?.Id}" }; }
                                 catch (Exception ex) { r = new ClientMessage { Type = "cmdresult", CmdId = msg.CmdId, Success = false, Message = ex.Message }; }
-                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(r)); _pipeWriter?.Flush(); } catch { } }
+                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(r)); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to report process start result to service", ex); } }
                                 break;
                             }
 
@@ -243,7 +243,7 @@ sealed class AgentContext : ApplicationContext
                                 break;
 
                             case "ping":
-                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "pong" })); _pipeWriter?.Flush(); } catch { } }
+                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "pong" })); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Debug("Agent.Pipe", "Failed to send pong to service", ex); } }
                                 break;
 
                             case "msg_popup":
@@ -269,18 +269,18 @@ sealed class AgentContext : ApplicationContext
                                          var result = dlg.ShowDialog();
                                          string reply = result == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text) ? txt.Text.Trim() : "";
                                          bool requestApproval = result == DialogResult.Retry;
-                                         lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "token_reply", Secret = reply, RequestApproval = requestApproval })); _pipeWriter?.Flush(); } catch { } }
+                                         lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "token_reply", Secret = reply, RequestApproval = requestApproval })); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to send auth dialog response to service", ex); } }
                                     }
                                     finally { _authDialogOpen = false; }
                                 }, null);
                                 break;
                         }
                     }
-                    catch { }
+                    catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to handle service command", ex); }
                 }
             }
             catch (OperationCanceledException) { break; }
-            catch { }
+            catch (Exception ex) { LogSink.Debug("Agent.Pipe", "Pipe loop disconnected or failed", ex); }
             finally
             {
                 _connected = false;
