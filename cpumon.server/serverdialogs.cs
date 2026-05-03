@@ -155,7 +155,7 @@ sealed class ProcDialog : Form
         _timer.Tick += (_, _) => _cl.Send(new ServerCommand { Cmd = "listprocesses" });
         _timer.Start();
 
-        FormClosed += (_, _) => _timer.Stop();
+        FormClosed += (_, _) => { _timer.Stop(); _timer.Dispose(); };
 
         Controls.Add(_grid);
         Controls.Add(_search);

@@ -330,13 +330,6 @@ sealed class ServerForm : BorderlessForm
                             BeginInvoke(() => {
                                 if (_procDialogs.TryGetValue(cl.MachineName, out var existing) && !existing.IsDisposed)
                                     existing.UpdateList(msg.Processes);
-                                else {
-                                    var d = new ProcDialog(cl);
-                                    d.UpdateList(msg.Processes);
-                                    _procDialogs[cl.MachineName] = d;
-                                    d.FormClosed += (_, _) => _procDialogs.Remove(cl.MachineName);
-                                    d.Show(this);
-                                }
                             });
                             break;
 
@@ -483,6 +476,23 @@ sealed class ServerForm : BorderlessForm
         _ct.Invalidate();
     }
 
+    void OpenProcessDialog(RemoteClient cl)
+    {
+        if (_procDialogs.TryGetValue(cl.MachineName, out var existing) && !existing.IsDisposed)
+        {
+            existing.BringToFront();
+            cl.Send(new ServerCommand { Cmd = "listprocesses", CmdId = Guid.NewGuid().ToString("N")[..8] });
+            return;
+        }
+
+        var d = new ProcDialog(cl);
+        if (cl.LastProcessList != null) d.UpdateList(cl.LastProcessList);
+        _procDialogs[cl.MachineName] = d;
+        d.FormClosed += (_, _) => _procDialogs.Remove(cl.MachineName);
+        d.Show(this);
+        cl.Send(new ServerCommand { Cmd = "listprocesses", CmdId = Guid.NewGuid().ToString("N")[..8] });
+    }
+
     void OnClick(object? sender, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
@@ -536,7 +546,7 @@ sealed class ServerForm : BorderlessForm
                     if (MessageBox.Show($"Restart {m}?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                         cl.Send(new ServerCommand { Cmd = "restart", CmdId = Guid.NewGuid().ToString("N")[..8] });
                     break;
-                case "processes": cl.Send(new ServerCommand { Cmd = "listprocesses", CmdId = Guid.NewGuid().ToString("N")[..8] }); break;
+                case "processes": OpenProcessDialog(cl); break;
                 case "shutdown":
                     if (MessageBox.Show($"SHUT DOWN {m}?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                         cl.Send(new ServerCommand { Cmd = "shutdown", CmdId = Guid.NewGuid().ToString("N")[..8] });

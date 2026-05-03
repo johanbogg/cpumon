@@ -231,7 +231,7 @@ sealed class PawDashboardForm : Form
                     if (MessageBox.Show($"SHUT DOWN {m}?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                         _sendCmd(m, new ServerCommand { Cmd = "shutdown", CmdId = Guid.NewGuid().ToString("N")[..8] }); break;
                 case "processes":
-                    _sendCmd(m, new ServerCommand { Cmd = "listprocesses", CmdId = Guid.NewGuid().ToString("N")[..8] }); break;
+                    OpenProcessDialog(m); break;
                 case "sysinfo":
                     _sendCmd(m, new ServerCommand { Cmd = "sysinfo", CmdId = Guid.NewGuid().ToString("N")[..8] }); break;
                 case "cmd":
@@ -297,13 +297,22 @@ sealed class PawDashboardForm : Form
         if (!IsHandleCreated || IsDisposed) return;
         if (_procDialogs.TryGetValue(source, out var existing) && !existing.IsDisposed)
             existing.UpdateList(procs);
-        else {
-            var d = new PawProcDialog(source, _sendCmd);
-            d.UpdateList(procs);
-            _procDialogs[source] = d;
-            d.FormClosed += (_, _) => _procDialogs.Remove(source);
-            d.Show(this);
+    }
+
+    void OpenProcessDialog(string source)
+    {
+        if (_procDialogs.TryGetValue(source, out var existing) && !existing.IsDisposed)
+        {
+            existing.BringToFront();
+            _sendCmd(source, new ServerCommand { Cmd = "listprocesses", CmdId = Guid.NewGuid().ToString("N")[..8] });
+            return;
         }
+
+        var d = new PawProcDialog(source, _sendCmd);
+        _procDialogs[source] = d;
+        d.FormClosed += (_, _) => _procDialogs.Remove(source);
+        d.Show(this);
+        _sendCmd(source, new ServerCommand { Cmd = "listprocesses", CmdId = Guid.NewGuid().ToString("N")[..8] });
     }
 
     public void ReceiveSysInfo(string source, SystemInfoReport si)
@@ -606,7 +615,7 @@ sealed class PawProcDialog : Form
         _timer.Tick += (_, _) => _send(_source, new ServerCommand { Cmd = "listprocesses" });
         _timer.Start();
 
-        FormClosed += (_, _) => _timer.Stop();
+        FormClosed += (_, _) => { _timer.Stop(); _timer.Dispose(); };
 
         Controls.Add(_grid);
         Controls.Add(_search);
