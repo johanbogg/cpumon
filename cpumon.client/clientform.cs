@@ -237,7 +237,7 @@ sealed class ClientForm : BorderlessForm
                         else if (cmd.Cmd == "paw_file_listing" && cmd.PawSource != null && cmd.PawFileListing != null) { BeginInvoke(() => _pawForm?.ReceiveFileListing(cmd.PawSource, cmd.PawFileListing, cmd.CmdId)); }
                         else if (cmd.Cmd == "paw_file_chunk" && cmd.PawSource != null && cmd.PawFileChunk != null) { BeginInvoke(() => _pawForm?.ReceiveFileChunk(cmd.PawSource, cmd.PawFileChunk)); }
                         else if (cmd.Cmd == "paw_rdp_frame" && cmd.PawSource != null && cmd.RdpFrame != null) { var frame = cmd.RdpFrame; BeginInvoke(() => _pawForm?.ReceiveRdpFrame(cmd.PawSource, frame)); }
-                        else if (cmd.Cmd == "send_message" && cmd.Message != null) { var t = cmd.Message; _log.Add($"Msg: {t[..Math.Min(t.Length, 30)]}", Th.Yel); BeginInvoke(() => MessageBox.Show(t, "Server Message", MessageBoxButtons.OK, MessageBoxIcon.Information)); }
+                        else if (cmd.Cmd == "send_message" && cmd.Message != null) { var t = cmd.Message; _log.Add($"Msg: {t[..Math.Min(t.Length, 30)]}", Th.Yel); BeginInvoke(() => ForegroundMessage.Show(t)); }
                         else { _log.Add($"Cmd: {cmd.Cmd}", Th.Blu); CmdExec.Run(cmd, _tl, ref _wr); }
                     }
                 }

@@ -19,6 +19,36 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using Timer = System.Windows.Forms.Timer;
 
+static class ForegroundMessage
+{
+    public static void Show(string text)
+    {
+        try
+        {
+            using var owner = new Form
+            {
+                ShowInTaskbar = false,
+                StartPosition = FormStartPosition.Manual,
+                Size = new Size(1, 1),
+                Location = new Point(-32000, -32000),
+                TopMost = true
+            };
+            owner.Load += (_, _) =>
+            {
+                owner.Activate();
+                owner.BringToFront();
+            };
+            owner.Show();
+            MessageBox.Show(owner, text, "Server Message", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            LogSink.Warn("Client.Message", "Failed to show foreground server message", ex);
+            MessageBox.Show(text, "Server Message", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════
 //  Interactive Agent (runs in user session,
 //  communicates with service via named pipe)
@@ -247,7 +277,7 @@ sealed class AgentContext : ApplicationContext
                                 break;
 
                             case "msg_popup":
-                                if (msg.Message != null) { var t = msg.Message; Task.Run(() => MessageBox.Show(t, "Server Message", MessageBoxButtons.OK, MessageBoxIcon.Information)); }
+                                if (msg.Message != null) { var t = msg.Message; _uiCtx.Post(_ => ForegroundMessage.Show(t), null); }
                                 break;
 
                             case "auth_request":
@@ -489,7 +519,7 @@ sealed class DaemonContext : ApplicationContext
                         else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
                         else if (cmd.Cmd == "paw_granted") _isPaw = true;
                         else if (cmd.Cmd == "paw_revoked") _isPaw = false;
-                        else if (cmd.Cmd == "send_message" && cmd.Message != null) { var t = cmd.Message; Task.Run(() => MessageBox.Show(t, "Server Message", MessageBoxButtons.OK, MessageBoxIcon.Information)); }
+                        else if (cmd.Cmd == "send_message" && cmd.Message != null) { var t = cmd.Message; _uiCtx.Post(_ => ForegroundMessage.Show(t), null); }
                         else CmdExec.Run(cmd, _tl, ref _wr);
                     }
                 }
