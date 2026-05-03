@@ -205,12 +205,18 @@ sealed class ServerForm : BorderlessForm
                             tlsCts.Token);
                         await HandleClient(tcp, ssl, remote, ct);
                     }
-                    catch { ssl.Dispose(); tcp.Dispose(); Interlocked.Decrement(ref _cc); }
+                    catch (Exception ex)
+                    {
+                        LogSink.Warn("Server.Listen", $"Client task failed: {remote}", ex);
+                        ssl.Dispose();
+                        tcp.Dispose();
+                        Interlocked.Decrement(ref _cc);
+                    }
                 }, ct);
             }
             catch (OperationCanceledException) { break; }
             catch (SocketException) { break; }
-            catch (Exception ex) { _log.Add($"Err: {ex.Message}", Th.Red); }
+            catch (Exception ex) { LogSink.Warn("Server.Listen", "Listen loop failed", ex); _log.Add($"Err: {ex.Message}", Th.Red); }
         }
     }
 
@@ -394,7 +400,7 @@ sealed class ServerForm : BorderlessForm
                 catch (Exception ex) { _log.Add($"{name ?? remote}: {ex.Message}", Th.Red); }
             }
         }
-        catch { }
+        catch (Exception ex) { LogSink.Warn("Server.HandleClient", $"Client loop failed: {name ?? remote}", ex); }
         finally
         {
             if (name != null) _cls.TryRemove(name, out _);

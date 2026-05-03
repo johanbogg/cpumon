@@ -20,7 +20,7 @@ internal static class Program
     {
         AppState.Admin = Admin;
 
-        bool daemon = false, serviceMode = false, agentMode = false, install = false, uninstall = false;
+        bool daemon = false, serviceMode = false, agentMode = false, install = false, uninstall = false, resetAuth = false;
         string? forceIp = null, token = null;
 
         for (int i = 0; i < args.Length; i++)
@@ -36,6 +36,8 @@ internal static class Program
                 install = true;
             else if (a.Equals("--uninstall", StringComparison.OrdinalIgnoreCase))
                 uninstall = true;
+            else if (a.Equals("--reset-auth", StringComparison.OrdinalIgnoreCase) || a.Equals("--reset-pairing", StringComparison.OrdinalIgnoreCase))
+                resetAuth = true;
             else if ((a.Equals("--server-ip", StringComparison.OrdinalIgnoreCase) || a.Equals("-ip", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
                 forceIp = args[++i];
             else if ((a.Equals("--token", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
@@ -43,6 +45,14 @@ internal static class Program
         }
 
         // Non-GUI paths — no WinForms pump needed
+        if (resetAuth)
+        {
+            bool ok = TokenStore.Clear();
+            Console.WriteLine(ok
+                ? $"Cleared saved auth pairing: {TokenStore.AuthPath}"
+                : $"Failed to clear saved auth pairing: {TokenStore.AuthPath}");
+            return;
+        }
         if (install)   { ServiceManager.Install(forceIp, token); return; }
         if (uninstall) { ServiceManager.Uninstall(); return; }
 

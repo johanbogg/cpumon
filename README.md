@@ -61,6 +61,7 @@ Messages are newline-delimited JSON: `ClientMessage` (client → server) and `Se
 | `--agent` | User session | `AgentContext` — captures screen and injects input; communicates with the service via a named pipe (`cpumon_agent_pipe`) |
 | `--install` | Admin | Copy exe to `%ProgramFiles%\CpuMon\Client`, register SCM service, create agent logon task |
 | `--uninstall` | Admin | Stop and remove the service and agent scheduled task |
+| `--reset-auth` / `--reset-pairing` | Maintenance | Clear the saved auth key and pinned server thumbprint so the client can pair with a new server token |
 
 The service launches an agent process in the interactive user session automatically. The agent connects back over an authenticated named pipe; the pipe security descriptor grants `AuthenticatedUsers` read/write access. The service verifies the connecting process is the same exe via `GetNamedPipeClientProcessId`.
 
@@ -154,6 +155,11 @@ cpumon.client.exe [--server-ip <ip>]
 cpumon.client.exe --daemon [--server-ip <ip>]
 ```
 
+**Reset saved pairing (after replacing/reinstalling the server certificate):**
+```
+cpumon.client.exe --reset-auth
+```
+
 ### Linux client (monitored machine)
 
 ```bash
@@ -210,6 +216,9 @@ Runtime files (created automatically):
 | `approved_clients.json` | Server working dir | Approved client keys (DPAPI-encrypted) and metadata |
 | `client_auth.json` | Client working dir | Saved auth key and pinned server thumbprint |
 | `/var/lib/cpumon/client_auth.json` | Linux client | Same as above; chmod 600 |
+| `cpumon-YYYY-MM-DD.jsonl` | `%ProgramData%\CpuMon\logs` | Structured diagnostics for server/client/service paths |
+
+Set `CPUMON_LOG_LEVEL=debug` before starting a process if you need more verbose troubleshooting logs.
 
 ---
 
@@ -224,4 +233,4 @@ Runtime files (created automatically):
 - Individual clients can be revoked or forgotten from **👥 Clients**.
 - PAW status grants broad relay access — assign it only to machines you fully control.
 - The named pipe between service and agent is secured by verifying the connecting process exe path via `GetNamedPipeClientProcessId`, not a shared secret on the command line.
-- If the server certificate is replaced (e.g. after reinstalling), delete `client_auth.json` on each client to re-pair.
+- If the server certificate is replaced (e.g. after reinstalling), run `cpumon.client.exe --reset-auth` on each Windows client to clear its saved key and pinned thumbprint. If needed, manually delete `client_auth.json`; Linux clients use `/var/lib/cpumon/client_auth.json`.
