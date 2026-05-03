@@ -26,6 +26,7 @@ sealed class ServerForm : BorderlessForm
     readonly ConcurrentDictionary<string, RemoteClient> _cls = new();
     readonly ConcurrentDictionary<string, PendingClientApproval> _pendingApprovals = new();
     readonly ApprovedClientStore _store = new();
+    readonly Dictionary<string, DateTime> _pendingReboots = new();
     const int MaxConnections = 50;
     const int IdleTimeoutMinutes = 3;
     const int AuthTimeoutSeconds = 30;
@@ -427,7 +428,10 @@ sealed class ServerForm : BorderlessForm
             if (name != null) _cls.TryRemove(name, out _);
             cl.Dispose();
             Interlocked.Decrement(ref _cc);
-            _log.Add($"Disc: {name ?? remote} ({rx})", Th.Org);
+            bool wasRebooting = false;
+            if (name != null) lock (_pendingReboots) { wasRebooting = _pendingReboots.TryGetValue(name, out var req) && (DateTime.UtcNow - req).TotalMinutes < 5; _pendingReboots.Remove(name); }
+            if (wasRebooting) _log.Add($"Disc: {name} — restarting ✓ ({rx})", Th.Grn);
+            else _log.Add($"Disc: {name ?? remote} ({rx})", Th.Org);
         }
     }
 
@@ -514,6 +518,19 @@ sealed class ServerForm : BorderlessForm
                 { _store.Forget(m); _ct.Invalidate(); }
                 break;
             }
+            if (a == "set_mac_offline")
+            {
+                using var dlg = new Form { Text = "Set MAC", Size = new Size(300, 112), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, BackColor = Th.Bg, ForeColor = Th.Brt };
+                var lbl = new Label { Text = $"MAC for {m} (e.g. AA:BB:CC:DD:EE:FF):", Location = new Point(12, 12), AutoSize = true, ForeColor = Th.Dim };
+                var txt = new TextBox { Location = new Point(12, 34), Width = 260, BackColor = Th.Card, ForeColor = Th.Brt, BorderStyle = BorderStyle.FixedSingle };
+                var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(116, 62), Width = 75 };
+                var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(197, 62), Width = 75 };
+                dlg.AcceptButton = ok; dlg.CancelButton = cancel;
+                dlg.Controls.AddRange(new Control[] { lbl, txt, ok, cancel });
+                if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
+                { _store.SetMac(m, txt.Text.Trim()); _ct.Invalidate(); }
+                break;
+            }
             if (a == "wake_offline")
             {
                 var mac = _store.GetMac(m);
@@ -544,12 +561,20 @@ sealed class ServerForm : BorderlessForm
                 case "toggle": cl.Expanded = !cl.Expanded; _ct.Invalidate(); break;
                 case "restart":
                     if (MessageBox.Show($"Restart {m}?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                    {
                         cl.Send(new ServerCommand { Cmd = "restart", CmdId = Guid.NewGuid().ToString("N")[..8] });
+                        lock (_pendingReboots) _pendingReboots[m] = DateTime.UtcNow;
+                        _log.Add($"→ Restart requested: {m}", Th.Yel);
+                    }
                     break;
                 case "processes": OpenProcessDialog(cl); break;
                 case "shutdown":
                     if (MessageBox.Show($"SHUT DOWN {m}?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                    {
                         cl.Send(new ServerCommand { Cmd = "shutdown", CmdId = Guid.NewGuid().ToString("N")[..8] });
+                        lock (_pendingReboots) _pendingReboots[m] = DateTime.UtcNow;
+                        _log.Add($"→ Shutdown requested: {m}", Th.Yel);
+                    }
                     break;
                 case "sysinfo": cl.Send(new ServerCommand { Cmd = "sysinfo", CmdId = Guid.NewGuid().ToString("N")[..8] }); break;
                 case "forget":
@@ -950,11 +975,12 @@ sealed class ServerForm : BorderlessForm
         using (var nf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold)) using (var nb = new SolidBrush(Th.Dim))
             g.DrawString(ac.Name, nf, nb, x + 24, y + 8);
         var ago = DateTime.UtcNow - ac.Seen;
-        string agoStr = ago.TotalDays >= 1 ? $"{(int)ago.TotalDays}d ago" : ago.TotalHours >= 1 ? $"{(int)ago.TotalHours}h ago" : $"{(int)ago.TotalMinutes}m ago";
+        string agoStr = ago.TotalDays >= 1 ? $"{(int)ago.TotalDays}d ago" : ago.TotalHours >= 1 ? $"{(int)ago.TotalHours}h ago" : ago.TotalMinutes >= 1 ? $"{(int)ago.TotalMinutes}m ago" : "just now";
         using (var sf2 = new Font("Segoe UI", 7.5f)) using (var sb2 = new SolidBrush(Color.FromArgb(80, 80, 95)))
             g.DrawString($"Offline · {agoStr}", sf2, sb2, x + 150, y + 11);
         if (!string.IsNullOrEmpty(ac.Ip)) { using var if2 = new Font("Segoe UI", 7f); using var ib = new SolidBrush(Color.FromArgb(55, 75, 95)); g.DrawString(ac.Ip, if2, ib, x + 290, y + 11); }
         if (!string.IsNullOrEmpty(ac.Mac)) DrawBtn(g, x + w - 162, y + 5, 72, 24, "⚡ Wake", Th.Yel, ac.Name, "wake_offline");
+        else DrawBtn(g, x + w - 162, y + 5, 72, 24, "Set MAC", Th.Dim, ac.Name, "set_mac_offline");
         DrawBtn(g, x + w - 82, y + 5, 72, 24, "🗑 Forget", Th.Dim, ac.Name, "forget_offline");
     }
 
