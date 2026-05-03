@@ -36,9 +36,9 @@ function Publish-Project([string]$proj, [string]$out) {
 }
 
 Write-Host ''
-Write-Host '  ┌──────────────────────────────┐' -ForegroundColor DarkCyan
-Write-Host '  │      CpuMon  Build           │' -ForegroundColor Cyan
-Write-Host '  └──────────────────────────────┘' -ForegroundColor DarkCyan
+Write-Host '  +------------------------------+' -ForegroundColor DarkCyan
+Write-Host '  |      CpuMon  Build           |' -ForegroundColor Cyan
+Write-Host '  +------------------------------+' -ForegroundColor DarkCyan
 Write-Host ''
 
 $clientProj = Join-Path $PSScriptRoot 'cpumon.client\cpumon.client.csproj'
