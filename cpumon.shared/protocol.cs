@@ -571,7 +571,8 @@ public sealed class FileDownloadState : IDisposable
     public long TotalSize { get; set; } public long Received { get; set; } public bool Complete { get; set; }
     public string? Error { get; set; } public Action<long, long>? OnProgress { get; set; } public Action<bool, string>? OnComplete { get; set; }
     public FileDownloadState(string transferId, string localPath) { TransferId = transferId; LocalPath = localPath; }
-    public void Dispose() { Stream?.Dispose(); }
+    public string? TmpPath { get; set; }
+    public void Dispose() { Stream?.Dispose(); if (!Complete && TmpPath != null) try { File.Delete(TmpPath); } catch { } }
 }
 
 public sealed class PawRemoteClient

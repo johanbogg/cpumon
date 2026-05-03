@@ -324,17 +324,19 @@ public static class FileBrowserService
     public static void SendFile(string filePath, string transferId, object netLock, StreamWriter? writer) { Task.Run(() => { try { var fi = new FileInfo(filePath); if (!fi.Exists) { var err = new ClientMessage { Type = "file_chunk", TransferId = transferId, FileChunk = new FileChunkData { TransferId = transferId, FileName = System.IO.Path.GetFileName(filePath), Error = "File not found", IsLast = true } }; lock (netLock) { writer?.WriteLine(JsonSerializer.Serialize(err)); writer?.Flush(); } return; } long total = fi.Length; long offset = 0; var buf = new byte[Proto.FileChunkSize]; using var fs = fi.OpenRead(); while (true) { int read = fs.Read(buf, 0, buf.Length); bool last = read == 0 || offset + read >= total; var chunk = new FileChunkData { TransferId = transferId, FileName = fi.Name, Data = read > 0 ? Convert.ToBase64String(buf, 0, read) : "", Offset = offset, TotalSize = total, IsLast = last }; var msg = new ClientMessage { Type = "file_chunk", TransferId = transferId, FileChunk = chunk }; lock (netLock) { writer?.WriteLine(JsonSerializer.Serialize(msg)); writer?.Flush(); } offset += read; if (last) break; Thread.Sleep(5); } } catch (Exception ex) { var err = new ClientMessage { Type = "file_chunk", TransferId = transferId, FileChunk = new FileChunkData { TransferId = transferId, Error = ex.Message, IsLast = true } }; lock (netLock) { try { writer?.WriteLine(JsonSerializer.Serialize(err)); writer?.Flush(); } catch { } } } }); }
     public static string ReceiveChunk(FileChunkData chunk, ConcurrentDictionary<string, FileStream> activeUploads, string basePath)
     {
+        string? tmpFile = null;
         try
         {
             string baseFull = System.IO.Path.GetFullPath(basePath);
             string safeName = System.IO.Path.GetFileName(chunk.FileName);
             if (string.IsNullOrEmpty(safeName)) return "Upload error: invalid filename";
             string destFile = System.IO.Path.Combine(baseFull, safeName);
+            tmpFile = destFile + ".tmp";
             if (chunk.Offset == 0)
             {
                 if (activeUploads.TryRemove(chunk.TransferId, out var old))
                     old.Dispose();
-                activeUploads[chunk.TransferId] = new FileStream(destFile, FileMode.Create, FileAccess.Write, FileShare.None);
+                activeUploads[chunk.TransferId] = new FileStream(tmpFile, FileMode.Create, FileAccess.Write, FileShare.None);
             }
             if (activeUploads.TryGetValue(chunk.TransferId, out var stream))
             {
@@ -350,6 +352,7 @@ public static class FileBrowserService
                     stream.Flush();
                     stream.Dispose();
                     activeUploads.TryRemove(chunk.TransferId, out _);
+                    File.Move(tmpFile, destFile, overwrite: true);
                     return $"Upload complete: {chunk.FileName} ({chunk.TotalSize} bytes)";
                 }
             }
@@ -358,6 +361,7 @@ public static class FileBrowserService
         catch (Exception ex)
         {
             if (activeUploads.TryRemove(chunk.TransferId, out var s)) s.Dispose();
+            if (tmpFile != null) try { File.Delete(tmpFile); } catch { }
             return $"Upload error: {ex.Message}";
         }
     }
