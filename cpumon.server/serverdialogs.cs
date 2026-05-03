@@ -30,13 +30,14 @@ sealed class ApprovedClientsDialog : Form
             EnableHeadersVisualStyles = false, RowHeadersVisible = false, AllowUserToAddRows = false, ReadOnly = true,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, BorderStyle = BorderStyle.None
         };
-        grid.Columns.Add("Name", "Machine"); grid.Columns.Add("IP", "IP");
+        grid.Columns.Add("Name", "Machine"); grid.Columns.Add("Alias", "Alias");
+        grid.Columns.Add("IP", "IP");
         grid.Columns.Add("Seen", "Last Seen"); grid.Columns.Add("Status", "Status");
 
         foreach (var c in store.All())
         {
             bool on = live.ContainsKey(c.Name);
-            grid.Rows.Add(c.Name, c.Ip, c.Seen.ToLocalTime().ToString("g"), c.Revoked ? "Revoked" : on ? "Online" : "Offline");
+            grid.Rows.Add(c.Name, store.GetAlias(c.Name), c.Ip, c.Seen.ToLocalTime().ToString("g"), c.Revoked ? "Revoked" : on ? "Online" : "Offline");
         }
 
         var bp = new Panel { Dock = DockStyle.Bottom, Height = 42, BackColor = Th.TBg };
@@ -54,8 +55,27 @@ sealed class ApprovedClientsDialog : Form
             var n = grid.SelectedRows[0].Cells["Name"].Value?.ToString();
             if (n != null) { store.Revoke(n); if (live.TryRemove(n, out var rc)) rc.Dispose(); Close(); }
         };
+        var sa = MkBtn("Set Alias…", Th.Cyan); sa.Location = new Point(224, 6);
+        sa.Click += (_, _) =>
+        {
+            if (grid.SelectedRows.Count == 0) return;
+            var n = grid.SelectedRows[0].Cells["Name"].Value?.ToString();
+            if (n == null) return;
+            using var dlg = new Form { Text = "Set Alias", Size = new Size(300, 120), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, BackColor = Th.Bg, ForeColor = Th.Brt };
+            var lbl = new Label { Text = $"Alias for {n}:", Location = new Point(12, 12), AutoSize = true, ForeColor = Th.Dim };
+            var txt = new TextBox { Text = store.GetAlias(n), Location = new Point(12, 34), Width = 260, BackColor = Th.Card, ForeColor = Th.Brt, BorderStyle = BorderStyle.FixedSingle };
+            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(116, 68), Width = 75 };
+            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(197, 68), Width = 75 };
+            dlg.AcceptButton = ok; dlg.CancelButton = cancel;
+            dlg.Controls.AddRange(new Control[] { lbl, txt, ok, cancel });
+            if (dlg.ShowDialog(this) == DialogResult.OK)
+            {
+                store.SetAlias(n, txt.Text.Trim());
+                grid.SelectedRows[0].Cells["Alias"].Value = txt.Text.Trim();
+            }
+        };
 
-        bp.Controls.AddRange(new Control[] { fg, rv });
+        bp.Controls.AddRange(new Control[] { fg, rv, sa });
         Controls.Add(grid); Controls.Add(bp);
     }
 

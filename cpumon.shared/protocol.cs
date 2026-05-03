@@ -227,6 +227,8 @@ public sealed class ApprovedClientStore
     public void SetPaw(string n, bool v) { lock (_l) { if (_c.TryGetValue(n, out var c)) { c.Paw = v; Save(); } } }
     public void SetMac(string n, string mac) { lock (_l) { if (_c.TryGetValue(n, out var c) && c.Mac != mac) { c.Mac = mac; Save(); } } }
     public string GetMac(string n) { lock (_l) { return _c.TryGetValue(n, out var c) ? c.Mac : ""; } }
+    public void SetAlias(string n, string alias) { lock (_l) { if (_c.TryGetValue(n, out var c) && c.Alias != alias) { c.Alias = alias; Save(); } } }
+    public string GetAlias(string n) { lock (_l) { return _c.TryGetValue(n, out var c) ? c.Alias : ""; } }
     public List<ApprovedClient> All() { lock (_l) { return _c.Values.ToList(); } }
     public void Prune(int daysOld) { lock (_l) { var cutoff = DateTime.UtcNow.AddDays(-daysOld); var stale = _c.Values.Where(c => !c.Paw && !c.Revoked && c.Seen < cutoff).Select(c => c.Name).ToList(); foreach (var n in stale) _c.Remove(n); if (stale.Count > 0) Save(); } }
     void Load() { try { if (File.Exists(_path)) { var list = JsonSerializer.Deserialize<List<ApprovedClient>>(File.ReadAllText(_path)); if (list != null) foreach (var c in list) { c.Key = DecryptKey(c.Key); _c[c.Name] = c; } } } catch { } }
@@ -234,7 +236,7 @@ public sealed class ApprovedClientStore
     {
         try
         {
-            var list = _c.Values.Select(c => new ApprovedClient { Name = c.Name, Key = EncryptKey(c.Key), At = c.At, Seen = c.Seen, Ip = c.Ip, Revoked = c.Revoked, Paw = c.Paw, Mac = c.Mac, Salt = c.Salt }).ToList();
+            var list = _c.Values.Select(c => new ApprovedClient { Name = c.Name, Key = EncryptKey(c.Key), At = c.At, Seen = c.Seen, Ip = c.Ip, Revoked = c.Revoked, Paw = c.Paw, Mac = c.Mac, Alias = c.Alias, Salt = c.Salt }).ToList();
             string json = JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true });
             string tmp = _path + ".tmp";
             File.WriteAllText(tmp, json);
@@ -256,6 +258,7 @@ public sealed class ApprovedClient
     [JsonPropertyName("r")] public bool Revoked { get; set; }
     [JsonPropertyName("p")] public bool Paw { get; set; }
     [JsonPropertyName("m")] public string Mac { get; set; } = "";
+    [JsonPropertyName("al")] public string Alias { get; set; } = "";
     // Random salt used during DeriveKey at enrollment; prevents key derivation from token alone
     [JsonPropertyName("sl")] public string Salt { get; set; } = "";
 }

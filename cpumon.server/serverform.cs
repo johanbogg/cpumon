@@ -795,11 +795,19 @@ sealed class ServerForm : BorderlessForm
         _btns.Add((new Rectangle(x, y, w, h), r.MachineName, "toggle"));
 
         using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 17, 8, 8);
+        var alias = _store.GetAlias(r.MachineName);
+        bool hasAlias = !string.IsNullOrEmpty(alias);
+        string displayName = hasAlias ? alias! : r.MachineName;
         using var nf = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
         using var nb = new SolidBrush(Th.Brt);
-        g.DrawString(r.MachineName, nf, nb, x + 26, y + 13);
-
-        var nsz = g.MeasureString(r.MachineName, nf);
+        g.DrawString(displayName, nf, nb, x + 26, hasAlias ? y + 8 : y + 13);
+        if (hasAlias)
+        {
+            using var hnf = new Font("Segoe UI", 7f);
+            using var hnb = new SolidBrush(Color.FromArgb(85, 85, 100));
+            g.DrawString(r.MachineName, hnf, hnb, x + 26, y + 25);
+        }
+        var nsz = g.MeasureString(displayName, nf);
         int mx = x + 30 + (int)nsz.Width + 14;
         using var mf = new Font("Segoe UI", 8f);
 
@@ -853,15 +861,26 @@ sealed class ServerForm : BorderlessForm
         using (var ef = new Font("Segoe UI", 10f)) using (var eb = new SolidBrush(Th.Dim))
             g.DrawString("▴", ef, eb, x + w - 22, y + 8);
         using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 12, 9, 9);
-        using (var nf = new Font("Segoe UI Semibold", 11f, FontStyle.Bold)) using (var nb = new SolidBrush(Th.Brt))
-            g.DrawString(r.MachineName, nf, nb, x + 28, y + 7);
+        var alias2 = _store.GetAlias(r.MachineName);
+        bool hasAlias2 = !string.IsNullOrEmpty(alias2);
+        string displayName2 = hasAlias2 ? alias2! : r.MachineName;
+        using var expNf = new Font("Segoe UI Semibold", 11f, FontStyle.Bold);
+        using (var nb2 = new SolidBrush(Th.Brt)) g.DrawString(displayName2, expNf, nb2, x + 28, y + 7);
+        var expNsz = g.MeasureString(displayName2, expNf);
+        int expX = x + 30 + (int)expNsz.Width;
+        if (hasAlias2)
+        {
+            using var hnf = new Font("Segoe UI", 7f);
+            using var hnb = new SolidBrush(Color.FromArgb(85, 85, 100));
+            g.DrawString(r.MachineName, hnf, hnb, expX, y + 11);
+            expX += (int)g.MeasureString(r.MachineName, hnf).Width + 4;
+        }
         if (!string.IsNullOrEmpty(cl.ClientVersion))
         {
             bool outdated = ClientNeedsUpdate(cl.ClientVersion);
             using var vf = new Font("Segoe UI", 7f);
             using var vb = new SolidBrush(outdated ? Th.Org : Th.Dim);
-            var nsz = g.MeasureString(r.MachineName, new Font("Segoe UI Semibold", 11f, FontStyle.Bold));
-            g.DrawString($"v{cl.ClientVersion}" + (outdated ? " ⚠" : ""), vf, vb, x + 30 + nsz.Width, y + 11);
+            g.DrawString($"v{cl.ClientVersion}" + (outdated ? " ⚠" : ""), vf, vb, expX, y + 11);
         }
         using (var cf = new Font("Segoe UI", 7.5f)) using (var cb = new SolidBrush(Th.Dim))
             g.DrawString(r.CpuName, cf, cb, x + 28, y + 27);
@@ -972,8 +991,17 @@ sealed class ServerForm : BorderlessForm
         using (var ac2 = new SolidBrush(Color.FromArgb(80, Th.Dim)))
             g.FillRectangle(ac2, x + 1, y + 6, 4, h - 12);
         using (var dot = new SolidBrush(Th.Dim)) g.FillEllipse(dot, x + 12, y + 13, 7, 7);
+        string offDisplay = string.IsNullOrEmpty(ac.Alias) ? ac.Name : ac.Alias;
         using (var nf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold)) using (var nb = new SolidBrush(Th.Dim))
-            g.DrawString(ac.Name, nf, nb, x + 24, y + 8);
+            g.DrawString(offDisplay, nf, nb, x + 24, y + 8);
+        if (!string.IsNullOrEmpty(ac.Alias))
+        {
+            using var hnf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold);
+            var offNsz = g.MeasureString(offDisplay, hnf);
+            using var hnf2 = new Font("Segoe UI", 7f);
+            using var hnb = new SolidBrush(Color.FromArgb(65, 65, 80));
+            g.DrawString(ac.Name, hnf2, hnb, x + 26 + (int)offNsz.Width, y + 12);
+        }
         var ago = DateTime.UtcNow - ac.Seen;
         string agoStr = ago.TotalDays >= 1 ? $"{(int)ago.TotalDays}d ago" : ago.TotalHours >= 1 ? $"{(int)ago.TotalHours}h ago" : ago.TotalMinutes >= 1 ? $"{(int)ago.TotalMinutes}m ago" : "just now";
         using (var sf2 = new Font("Segoe UI", 7.5f)) using (var sb2 = new SolidBrush(Color.FromArgb(80, 80, 95)))
