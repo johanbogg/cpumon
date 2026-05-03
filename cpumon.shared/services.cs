@@ -370,6 +370,18 @@ public static class FileBrowserService
 //  Stream wrapper that enforces a per-line byte limit.
 //  Throws IOException if any single line exceeds MaxLineBytes.
 // ═══════════════════════════════════════════════════
+public static class UpdateIntegrity
+{
+    public static bool VerifySha256Base64(string filePath, string? expectedHash, out string actualHash)
+    {
+        actualHash = "";
+        if (string.IsNullOrWhiteSpace(expectedHash)) return false;
+        using var fs = File.OpenRead(filePath);
+        actualHash = Convert.ToBase64String(SHA256.HashData(fs));
+        return string.Equals(actualHash, expectedHash, StringComparison.Ordinal);
+    }
+}
+
 public sealed class LineLengthLimitedStream : Stream
 {
     readonly Stream _inner;
@@ -518,6 +530,12 @@ public static class CmdExec
                         if (chunk.IsLast)
                         {
                             us.Flush(); us.Dispose(); ActiveUploads.TryRemove("__update__", out _);
+                            if (!UpdateIntegrity.VerifySha256Base64(updPath, chunk.Hash, out var actualHash))
+                            {
+                                LogSink.Error("CmdExec.Update", $"Update hash verification failed. expected={chunk.Hash ?? "<missing>"} actual={actualHash}");
+                                try { File.Delete(updPath); } catch { }
+                                break;
+                            }
                             string exePath = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "cpumon.client.exe");
                             string batPath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.bat");
                             File.WriteAllText(batPath,
@@ -528,7 +546,7 @@ public static class CmdExec
                             Environment.Exit(0);
                         }
                     }
-                    catch { if (ActiveUploads.TryRemove("__update__", out var bad)) bad.Dispose(); }
+                    catch (Exception ex) { LogSink.Error("CmdExec.Update", "Update push failed", ex); if (ActiveUploads.TryRemove("__update__", out var bad)) bad.Dispose(); }
                 }
                 break;
             case "restart": Res(cmd.CmdId, true, "Restarting...", lk, wr); Task.Delay(500).ContinueWith(_ => { try { Process.Start("shutdown", "/r /t 3 /c \"Remote restart\""); } catch { } }); break;

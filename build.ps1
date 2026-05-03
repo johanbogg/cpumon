@@ -35,6 +35,17 @@ function Publish-Project([string]$proj, [string]$out) {
     Write-Ok
 }
 
+function Run-SmokeTests([string]$proj) {
+    Write-Step "Running smoke tests..."
+    $log = dotnet run --project $proj -c Release --nologo 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail
+        $log | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkRed }
+        throw "Smoke tests failed: $proj"
+    }
+    Write-Ok
+}
+
 Write-Host ''
 Write-Host '  +------------------------------+' -ForegroundColor DarkCyan
 Write-Host '  |      CpuMon  Build           |' -ForegroundColor Cyan
@@ -43,6 +54,11 @@ Write-Host ''
 
 $clientProj = Join-Path $PSScriptRoot 'cpumon.client\cpumon.client.csproj'
 $serverProj = Join-Path $PSScriptRoot 'cpumon.server\cpumon.server.csproj'
+$testsProj = Join-Path $PSScriptRoot 'cpumon.tests\cpumon.tests.csproj'
+
+if (Test-Path $testsProj) {
+    Run-SmokeTests $testsProj
+}
 
 if (-not $ServerOnly) {
     if (-not (Test-Path $clientProj)) { throw "Not found: $clientProj" }

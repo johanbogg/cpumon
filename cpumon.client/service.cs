@@ -111,7 +111,7 @@ sealed class CpuMonService : ServiceBase
         {
             if (!_agentConnected)
             {
-                try { LaunchInInteractiveSession(exePath, "--agent"); } catch { }
+                try { LaunchInInteractiveSession(exePath, "--agent"); } catch (Exception ex) { LogSink.Warn("Service.AgentLaunch", "Failed to launch interactive agent", ex); }
                 await Task.Delay(5000, ct);
                 continue;
             }
@@ -169,7 +169,7 @@ sealed class CpuMonService : ServiceBase
                                 StringComparison.OrdinalIgnoreCase);
                     }
                 }
-                catch { }
+                catch (Exception ex) { LogSink.Warn("Service.AgentPipe", "Agent process authorization failed", ex); }
                 if (!authorized) { pipe.Dispose(); continue; }
 
                 lock (_agentLock)
@@ -229,7 +229,7 @@ sealed class CpuMonService : ServiceBase
                 }
             }
             catch (OperationCanceledException) { break; }
-            catch { }
+            catch (Exception ex) { LogSink.Warn("Service.AgentPipe", "Agent pipe loop failed", ex); }
             finally
             {
                 _agentConnected = false;
@@ -266,20 +266,22 @@ sealed class CpuMonService : ServiceBase
             if (chunk.IsLast)
             {
                 _updateStream.Flush(); _updateStream.Dispose(); _updateStream = null;
-                if (!string.IsNullOrEmpty(chunk.Hash))
+                if (chunk.Hash == null)
                 {
-                    using var fs = File.OpenRead(updatePath);
-                    string actual = Convert.ToBase64String(SHA256.HashData(fs));
-                    if (!string.Equals(actual, chunk.Hash, StringComparison.Ordinal))
-                    {
-                        File.Delete(updatePath);
-                        return;
-                    }
+                    LogSink.Error("Service.Update", "Update refused because no SHA-256 hash was supplied");
+                    File.Delete(updatePath);
+                    return;
+                }
+                if (!UpdateIntegrity.VerifySha256Base64(updatePath, chunk.Hash, out var actual))
+                {
+                    LogSink.Error("Service.Update", $"Update hash verification failed. expected={chunk.Hash} actual={actual}");
+                    File.Delete(updatePath);
+                    return;
                 }
                 ApplyUpdate(updatePath);
             }
         }
-        catch { _updateStream?.Dispose(); _updateStream = null; try { File.Delete(updatePath); } catch { } }
+        catch (Exception ex) { LogSink.Error("Service.Update", "Update chunk handling failed", ex); _updateStream?.Dispose(); _updateStream = null; try { File.Delete(updatePath); } catch { } }
     }
 
     void ApplyUpdate(string updatePath)
@@ -308,7 +310,7 @@ sealed class CpuMonService : ServiceBase
         {
             if (!_agentConnected || _agentWriter == null) return;
             try { _agentWriter.WriteLine(JsonSerializer.Serialize(msg)); _agentWriter.Flush(); }
-            catch { }
+            catch (Exception ex) { LogSink.Warn("Service.CmdLoop", "Command loop iteration failed", ex); }
         }
     }
 

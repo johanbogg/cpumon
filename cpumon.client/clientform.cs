@@ -173,6 +173,7 @@ sealed class ClientForm : BorderlessForm
             catch (Exception ex)
             {
                 _ec++; if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting; _log.Add($"Send: {ex.Message}", Th.Red);
+                LogSink.Warn("ClientForm.SendLoop", "Send loop failed", ex);
                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
                 CmdExec.DisposeAll();
                 try { _pacer.Wait(ct); } catch { }
@@ -235,7 +236,7 @@ sealed class ClientForm : BorderlessForm
                     }
                 }
             }
-            catch (Exception ex) { _log.Add($"Cmd error: {ex.Message}", Th.Red); }
+            catch (Exception ex) { _log.Add($"Cmd error: {ex.Message}", Th.Red); LogSink.Warn("ClientForm.CmdLoop", "Command loop failed", ex); }
         }
     }
 

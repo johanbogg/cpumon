@@ -96,6 +96,83 @@ public sealed class CLog
     public List<(DateTime T, string M, Color C)> Recent(int n) { lock (_l) { return _e.TakeLast(n).ToList(); } }
 }
 
+public static class LogSink
+{
+    static readonly object _lock = new();
+    const long MaxBytes = 10L * 1024 * 1024;
+    static string _minLevel = "";
+    static readonly Dictionary<string, int> LevelRank = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["debug"] = 0,
+        ["info"] = 1,
+        ["warn"] = 2,
+        ["error"] = 3
+    };
+
+    static string Dir
+    {
+        get
+        {
+            try
+            {
+                string common = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+                if (!string.IsNullOrWhiteSpace(common)) return Path.Combine(common, "CpuMon", "logs");
+            }
+            catch { }
+            return Path.Combine(AppContext.BaseDirectory, "logs");
+        }
+    }
+
+    public static void Debug(string source, string message, Exception? ex = null) => Write("debug", source, message, ex);
+    public static void Info(string source, string message, Exception? ex = null) => Write("info", source, message, ex);
+    public static void Warn(string source, string message, Exception? ex = null) => Write("warn", source, message, ex);
+    public static void Error(string source, string message, Exception? ex = null) => Write("error", source, message, ex);
+
+    static void Write(string level, string source, string message, Exception? ex)
+    {
+        if (!Enabled(level)) return;
+        try
+        {
+            Directory.CreateDirectory(Dir);
+            string path = Path.Combine(Dir, $"cpumon-{DateTime.UtcNow:yyyy-MM-dd}.jsonl");
+            lock (_lock)
+            {
+                if (File.Exists(path) && new FileInfo(path).Length > MaxBytes) return;
+                var entry = new Dictionary<string, object?>
+                {
+                    ["ts"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                    ["level"] = level,
+                    ["source"] = Clean(source),
+                    ["msg"] = Clean(message)
+                };
+                if (ex != null)
+                {
+                    entry["exType"] = ex.GetType().Name;
+                    entry["ex"] = Clean(ex.Message);
+                }
+                File.AppendAllText(path, JsonSerializer.Serialize(entry) + Environment.NewLine, new UTF8Encoding(false));
+            }
+        }
+        catch { }
+    }
+
+    static bool Enabled(string level)
+    {
+        if (_minLevel.Length == 0)
+        {
+            _minLevel = Environment.GetEnvironmentVariable("CPUMON_LOG_LEVEL") ?? "info";
+            if (!LevelRank.ContainsKey(_minLevel)) _minLevel = "info";
+        }
+        return LevelRank[level] >= LevelRank[_minLevel];
+    }
+
+    static string Clean(string value)
+    {
+        string clean = string.Concat((value ?? "").Where(ch => ch >= ' ' || ch == '\t'));
+        return clean.Length <= 2048 ? clean : clean[..2048];
+    }
+}
+
 public enum NetState { Idle, Searching, BeaconFound, Connecting, Connected, Sending, Reconnecting, AuthFailed }
 
 public sealed class SendPacer
