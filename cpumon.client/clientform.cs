@@ -340,6 +340,7 @@ sealed class ClientForm : BorderlessForm
             });
             await ssl.AuthenticateAsClientAsync("cpumon-server");
             lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _tcp = c; _ssl = ssl; _wr = new StreamWriter(ssl, Encoding.UTF8) { AutoFlush = false }; _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8); _connThumb = seenThumb ?? ""; _authConfirmed = false; }
+            _pacer.Mode = "full";
             handedOff = true;
         }
         catch

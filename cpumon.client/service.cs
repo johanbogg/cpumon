@@ -100,9 +100,9 @@ sealed class CpuMonService : ServiceBase
             RequestAdditionalTime(5000);
             _cts.Cancel();
             StopAgentRdpSessions();
-            lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
-            lock (_agentLock) { _agentReader?.Dispose(); _agentWriter?.Dispose(); _agentPipe?.Dispose(); _agentReader = null; _agentWriter = null; _agentPipe = null; }
-            _updateStream?.Dispose();
+            lock (_tl) { DisposeQuietly(_wr); DisposeQuietly(_rd); DisposeQuietly(_ssl); DisposeQuietly(_tcp); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+            lock (_agentLock) { DisposeQuietly(_agentReader); DisposeQuietly(_agentWriter); DisposeQuietly(_agentPipe); _agentReader = null; _agentWriter = null; _agentPipe = null; }
+            DisposeQuietly(_updateStream);
             _updateStream = null;
             try { string t = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe.tmp"); if (File.Exists(t)) File.Delete(t); } catch (Exception ex) { LogSink.Debug("Service.Stop", "Failed to remove stale update temp file", ex); }
             CmdExec.DisposeAll();
@@ -339,6 +339,11 @@ sealed class CpuMonService : ServiceBase
         }
     }
 
+    static void DisposeQuietly(IDisposable? disposable)
+    {
+        try { disposable?.Dispose(); } catch { }
+    }
+
     void StopAgentRdpSessions()
     {
         foreach (var id in _activeRdpSessions.Keys)
@@ -547,6 +552,7 @@ sealed class CpuMonService : ServiceBase
                 _connThumb = seenThumb ?? "";
                 _authConfirmed = false;
             }
+            _pacer.Mode = "full";
             handedOff = true;
         }
         catch
