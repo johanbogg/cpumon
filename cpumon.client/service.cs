@@ -104,7 +104,7 @@ sealed class CpuMonService : ServiceBase
             lock (_agentLock) { DisposeQuietly(_agentReader); DisposeQuietly(_agentWriter); DisposeQuietly(_agentPipe); _agentReader = null; _agentWriter = null; _agentPipe = null; }
             DisposeQuietly(_updateStream);
             _updateStream = null;
-            try { string t = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe.tmp"); if (File.Exists(t)) File.Delete(t); } catch (Exception ex) { LogSink.Debug("Service.Stop", "Failed to remove stale update temp file", ex); }
+            try { string t = Path.Combine(AppPaths.DataDir, "updates", "cpumon_update.exe.tmp"); if (File.Exists(t)) File.Delete(t); } catch (Exception ex) { LogSink.Debug("Service.Stop", "Failed to remove stale update temp file", ex); }
             CmdExec.DisposeAll();
             _mon.Dispose();
         }
@@ -265,10 +265,12 @@ sealed class CpuMonService : ServiceBase
 
     void HandleUpdateChunk(FileChunkData chunk)
     {
-        string updatePath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe");
+        string updateDir = Path.Combine(AppPaths.DataDir, "updates");
+        string updatePath = Path.Combine(updateDir, "cpumon_update.exe");
         string updateTmp = updatePath + ".tmp";
         try
         {
+            Directory.CreateDirectory(updateDir);
             if (chunk.Offset == 0 && _updateStream != null)
             {
                 _updateStream.Dispose();
@@ -312,15 +314,23 @@ sealed class CpuMonService : ServiceBase
     void ApplyUpdate(string updatePath)
     {
         string exePath = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "cpumon.client.exe");
-        string batPath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.bat");
+        string updateDir = Path.GetDirectoryName(updatePath) ?? AppPaths.DataDir;
+        string batPath = Path.Combine(updateDir, "cpumon_update.bat");
         File.WriteAllText(batPath,
             "@echo off\r\n" +
-            "timeout /t 3 /nobreak > nul\r\n" +
+            "setlocal\r\n" +
+            $"echo %date% %time% Starting CpuMon update > \"{Path.Combine(updateDir, "cpumon_update.log")}\"\r\n" +
             "sc stop CpuMonClient\r\n" +
-            "timeout /t 2 /nobreak > nul\r\n" +
-            $"move /Y \"{updatePath}\" \"{exePath}\"\r\n" +
+            "timeout /t 5 /nobreak > nul\r\n" +
+            $"move /Y \"{updatePath}\" \"{exePath}\" >> \"{Path.Combine(updateDir, "cpumon_update.log")}\" 2>&1\r\n" +
+            "if errorlevel 1 goto fail\r\n" +
             "sc start CpuMonClient\r\n" +
-            "schtasks /delete /tn \"CpuMonUpdate\" /f\r\n" +
+            "goto done\r\n" +
+            ":fail\r\n" +
+            "echo Update move failed >> \"" + Path.Combine(updateDir, "cpumon_update.log") + "\"\r\n" +
+            "sc start CpuMonClient\r\n" +
+            ":done\r\n" +
+            "schtasks /delete /tn \"CpuMonUpdate\" /f > nul 2>&1\r\n" +
             "del \"%~f0\"\r\n");
         Process.Start(new ProcessStartInfo("schtasks.exe",
             $"/create /tn \"CpuMonUpdate\" /tr \"cmd /c \\\"{batPath}\\\"\" /sc once /st 00:00 /du 00:01 /f /ru SYSTEM /rl highest")

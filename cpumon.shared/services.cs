@@ -515,10 +515,12 @@ public static class CmdExec
                 if (cmd.UpdateChunk != null)
                 {
                     var chunk = cmd.UpdateChunk;
-                    string updPath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe");
+                    string updateDir = Path.Combine(AppPaths.DataDir, "updates");
+                    string updPath = Path.Combine(updateDir, "cpumon_update.exe");
                     string updTmp = updPath + ".tmp";
                     try
                     {
+                        Directory.CreateDirectory(updateDir);
                         if (chunk.Offset == 0 && ActiveUploads.TryRemove("__update__", out var oldUpdate))
                             oldUpdate.Dispose();
                         if (!ActiveUploads.TryGetValue("__update__", out var us))
@@ -546,11 +548,20 @@ public static class CmdExec
                             }
                             File.Move(updTmp, updPath, overwrite: true);
                             string exePath = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "cpumon.client.exe");
-                            string batPath = Path.Combine(AppContext.BaseDirectory, "cpumon_update.bat");
+                            string batPath = Path.Combine(updateDir, "cpumon_update.bat");
+                            string logPath = Path.Combine(updateDir, "cpumon_update.log");
                             File.WriteAllText(batPath,
-                                "@echo off\r\ntimeout /t 3 /nobreak > nul\r\n" +
-                                $"move /Y \"{updPath}\" \"{exePath}\"\r\n" +
-                                $"start \"\" \"{exePath}\"\r\ndel \"%~f0\"\r\n");
+                                "@echo off\r\nsetlocal\r\n" +
+                                $"echo %date% %time% Starting CpuMon update > \"{logPath}\"\r\n" +
+                                "timeout /t 3 /nobreak > nul\r\n" +
+                                $"move /Y \"{updPath}\" \"{exePath}\" >> \"{logPath}\" 2>&1\r\n" +
+                                "if errorlevel 1 goto fail\r\n" +
+                                $"start \"\" \"{exePath}\"\r\n" +
+                                "goto done\r\n" +
+                                ":fail\r\n" +
+                                $"echo Update move failed >> \"{logPath}\"\r\n" +
+                                ":done\r\n" +
+                                "del \"%~f0\"\r\n");
                             Process.Start(new ProcessStartInfo(batPath) { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden });
                             Environment.Exit(0);
                         }

@@ -49,6 +49,30 @@ public static class AppState
     public static bool Admin { get; set; }
 }
 
+public static class AppPaths
+{
+    public static string DataDir
+    {
+        get
+        {
+            try
+            {
+                string common = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+                if (!string.IsNullOrWhiteSpace(common)) return Path.Combine(common, "CpuMon");
+            }
+            catch { }
+            return AppContext.BaseDirectory;
+        }
+    }
+
+    public static string DataFile(string fileName) => Path.Combine(DataDir, fileName);
+
+    public static void EnsureDataDir()
+    {
+        try { Directory.CreateDirectory(DataDir); } catch { }
+    }
+}
+
 // ═══════════════════════════════════════════════════
 //  Connection log
 // ═══════════════════════════════════════════════════
@@ -196,7 +220,7 @@ public static class Security
 
 public static class CertificateStore
 {
-    const string CertPath = "cpumon.pfx";
+    static string CertPath => AppPaths.DataFile("cpumon.pfx");
     static X509Certificate2? _cached;
     static readonly object _cl = new();
     public static X509Certificate2 ServerCert()
@@ -205,20 +229,36 @@ public static class CertificateStore
         lock (_cl)
         {
             if (_cached != null) return _cached;
+            TryMigrateLegacyFile("cpumon.pfx", CertPath);
             if (File.Exists(CertPath)) { _cached = X509CertificateLoader.LoadPkcs12FromFile(CertPath, null); return _cached; }
             using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
             var req = new CertificateRequest("CN=cpumon", key, HashAlgorithmName.SHA256);
             var raw = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10));
-            var pfx = raw.Export(X509ContentType.Pfx); File.WriteAllBytes(CertPath, pfx);
+            var pfx = raw.Export(X509ContentType.Pfx);
+            AppPaths.EnsureDataDir();
+            File.WriteAllBytes(CertPath, pfx);
             _cached = X509CertificateLoader.LoadPkcs12(pfx, null); return _cached;
         }
+    }
+
+    static void TryMigrateLegacyFile(string fileName, string target)
+    {
+        try
+        {
+            if (File.Exists(target)) return;
+            string legacy = Path.Combine(AppContext.BaseDirectory, fileName);
+            if (!File.Exists(legacy)) return;
+            AppPaths.EnsureDataDir();
+            File.Copy(legacy, target, overwrite: false);
+        }
+        catch { }
     }
 }
 
 public sealed class ApprovedClientStore
 {
     readonly string _path; readonly Dictionary<string, ApprovedClient> _c = new(); readonly object _l = new();
-    public ApprovedClientStore(string path = "approved_clients.json") { _path = path; Load(); }
+    public ApprovedClientStore(string? path = null) { _path = path ?? AppPaths.DataFile("approved_clients.json"); Load(); }
     public bool IsOk(string n, string k) { lock (_l) { return _c.TryGetValue(n, out var c) && c.Key == k && !c.Revoked; } }
     public void Approve(string n, string k, string ip, string salt = "") { lock (_l) { _c[n] = new ApprovedClient { Name = n, Key = k, At = DateTime.UtcNow, Seen = DateTime.UtcNow, Ip = ip, Salt = salt }; Save(); } }
     public void Seen(string n) { lock (_l) { if (_c.TryGetValue(n, out var c)) { var now = DateTime.UtcNow; bool stale = (now - c.Seen) > TimeSpan.FromMinutes(5); c.Seen = now; if (stale) Save(); } } }
@@ -232,16 +272,41 @@ public sealed class ApprovedClientStore
     public string GetAlias(string n) { lock (_l) { return _c.TryGetValue(n, out var c) ? c.Alias : ""; } }
     public List<ApprovedClient> All() { lock (_l) { return _c.Values.ToList(); } }
     public void Prune(int daysOld) { lock (_l) { var cutoff = DateTime.UtcNow.AddDays(-daysOld); var stale = _c.Values.Where(c => !c.Paw && !c.Revoked && c.Seen < cutoff).Select(c => c.Name).ToList(); foreach (var n in stale) _c.Remove(n); if (stale.Count > 0) Save(); } }
-    void Load() { try { if (File.Exists(_path)) { var list = JsonSerializer.Deserialize<List<ApprovedClient>>(File.ReadAllText(_path)); if (list != null) foreach (var c in list) { c.Key = DecryptKey(c.Key); _c[c.Name] = c; } } } catch { } }
+    void Load()
+    {
+        try
+        {
+            TryMigrateLegacyFile("approved_clients.json");
+            if (File.Exists(_path))
+            {
+                var list = JsonSerializer.Deserialize<List<ApprovedClient>>(File.ReadAllText(_path));
+                if (list != null) foreach (var c in list) { c.Key = DecryptKey(c.Key); _c[c.Name] = c; }
+            }
+        }
+        catch { }
+    }
     void Save()
     {
         try
         {
             var list = _c.Values.Select(c => new ApprovedClient { Name = c.Name, Key = EncryptKey(c.Key), At = c.At, Seen = c.Seen, Ip = c.Ip, Revoked = c.Revoked, Paw = c.Paw, Mac = c.Mac, Alias = c.Alias, Salt = c.Salt }).ToList();
             string json = JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true });
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
             string tmp = _path + ".tmp";
             File.WriteAllText(tmp, json);
             File.Move(tmp, _path, overwrite: true);
+        }
+        catch { }
+    }
+    void TryMigrateLegacyFile(string fileName)
+    {
+        try
+        {
+            if (File.Exists(_path)) return;
+            string legacy = Path.Combine(AppContext.BaseDirectory, fileName);
+            if (!File.Exists(legacy)) return;
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
+            File.Copy(legacy, _path, overwrite: false);
         }
         catch { }
     }
@@ -266,12 +331,53 @@ public sealed class ApprovedClient
 
 public static class TokenStore
 {
-    static string Path => System.IO.Path.Combine(AppContext.BaseDirectory, "client_auth.json");
+    static string Path => AppPaths.DataFile("client_auth.json");
     public static string AuthPath => Path;
     sealed class Data { [JsonPropertyName("t")] public string T { get; set; } = ""; [JsonPropertyName("k")] public string K { get; set; } = ""; [JsonPropertyName("s")] public string? S { get; set; } }
-    public static (string? token, string? key, string? serverId) Load() { try { if (File.Exists(Path)) { var d = JsonSerializer.Deserialize<Data>(File.ReadAllText(Path)); if (d == null) return (null, null, null); string key = ""; try { key = Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(d.K), null, DataProtectionScope.LocalMachine)); } catch (Exception ex) { LogSink.Warn("TokenStore", "Failed to decrypt saved auth key", ex); } return (d.T, key.Length > 0 ? key : null, d.S); } } catch (Exception ex) { LogSink.Warn("TokenStore", "Failed to load client auth store", ex); } return (null, null, null); }
+    public static (string? token, string? key, string? serverId) Load() { try { TryMigrateLegacyAuth(); if (File.Exists(Path)) { var d = JsonSerializer.Deserialize<Data>(File.ReadAllText(Path)); if (d == null) return (null, null, null); string key = ""; try { key = Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(d.K), null, DataProtectionScope.LocalMachine)); } catch (Exception ex) { LogSink.Warn("TokenStore", "Failed to decrypt saved auth key", ex); } return (d.T, key.Length > 0 ? key : null, d.S); } } catch (Exception ex) { LogSink.Warn("TokenStore", "Failed to load client auth store", ex); } return (null, null, null); }
     public static void Save(string t, string k, string? sid = null) { try { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!); string json = JsonSerializer.Serialize(new Data { T = t, K = Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(k), null, DataProtectionScope.LocalMachine)), S = sid }); string tmp = Path + ".tmp"; File.WriteAllText(tmp, json); File.Move(tmp, Path, overwrite: true); LogSink.Info("TokenStore", $"Saved client auth store: {Path}"); } catch (Exception ex) { LogSink.Warn("TokenStore", $"Failed to save client auth store: {Path}", ex); } }
     public static bool Clear() { try { if (File.Exists(Path)) File.Delete(Path); return true; } catch (Exception ex) { LogSink.Warn("TokenStore", "Failed to clear client auth store", ex); return false; } }
+    static void TryMigrateLegacyAuth()
+    {
+        try
+        {
+            if (File.Exists(Path)) return;
+            string? legacy = LegacyAuthCandidates()
+                .Where(File.Exists)
+                .Select(p => new FileInfo(p))
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .FirstOrDefault()?.FullName;
+            if (legacy == null) return;
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+            File.Copy(legacy, Path, overwrite: false);
+            LogSink.Info("TokenStore", $"Migrated client auth store to: {Path}");
+        }
+        catch (Exception ex) { LogSink.Warn("TokenStore", "Failed to migrate legacy client auth store", ex); }
+    }
+
+    static IEnumerable<string> LegacyAuthCandidates()
+    {
+        yield return System.IO.Path.Combine(AppContext.BaseDirectory, "client_auth.json");
+
+        foreach (var root in LegacySingleFileRoots())
+        {
+            if (!Directory.Exists(root)) continue;
+            IEnumerable<string> files;
+            try { files = Directory.EnumerateFiles(root, "client_auth.json", SearchOption.AllDirectories).ToList(); }
+            catch { continue; }
+            foreach (var file in files) yield return file;
+        }
+    }
+
+    static IEnumerable<string> LegacySingleFileRoots()
+    {
+        string temp = System.IO.Path.GetTempPath();
+        if (!string.IsNullOrWhiteSpace(temp))
+            yield return System.IO.Path.Combine(temp, ".net", "cpumon.client");
+
+        string systemTemp = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "SystemTemp");
+        yield return System.IO.Path.Combine(systemTemp, ".net", "cpumon.client");
+    }
 }
 
 // ═══════════════════════════════════════════════════

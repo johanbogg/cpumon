@@ -43,7 +43,7 @@ public sealed class AlertConfig
 
 public static class AlertConfigStore
 {
-    static readonly string _path = Path.Combine(AppContext.BaseDirectory, "alerts.json");
+    static readonly string _path = AppPaths.DataFile("alerts.json");
     static readonly JsonSerializerOptions _jso = new() { WriteIndented = true };
 
     public static AlertConfig Load()
