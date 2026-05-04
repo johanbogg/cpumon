@@ -100,6 +100,7 @@ sealed class CpuMonService : ServiceBase
             RequestAdditionalTime(5000);
             _cts.Cancel();
             StopAgentRdpSessions();
+            EndInteractiveAgentTask();
             lock (_tl) { DisposeQuietly(_wr); DisposeQuietly(_rd); DisposeQuietly(_ssl); DisposeQuietly(_tcp); _wr = null; _rd = null; _ssl = null; _tcp = null; }
             lock (_agentLock) { DisposeQuietly(_agentReader); DisposeQuietly(_agentWriter); DisposeQuietly(_agentPipe); _agentReader = null; _agentWriter = null; _agentPipe = null; }
             DisposeQuietly(_updateStream);
@@ -354,6 +355,17 @@ sealed class CpuMonService : ServiceBase
         try { disposable?.Dispose(); } catch { }
     }
 
+    static void EndInteractiveAgentTask()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("schtasks.exe", "/end /tn \"CpuMonAgent\"")
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })
+            ?.WaitForExit(5000);
+        }
+        catch (Exception ex) { LogSink.Debug("Service.AgentLaunch", "Failed to end interactive agent task", ex); }
+    }
+
     void StopAgentRdpSessions()
     {
         foreach (var id in _activeRdpSessions.Keys)
@@ -474,6 +486,12 @@ sealed class CpuMonService : ServiceBase
                 string? line = await r.ReadLineAsync(ct);
                 if (line == null)
                 {
+                    bool awaitingAuth; lock (_tl) { awaitingAuth = !_authConfirmed && _wr != null; }
+                    if (awaitingAuth && !string.IsNullOrEmpty(_ak))
+                    {
+                        HandleAuthRejected("Connection closed before saved auth was accepted");
+                        continue;
+                    }
                     if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting;
                     StopAgentRdpSessions();
                     lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
@@ -502,7 +520,7 @@ sealed class CpuMonService : ServiceBase
                             else
                             { _ak = cmd.AuthKey; if (cmd.ServerId != null) _sid = cmd.ServerId; TokenStore.Save(_tok ?? "", _ak, _sid); _approvalRequested = false; lock (_tl) { _authConfirmed = true; } _pacer.Wake(); _ns = NetState.Connected; LogSink.Info("Service.Auth", "Auth accepted; reports enabled"); }
                         }
-                        else { _approvalRequested = false; _ns = NetState.AuthFailed; Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks); TokenStore.Clear(); if (!_authRequestPending) { _authRequestPending = true; SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" }); } }
+                        else HandleAuthRejected("Auth rejected by server");
                     }
                 }
                 else if (cmd.Cmd == "auth_pending") { _approvalRequested = true; _ns = NetState.AuthPending; }
@@ -533,6 +551,19 @@ sealed class CpuMonService : ServiceBase
             }
             catch (Exception ex) { LogSink.Warn("Service.CmdLoop", "Command dispatch failed", ex); }
         }
+    }
+
+    void HandleAuthRejected(string reason)
+    {
+        _approvalRequested = false;
+        _ns = NetState.AuthFailed;
+        Interlocked.Exchange(ref _authFailedAt, DateTime.UtcNow.Ticks);
+        TokenStore.Clear();
+        _ak = "";
+        LogSink.Warn("Service.Auth", reason);
+        _authRequestPending = true;
+        SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" });
+        lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
     }
 
     async Task EnsureConn(IPEndPoint ep, CancellationToken ct)

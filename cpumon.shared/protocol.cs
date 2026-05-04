@@ -341,22 +341,24 @@ public static class TokenStore
     {
         try
         {
-            if (File.Exists(Path)) return;
-            string? legacy = LegacyAuthCandidates()
+            var newest = AuthCandidates()
                 .Where(File.Exists)
                 .Select(p => new FileInfo(p))
                 .OrderByDescending(f => f.LastWriteTimeUtc)
-                .FirstOrDefault()?.FullName;
-            if (legacy == null) return;
+                .FirstOrDefault();
+            if (newest == null) return;
+            if (File.Exists(Path) && string.Equals(newest.FullName, Path, StringComparison.OrdinalIgnoreCase)) return;
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
-            File.Copy(legacy, Path, overwrite: false);
-            LogSink.Info("TokenStore", $"Migrated client auth store to: {Path}");
+            File.Copy(newest.FullName, Path, overwrite: true);
+            File.SetLastWriteTimeUtc(Path, newest.LastWriteTimeUtc);
+            LogSink.Info("TokenStore", $"Migrated client auth store from {newest.FullName} to: {Path}");
         }
         catch (Exception ex) { LogSink.Warn("TokenStore", "Failed to migrate legacy client auth store", ex); }
     }
 
-    static IEnumerable<string> LegacyAuthCandidates()
+    static IEnumerable<string> AuthCandidates()
     {
+        yield return Path;
         yield return System.IO.Path.Combine(AppContext.BaseDirectory, "client_auth.json");
 
         foreach (var root in LegacySingleFileRoots())
