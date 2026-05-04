@@ -61,11 +61,11 @@ sealed class ApprovedClientsDialog : Form
             if (grid.SelectedRows.Count == 0) return;
             var n = grid.SelectedRows[0].Cells["Name"].Value?.ToString();
             if (n == null) return;
-            using var dlg = new Form { Text = "Set Alias", Size = new Size(300, 120), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, BackColor = Th.Bg, ForeColor = Th.Brt };
+            using var dlg = new Form { Text = "Set Alias", ClientSize = new Size(320, 132), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, BackColor = Th.Bg, ForeColor = Th.Brt, AutoScaleMode = AutoScaleMode.Dpi };
             var lbl = new Label { Text = $"Alias for {n}:", Location = new Point(12, 12), AutoSize = true, ForeColor = Th.Dim };
-            var txt = new TextBox { Text = store.GetAlias(n), Location = new Point(12, 34), Width = 260, BackColor = Th.Card, ForeColor = Th.Brt, BorderStyle = BorderStyle.FixedSingle };
-            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(116, 68), Width = 75 };
-            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(197, 68), Width = 75 };
+            var txt = new TextBox { Text = store.GetAlias(n), Location = new Point(12, 38), Size = new Size(296, 26), Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right, BackColor = Th.Card, ForeColor = Th.Brt, BorderStyle = BorderStyle.FixedSingle };
+            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(152, 88), Size = new Size(75, 30), Anchor = AnchorStyles.Right | AnchorStyles.Bottom };
+            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(233, 88), Size = new Size(75, 30), Anchor = AnchorStyles.Right | AnchorStyles.Bottom };
             dlg.AcceptButton = ok; dlg.CancelButton = cancel;
             dlg.Controls.AddRange(new Control[] { lbl, txt, ok, cancel });
             if (dlg.ShowDialog(this) == DialogResult.OK)
