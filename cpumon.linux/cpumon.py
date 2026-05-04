@@ -394,6 +394,7 @@ class Client:
         self._seen_thumb = thumb
         self._ssl        = s
         self._recv_buf   = b""
+        self._mode       = "full"
 
     def _send(self, obj: dict):
         line = json.dumps(obj, separators=(",", ":")) + "\n"
@@ -472,10 +473,7 @@ class Client:
                 print("✓ Authenticated", flush=True)
             else:
                 print("✗ Auth failed — clearing stored credentials", flush=True)
-                clear_state()
-                self._ak  = ""
-                self._tok = None
-                self._authenticated = False
+                self._handle_auth_rejected("Auth failed")
 
         elif c == "mode":
             self._mode = cmd.get("mode") or "full"
@@ -688,6 +686,14 @@ class Client:
                 self._uploads.pop(tid).close()
             return f"Upload error: {e}"
 
+    def _handle_auth_rejected(self, reason: str):
+        print(f"{reason} - clearing stored credentials", flush=True)
+        clear_state()
+        self._ak  = ""
+        self._tok = None
+        self._authenticated = False
+        self._close()
+
     # ── Main loops ─────────────────────────────────────────────────────────
 
     def _send_loop(self):
@@ -734,7 +740,12 @@ class Client:
                 self._send_auth()
 
                 while self._running:
-                    line = self._recv_line()
+                    try:
+                        line = self._recv_line()
+                    except ConnectionError as e:
+                        if not self._authenticated and self._ak:
+                            self._handle_auth_rejected("Connection closed before saved auth was accepted")
+                        raise e
                     try:
                         self._handle(json.loads(line))
                     except Exception as e:
