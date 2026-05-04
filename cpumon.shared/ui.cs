@@ -135,7 +135,9 @@ public sealed class RdpViewerDialog : Form
     readonly System.Windows.Forms.Timer _mouseMoveTimer;
     int _pendingMouseX, _pendingMouseY;
     bool _hasPendingMouseMove;
+    int _cursorX = -1, _cursorY = -1;
     bool _closed;
+    bool _closeSent;
 
     public string RdpId => _rdpId;
 
@@ -177,12 +179,12 @@ public sealed class RdpViewerDialog : Form
 
         top.Controls.Add(new Label { Text = "FPS:", ForeColor = Th.Dim, Font = new Font("Segoe UI", 7.5f), AutoSize = true, Location = new Point(400, 10) });
         _fpsSlider = new TrackBar { Minimum = 1, Maximum = 30, Value = Proto.RdpFpsDefault, TickFrequency = 5, SmallChange = 1, Size = new Size(100, 20), Location = new Point(430, 4), BackColor = Th.TBg };
-        _fpsSlider.ValueChanged += (_, _) => _sendCmd(new ServerCommand { Cmd = "rdp_set_fps", RdpId = _rdpId, RdpFps = _fpsSlider.Value });
+        _fpsSlider.ValueChanged += (_, _) => SendIfOpen(new ServerCommand { Cmd = "rdp_set_fps", RdpId = _rdpId, RdpFps = _fpsSlider.Value });
         top.Controls.Add(_fpsSlider);
 
         top.Controls.Add(new Label { Text = "Q:", ForeColor = Th.Dim, Font = new Font("Segoe UI", 7.5f), AutoSize = true, Location = new Point(540, 10) });
         _qualitySlider = new TrackBar { Minimum = 10, Maximum = 95, Value = Proto.RdpJpegQuality, TickFrequency = 10, SmallChange = 5, Size = new Size(100, 20), Location = new Point(558, 4), BackColor = Th.TBg };
-        _qualitySlider.ValueChanged += (_, _) => _sendCmd(new ServerCommand { Cmd = "rdp_set_quality", RdpId = _rdpId, RdpQuality = _qualitySlider.Value });
+        _qualitySlider.ValueChanged += (_, _) => SendIfOpen(new ServerCommand { Cmd = "rdp_set_quality", RdpId = _rdpId, RdpQuality = _qualitySlider.Value });
         top.Controls.Add(_qualitySlider);
 
         var inputChk = new CheckBox { Text = "Input", ForeColor = Th.Grn, Checked = true, AutoSize = true, Location = new Point(670, 8), FlatStyle = FlatStyle.Flat, BackColor = Th.TBg };
@@ -196,14 +198,14 @@ public sealed class RdpViewerDialog : Form
             Font = new Font("Segoe UI", 7.5f, FontStyle.Bold)
         };
         refreshBtn.FlatAppearance.BorderColor = Color.FromArgb(70, Th.Blu);
-        refreshBtn.Click += (_, _) => _sendCmd(new ServerCommand { Cmd = "rdp_refresh", RdpId = _rdpId });
+        refreshBtn.Click += (_, _) => SendIfOpen(new ServerCommand { Cmd = "rdp_refresh", RdpId = _rdpId });
         top.Controls.Add(refreshBtn);
 
         top.Controls.Add(new Label { Text = "Mon:", ForeColor = Th.Dim, Font = new Font("Segoe UI", 7.5f), AutoSize = true, Location = new Point(812, 10) });
         var monPicker = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Th.Card, ForeColor = Th.Brt, FlatStyle = FlatStyle.Flat, Location = new Point(840, 5), Size = new Size(56, 22), Font = new Font("Segoe UI", 8f) };
         monPicker.Items.AddRange(new object[] { "1", "2", "3", "4" });
         monPicker.SelectedIndex = 0;
-        monPicker.SelectedIndexChanged += (_, _) => { _sendCmd(new ServerCommand { Cmd = "rdp_set_monitor", RdpId = _rdpId, RdpMonitorIndex = monPicker.SelectedIndex }); _sendCmd(new ServerCommand { Cmd = "rdp_refresh", RdpId = _rdpId }); };
+        monPicker.SelectedIndexChanged += (_, _) => { SendIfOpen(new ServerCommand { Cmd = "rdp_set_monitor", RdpId = _rdpId, RdpMonitorIndex = monPicker.SelectedIndex }); SendIfOpen(new ServerCommand { Cmd = "rdp_refresh", RdpId = _rdpId }); };
         top.Controls.Add(monPicker);
 
         var bwLabel = new Label { Text = "BW:∞", ForeColor = Th.Dim, Font = new Font("Segoe UI", 7.5f), AutoSize = true, Location = new Point(904, 10) };
@@ -213,7 +215,7 @@ public sealed class RdpViewerDialog : Form
         {
             int kbps = bwSlider.Value * 100;
             bwLabel.Text = kbps == 0 ? "BW:∞" : $"BW:{kbps}K";
-            _sendCmd(new ServerCommand { Cmd = "rdp_set_bandwidth", RdpId = _rdpId, RdpBandwidthKBps = kbps });
+            SendIfOpen(new ServerCommand { Cmd = "rdp_set_bandwidth", RdpId = _rdpId, RdpBandwidthKBps = kbps });
         };
         top.Controls.Add(bwSlider);
 
@@ -236,15 +238,34 @@ public sealed class RdpViewerDialog : Form
         Controls.Add(_canvas);
         Controls.Add(top);
 
-        FormClosed += (_, _) =>
+        FormClosing += (_, _) => CloseRemoteSession();
+        FormClosed += (_, _) => { CloseRemoteSession(); _mouseMoveTimer.Dispose(); lock (_fbLock) { _framebuffer?.Dispose(); _framebuffer = null; } };
+    }
+
+    void SendIfOpen(ServerCommand cmd)
+    {
+        if (_closed || IsDisposed) return;
+        _sendCmd(cmd);
+    }
+
+    void CloseRemoteSession()
+    {
+        if (_closed) return;
+        _closed = true;
+        _hasPendingMouseMove = false;
+        _mouseMoveTimer.Stop();
+        _canvas.MouseMove -= OnMouseMove;
+        _canvas.MouseDown -= OnMouseDown;
+        _canvas.MouseUp -= OnMouseUp;
+        _canvas.MouseWheel -= OnMouseWheel;
+        KeyDown -= OnKeyDown;
+        KeyUp -= OnKeyUp;
+        if (!_closeSent)
         {
-            _closed = true;
-            _sendCmd(new ServerCommand { Cmd = "rdp_close", RdpId = _rdpId });
-            _onClose?.Invoke();
-            _mouseMoveTimer.Stop();
-            _mouseMoveTimer.Dispose();
-            lock (_fbLock) { _framebuffer?.Dispose(); _framebuffer = null; }
-        };
+            _closeSent = true;
+            try { _sendCmd(new ServerCommand { Cmd = "rdp_close", RdpId = _rdpId }); } catch { }
+        }
+        _onClose?.Invoke();
     }
 
     // Convert viewer coordinates to remote screen coordinates
@@ -286,7 +307,7 @@ public sealed class RdpViewerDialog : Form
             return;
         }
         _hasPendingMouseMove = false;
-        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_move", X = _pendingMouseX, Y = _pendingMouseY } });
+        SendIfOpen(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_move", X = _pendingMouseX, Y = _pendingMouseY } });
     }
 
     void OnMouseDown(object? s, MouseEventArgs e)
@@ -296,7 +317,7 @@ public sealed class RdpViewerDialog : Form
         FlushMouseMove();
         var (rx, ry) = ToRemote(e.X, e.Y);
         int btn = e.Button == MouseButtons.Right ? 1 : e.Button == MouseButtons.Middle ? 2 : 0;
-        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_down", X = rx, Y = ry, Button = btn } });
+        SendIfOpen(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_down", X = rx, Y = ry, Button = btn } });
     }
 
     void OnMouseUp(object? s, MouseEventArgs e)
@@ -305,14 +326,14 @@ public sealed class RdpViewerDialog : Form
         FlushMouseMove();
         var (rx, ry) = ToRemote(e.X, e.Y);
         int btn = e.Button == MouseButtons.Right ? 1 : e.Button == MouseButtons.Middle ? 2 : 0;
-        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_up", X = rx, Y = ry, Button = btn } });
+        SendIfOpen(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_up", X = rx, Y = ry, Button = btn } });
     }
 
     void OnMouseWheel(object? s, MouseEventArgs e)
     {
         if (_closed || !_inputEnabled || _remoteW == 0) return;
         var (rx, ry) = ToRemote(e.X, e.Y);
-        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_wheel", X = rx, Y = ry, Delta = e.Delta } });
+        SendIfOpen(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_wheel", X = rx, Y = ry, Delta = e.Delta } });
     }
 
     void OnKeyDown(object? s, KeyEventArgs e)
@@ -320,7 +341,7 @@ public sealed class RdpViewerDialog : Form
         if (_closed || !_inputEnabled || _remoteW == 0) return;
         e.Handled = true; e.SuppressKeyPress = true;
         bool ext = IsExtended(e.KeyCode);
-        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "key_down", VirtualKey = (int)e.KeyCode, ScanCode = 0, Extended = ext } });
+        SendIfOpen(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "key_down", VirtualKey = (int)e.KeyCode, ScanCode = 0, Extended = ext } });
     }
 
     void OnKeyUp(object? s, KeyEventArgs e)
@@ -328,7 +349,7 @@ public sealed class RdpViewerDialog : Form
         if (_closed || !_inputEnabled || _remoteW == 0) return;
         e.Handled = true; e.SuppressKeyPress = true;
         bool ext = IsExtended(e.KeyCode);
-        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "key_up", VirtualKey = (int)e.KeyCode, ScanCode = 0, Extended = ext } });
+        SendIfOpen(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "key_up", VirtualKey = (int)e.KeyCode, ScanCode = 0, Extended = ext } });
     }
 
     static bool IsExtended(Keys k) => k is Keys.RMenu or Keys.RControlKey or Keys.Insert or Keys.Delete or Keys.Home or Keys.End or Keys.PageUp or Keys.PageDown or Keys.Left or Keys.Right or Keys.Up or Keys.Down or Keys.NumLock or Keys.PrintScreen or Keys.Pause;
@@ -351,6 +372,8 @@ public sealed class RdpViewerDialog : Form
 
             _remoteW = frame.ScreenW;
             _remoteH = frame.ScreenH;
+            _cursorX = frame.CursorX;
+            _cursorY = frame.CursorY;
 
             using var g2 = Graphics.FromImage(_framebuffer);
             g2.CompositingMode = CompositingMode.SourceCopy;
@@ -385,6 +408,8 @@ public sealed class RdpViewerDialog : Form
                     if (_framebuffer == null) { _repaintPending = false; return; }
                     display = (Bitmap)_framebuffer.Clone();
                 }
+                using (var cg = Graphics.FromImage(display))
+                    DrawRemoteCursor(cg, _cursorX, _cursorY);
 
                 var old = _canvas.Image;
                 _canvas.Image = display;
@@ -402,6 +427,27 @@ public sealed class RdpViewerDialog : Form
                 _repaintPending = false;
             });
         }
+    }
+
+    static void DrawRemoteCursor(Graphics g, int x, int y)
+    {
+        if (x < 0 || y < 0) return;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        var pts = new[]
+        {
+            new Point(x, y),
+            new Point(x + 14, y + 6),
+            new Point(x + 7, y + 9),
+            new Point(x + 4, y + 18)
+        };
+        using var shadow = new Pen(Color.Black, 4f);
+        using var pen = new Pen(Color.White, 2f);
+        using var fill = new SolidBrush(Color.FromArgb(220, Th.Cyan));
+        g.DrawPolygon(shadow, pts);
+        g.FillPolygon(fill, pts);
+        g.DrawPolygon(pen, pts);
+        using var ring = new Pen(Color.FromArgb(220, Th.Red), 2f);
+        g.DrawEllipse(ring, x - 6, y - 6, 12, 12);
     }
 }
 

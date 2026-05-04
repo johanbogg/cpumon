@@ -50,6 +50,7 @@ public sealed class RdpCaptureSession : IDisposable
     volatile int _maxKBps;
     long _bwBytesThisSec;
     long _bwSecTicks = DateTime.UtcNow.Ticks;
+    int _lastCursorX = int.MinValue, _lastCursorY = int.MinValue;
 
     public RdpCaptureSession(string id, int fps, int quality, object netLock, StreamWriter? netWriter)
     {
@@ -103,6 +104,8 @@ public sealed class RdpCaptureSession : IDisposable
             g.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
 
         GetCursorPos(out var cur);
+        int cursorX = Math.Clamp(cur.X - bounds.Left, 0, sw - 1);
+        int cursorY = Math.Clamp(cur.Y - bounds.Top, 0, sh - 1);
 
         bool sendFull = _needFull;
         _needFull = false;
@@ -134,7 +137,10 @@ public sealed class RdpCaptureSession : IDisposable
         }
         finally { bmp.UnlockBits(bmpData); }
 
-        if (changed.Count == 0) return;
+        bool cursorMoved = cursorX != _lastCursorX || cursorY != _lastCursorY;
+        if (changed.Count == 0 && !cursorMoved) return;
+        _lastCursorX = cursorX;
+        _lastCursorY = cursorY;
 
         // JPEG-encode only the changed tiles
         var tiles = new List<RdpTile>(changed.Count);
@@ -153,7 +159,7 @@ public sealed class RdpCaptureSession : IDisposable
             ScreenW = sw, ScreenH = sh,
             Tiles = tiles,
             IsFull = sendFull,
-            CursorX = cur.X, CursorY = cur.Y
+            CursorX = cursorX, CursorY = cursorY
         };
 
         var json = JsonSerializer.Serialize(new ClientMessage { Type = "rdp_frame", RdpId = Id, RdpFrame = frame });
