@@ -180,8 +180,9 @@ sealed class ClientForm : BorderlessForm
                 _ec++; if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting; _log.Add($"Send: {ex.Message}", Th.Red);
                 LogSink.Warn("ClientForm.SendLoop", "Send loop failed", ex);
                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                _pacer.Wake();
                 CmdExec.DisposeAll();
-                try { _pacer.Wait(ct); } catch { }
+                try { await Task.Delay(1000, ct).ConfigureAwait(false); } catch { }
             }
         }
     }
@@ -200,6 +201,7 @@ sealed class ClientForm : BorderlessForm
                 {
                     if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting;
                     lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                    _pacer.Wake();
                     continue;
                 }
                 if (line != null)

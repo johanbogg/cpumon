@@ -92,14 +92,22 @@ sealed class CpuMonService : ServiceBase
 
     protected override void OnStop()
     {
-        _cts.Cancel();
-        lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); }
-        lock (_agentLock) { _agentReader?.Dispose(); _agentWriter?.Dispose(); _agentPipe?.Dispose(); }
-        _updateStream?.Dispose();
-        _updateStream = null;
-        try { string t = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe.tmp"); if (File.Exists(t)) File.Delete(t); } catch { }
-        _mon.Dispose();
-        CmdExec.DisposeAll();
+        try
+        {
+            RequestAdditionalTime(5000);
+            _cts.Cancel();
+            lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+            lock (_agentLock) { _agentReader?.Dispose(); _agentWriter?.Dispose(); _agentPipe?.Dispose(); _agentReader = null; _agentWriter = null; _agentPipe = null; }
+            _updateStream?.Dispose();
+            _updateStream = null;
+            try { string t = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe.tmp"); if (File.Exists(t)) File.Delete(t); } catch (Exception ex) { LogSink.Debug("Service.Stop", "Failed to remove stale update temp file", ex); }
+            CmdExec.DisposeAll();
+            _mon.Dispose();
+        }
+        catch (Exception ex)
+        {
+            LogSink.Error("Service.Stop", "Service stop cleanup failed", ex);
+        }
     }
 
     async Task LaunchAgentProcess(CancellationToken ct)
@@ -404,8 +412,9 @@ sealed class CpuMonService : ServiceBase
             {
                 if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting;
                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                _pacer.Wake();
                 CmdExec.DisposeAll();
-                try { _pacer.Wait(ct); } catch { }
+                try { await Task.Delay(1000, ct).ConfigureAwait(false); } catch { }
             }
         }
     }
@@ -425,6 +434,7 @@ sealed class CpuMonService : ServiceBase
                 {
                     if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting;
                     lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                    _pacer.Wake();
                     continue;
                 }
                 var cmd = JsonSerializer.Deserialize<ServerCommand>(line);

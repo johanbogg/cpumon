@@ -132,7 +132,9 @@ public sealed class RdpViewerDialog : Form
     readonly Stopwatch _fpsSw = Stopwatch.StartNew();
     bool _inputEnabled = true;
     volatile bool _repaintPending;
-    long _lastMouseMoveTick;
+    readonly System.Windows.Forms.Timer _mouseMoveTimer;
+    int _pendingMouseX, _pendingMouseY;
+    bool _hasPendingMouseMove;
 
     public string RdpId => _rdpId;
 
@@ -142,6 +144,8 @@ public sealed class RdpViewerDialog : Form
         _rdpId = rdpId;
         _sendCmd = sendCmd;
         _onClose = onClose;
+        _mouseMoveTimer = new System.Windows.Forms.Timer { Interval = 50 };
+        _mouseMoveTimer.Tick += (_, _) => FlushMouseMove();
 
         Text = $"🖥 Remote Desktop — {targetName}";
         Size = new Size(1040, 640);
@@ -235,6 +239,8 @@ public sealed class RdpViewerDialog : Form
         {
             _sendCmd(new ServerCommand { Cmd = "rdp_close", RdpId = _rdpId });
             _onClose?.Invoke();
+            _mouseMoveTimer.Stop();
+            _mouseMoveTimer.Dispose();
             lock (_fbLock) { _framebuffer?.Dispose(); _framebuffer = null; }
         };
     }
@@ -263,17 +269,29 @@ public sealed class RdpViewerDialog : Form
     void OnMouseMove(object? s, MouseEventArgs e)
     {
         if (!_inputEnabled || _remoteW == 0) return;
-        long now = Environment.TickCount64;
-        if (now - _lastMouseMoveTick < 16) return;
-        _lastMouseMoveTick = now;
         var (rx, ry) = ToRemote(e.X, e.Y);
-        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_move", X = rx, Y = ry } });
+        _pendingMouseX = rx;
+        _pendingMouseY = ry;
+        _hasPendingMouseMove = true;
+        if (!_mouseMoveTimer.Enabled) _mouseMoveTimer.Start();
+    }
+
+    void FlushMouseMove()
+    {
+        if (!_hasPendingMouseMove || !_inputEnabled || _remoteW == 0)
+        {
+            _mouseMoveTimer.Stop();
+            return;
+        }
+        _hasPendingMouseMove = false;
+        _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_move", X = _pendingMouseX, Y = _pendingMouseY } });
     }
 
     void OnMouseDown(object? s, MouseEventArgs e)
     {
         if (!_inputEnabled || _remoteW == 0) return;
         _canvas.Focus();
+        FlushMouseMove();
         var (rx, ry) = ToRemote(e.X, e.Y);
         int btn = e.Button == MouseButtons.Right ? 1 : e.Button == MouseButtons.Middle ? 2 : 0;
         _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_down", X = rx, Y = ry, Button = btn } });
@@ -282,6 +300,7 @@ public sealed class RdpViewerDialog : Form
     void OnMouseUp(object? s, MouseEventArgs e)
     {
         if (!_inputEnabled || _remoteW == 0) return;
+        FlushMouseMove();
         var (rx, ry) = ToRemote(e.X, e.Y);
         int btn = e.Button == MouseButtons.Right ? 1 : e.Button == MouseButtons.Middle ? 2 : 0;
         _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_up", X = rx, Y = ry, Button = btn } });

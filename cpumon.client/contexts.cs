@@ -473,7 +473,7 @@ sealed class DaemonContext : ApplicationContext
                 else { var snap = _mon.GetSnapshot(); var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu, _mon), MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m)); _wr?.Flush(); } }
                 _sc++; _ns = NetState.Connected;
             }
-            catch (Exception ex) { LogSink.Warn("Daemon.SendLoop", "Send loop failed", ex); if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } CmdExec.DisposeAll(); try { _pacer.Wait(ct); } catch { } }
+            catch (Exception ex) { LogSink.Warn("Daemon.SendLoop", "Send loop failed", ex); if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } _pacer.Wake(); CmdExec.DisposeAll(); try { await Task.Delay(1000, ct).ConfigureAwait(false); } catch { } }
         }
     }
 
@@ -491,6 +491,7 @@ sealed class DaemonContext : ApplicationContext
                 {
                     if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting;
                     lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
+                    _pacer.Wake();
                     continue;
                 }
                 if (line != null)

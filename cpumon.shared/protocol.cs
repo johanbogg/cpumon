@@ -38,9 +38,9 @@ public static class Proto
     public const int MonitorMs = 30_000;
     public const int KAMs      = 60_000;
     public const int FileChunkSize = 65536;
-    public const int RdpFpsDefault = 10;
+    public const int RdpFpsDefault = 5;
     public const int RdpTileSize = 128;
-    public const int RdpJpegQuality = 40;
+    public const int RdpJpegQuality = 25;
     public static string AppVersion =>
         System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "1.0.0";
 }
