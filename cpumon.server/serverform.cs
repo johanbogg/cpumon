@@ -271,7 +271,7 @@ sealed class ServerForm : BorderlessForm
                             cl.Send(new ServerCommand { Cmd = "mode", Mode = "full" });
                             _log.Add($"✓ {mn} re-auth", Th.Grn);
                             if (_cls.TryGetValue(mn, out var prev1) && !ReferenceEquals(prev1, cl))
-                                while (prev1.PendingCmds.TryDequeue(out var pc)) cl.PendingCmds.Enqueue(pc);
+                                AdoptPreviousClientState(prev1, cl);
                             _cls[mn] = cl;
                             cl.FlushPending();
                             continue;
@@ -288,7 +288,7 @@ sealed class ServerForm : BorderlessForm
                             cl.Send(new ServerCommand { Cmd = "mode", Mode = "full" });
                             _log.Add($"✓ {mn} approved", Th.Grn);
                             if (_cls.TryGetValue(mn, out var prev2) && !ReferenceEquals(prev2, cl))
-                                while (prev2.PendingCmds.TryDequeue(out var pc)) cl.PendingCmds.Enqueue(pc);
+                                AdoptPreviousClientState(prev2, cl);
                             _cls[mn] = cl;
                             cl.FlushPending();
                             continue;
@@ -451,6 +451,22 @@ sealed class ServerForm : BorderlessForm
         });
     }
 
+    static void AdoptPreviousClientState(RemoteClient previous, RemoteClient current, bool disposePrevious = false)
+    {
+        current.LastReport = previous.LastReport;
+        current.LastProcessList = previous.LastProcessList;
+        current.LastSysInfo = previous.LastSysInfo;
+        current.LastServiceList = previous.LastServiceList;
+        current.LastEvents = previous.LastEvents;
+        current.Expanded = previous.Expanded;
+        current.IsPaw = previous.IsPaw;
+        current.SendMode = "full";
+        while (previous.PendingCmds.TryDequeue(out var pc))
+            current.PendingCmds.Enqueue(pc);
+        if (disposePrevious)
+            previous.Dispose();
+    }
+
     void ApprovePending(string machine)
     {
         if (!_pendingApprovals.TryRemove(machine, out var pending)) return;
@@ -465,10 +481,7 @@ sealed class ServerForm : BorderlessForm
         cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = key, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
         cl.Send(new ServerCommand { Cmd = "mode", Mode = "full" });
         if (_cls.TryGetValue(pending.MachineName, out var prev) && !ReferenceEquals(prev, cl))
-        {
-            while (prev.PendingCmds.TryDequeue(out var pc)) cl.PendingCmds.Enqueue(pc);
-            prev.Dispose();
-        }
+            AdoptPreviousClientState(prev, cl, disposePrevious: true);
         _cls[pending.MachineName] = cl;
         cl.FlushPending();
         _log.Add($"Approved pending client: {pending.MachineName}", Th.Grn);

@@ -338,6 +338,7 @@ class Client:
         self._ssl: ssl.SSLSocket | None = None
         self._recv_buf = b""
         self._send_lock = threading.Lock()
+        self._wake = threading.Event()
 
         self._authenticated = False
         self._running       = True
@@ -395,6 +396,7 @@ class Client:
         self._ssl        = s
         self._recv_buf   = b""
         self._mode       = "full"
+        self._wake.set()
 
     def _send(self, obj: dict):
         line = json.dumps(obj, separators=(",", ":")) + "\n"
@@ -415,6 +417,7 @@ class Client:
 
     def _close(self):
         self._authenticated = False
+        self._wake.set()
         if self._ssl:
             try:
                 self._ssl.close()
@@ -470,6 +473,7 @@ class Client:
                 if self._tok:
                     save_state(self._tok, self._ak, self._sid)
                 self._authenticated = True
+                self._wake.set()
                 print("✓ Authenticated", flush=True)
             else:
                 print("✗ Auth failed — clearing stored credentials", flush=True)
@@ -477,6 +481,7 @@ class Client:
 
         elif c == "mode":
             self._mode = cmd.get("mode") or "full"
+            self._wake.set()
 
         elif c == "send_message":
             print(f"\n[Server] {cmd.get('message', '')}\n", flush=True)
@@ -701,7 +706,7 @@ class Client:
         while self._running:
             if not self._authenticated or not self._ssl:
                 _primed = False
-                time.sleep(0.2)
+                self._interruptible_sleep(0.2)
                 continue
             if not _primed and _PSUTIL:
                 psutil.cpu_percent(interval=None)
@@ -709,15 +714,19 @@ class Client:
             try:
                 if self._mode == "keepalive":
                     self._send({"type": "keepalive", "machine": self._machine, "authKey": self._ak})
-                    time.sleep(KA_MS)
+                    self._interruptible_sleep(KA_MS)
                 else:
                     report = build_report(self._machine, self._cpu_name)
                     self._send({"type": "report", "report": report,
                                 "machine": self._machine, "authKey": self._ak})
-                    time.sleep(MONITOR_MS if self._mode == "monitor" else FULL_MS)
+                    self._interruptible_sleep(MONITOR_MS if self._mode == "monitor" else FULL_MS)
             except Exception as e:
                 print(f"Send error: {e}", flush=True)
-                time.sleep(1)
+                self._interruptible_sleep(1)
+
+    def _interruptible_sleep(self, seconds: float):
+        self._wake.wait(seconds)
+        self._wake.clear()
 
     def run(self):
         threading.Thread(target=self._send_loop, daemon=True).start()
