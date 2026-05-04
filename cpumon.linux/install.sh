@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# cpumon Linux client installer for Debian/Ubuntu
+# cpumon Linux client installer/updater for Debian/Ubuntu
 # Usage:  sudo bash install.sh
+#         sudo bash install.sh update
 #         sudo bash install.sh uninstall
 
 set -euo pipefail
@@ -9,9 +10,8 @@ INSTALL_DIR=/opt/cpumon
 SERVICE_NAME=cpumon
 SERVICE_FILE=/etc/systemd/system/${SERVICE_NAME}.service
 DEFAULTS_FILE=/etc/default/${SERVICE_NAME}
+STATE_FILE=/var/lib/cpumon/client_auth.json
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 red()   { echo -e "\033[1;31m$*\033[0m"; }
 green() { echo -e "\033[1;32m$*\033[0m"; }
@@ -25,77 +25,42 @@ require_root() {
     fi
 }
 
-# ── Uninstall ─────────────────────────────────────────────────────────────────
-
-uninstall() {
-    require_root
-    bold "Uninstalling cpumon…"
-
-    systemctl stop    "$SERVICE_NAME" 2>/dev/null || true
-    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-
-    rm -f  "$SERVICE_FILE"
-    rm -f  "$DEFAULTS_FILE"
-    rm -rf "$INSTALL_DIR"
-
-    systemctl daemon-reload
-    green "cpumon uninstalled."
-    echo  "State directory /var/lib/cpumon was kept (stored auth key)."
-    echo  "Remove manually with: rm -rf /var/lib/cpumon"
+require_payload() {
+    if [[ ! -f "$SCRIPT_DIR/cpumon.py" ]]; then
+        red "cpumon.py not found next to install.sh"
+        exit 1
+    fi
 }
 
-# ── Install ───────────────────────────────────────────────────────────────────
-
-install() {
-    require_root
-
-    bold "cpumon Linux client — installer"
-    echo "Requires Python 3.8+ (installed via apt if missing)"
-    echo
-
-    # ── Gather config ──────────────────────────────────────────────────────
-
-    # Preserve existing values if re-running
+read_existing_config() {
     existing_ip=""
     existing_token=""
     if [[ -f "$DEFAULTS_FILE" ]]; then
-        existing_ip=$(    grep -Po '(?<=^CPUMON_SERVER_IP=).*' "$DEFAULTS_FILE" || true)
-        existing_token=$( grep -Po '(?<=^CPUMON_TOKEN=).*'     "$DEFAULTS_FILE" || true)
+        existing_ip=$(grep -Po '(?<=^CPUMON_SERVER_IP=).*' "$DEFAULTS_FILE" || true)
+        existing_token=$(grep -Po '(?<=^CPUMON_TOKEN=).*' "$DEFAULTS_FILE" || true)
         blue "Existing config found in $DEFAULTS_FILE"
     fi
+}
 
-    read -rp "Server IP [${existing_ip:-auto-discover}]: " input_ip
-    SERVER_IP="${input_ip:-$existing_ip}"
-
-    read -rp "Invite token [${existing_token:-prompt on first connect}]: " input_token
-    TOKEN="${input_token:-$existing_token}"
-
-    echo
-
-    # ── Dependencies ───────────────────────────────────────────────────────
-
-    blue "Installing Python 3 and psutil…"
+install_dependencies() {
+    blue "Installing Python 3 and psutil..."
     apt-get update -qq
     apt-get install -y --no-install-recommends python3 python3-pip > /dev/null
 
-    # Try pipx/pip install; fall back silently if pip is externally managed
     if python3 -m pip install --quiet psutil 2>/dev/null; then
         true
     elif pip3 install --quiet psutil 2>/dev/null; then
         true
     else
-        # Debian 12+ with externally-managed pip: use apt
         apt-get install -y --no-install-recommends python3-psutil > /dev/null || true
     fi
+}
 
-    # ── Copy files ─────────────────────────────────────────────────────────
-
-    blue "Installing to $INSTALL_DIR…"
+write_program_files() {
+    blue "Installing files to $INSTALL_DIR..."
     mkdir -p "$INSTALL_DIR"
     cp "$SCRIPT_DIR/cpumon.py" "$INSTALL_DIR/cpumon.py"
     chmod 755 "$INSTALL_DIR/cpumon.py"
-
-    # ── Wrapper script (handles optional args cleanly) ─────────────────────
 
     cat > "$INSTALL_DIR/start.sh" <<'WRAPPER'
 #!/usr/bin/env bash
@@ -106,21 +71,24 @@ ARGS=()
 exec python3 /opt/cpumon/cpumon.py "${ARGS[@]}"
 WRAPPER
     chmod 755 "$INSTALL_DIR/start.sh"
+}
 
-    # ── Defaults file ──────────────────────────────────────────────────────
+write_defaults_file() {
+    local server_ip="$1"
+    local token="$2"
 
     cat > "$DEFAULTS_FILE" <<EOF
 # cpumon client configuration
 # Edit this file then run:  systemctl restart cpumon
-# Clear stored auth key:    rm /var/lib/cpumon/client_auth.json
+# Clear stored auth key:    rm $STATE_FILE
 
-CPUMON_SERVER_IP=${SERVER_IP}
-CPUMON_TOKEN=${TOKEN}
+CPUMON_SERVER_IP=${server_ip}
+CPUMON_TOKEN=${token}
 EOF
     chmod 600 "$DEFAULTS_FILE"
+}
 
-    # ── Systemd unit ───────────────────────────────────────────────────────
-
+write_service_file() {
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=cpumon remote monitoring client
@@ -130,11 +98,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/default/cpumon
-ExecStart=/opt/cpumon/start.sh
+EnvironmentFile=$DEFAULTS_FILE
+ExecStart=$INSTALL_DIR/start.sh
 Restart=always
 RestartSec=5
-# State directory: systemd creates /var/lib/cpumon and sets STATE_DIRECTORY
+# systemd creates /var/lib/cpumon and sets STATE_DIRECTORY
 StateDirectory=cpumon
 WorkingDirectory=/var/lib/cpumon
 # Run as root so shutdown/reboot/kill work without extra config.
@@ -145,15 +113,91 @@ User=root
 [Install]
 WantedBy=multi-user.target
 EOF
+}
 
-    # ── Enable and start ───────────────────────────────────────────────────
+restart_service() {
+    systemctl daemon-reload
+    systemctl enable "$SERVICE_NAME" >/dev/null
+    systemctl restart "$SERVICE_NAME"
+}
+
+uninstall() {
+    require_root
+    bold "Uninstalling cpumon..."
+
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+
+    rm -f "$SERVICE_FILE"
+    rm -f "$DEFAULTS_FILE"
+    rm -rf "$INSTALL_DIR"
 
     systemctl daemon-reload
-    systemctl enable "$SERVICE_NAME"
-    systemctl restart "$SERVICE_NAME"
+    green "cpumon uninstalled."
+    echo "State directory /var/lib/cpumon was kept (stored auth key)."
+    echo "Remove manually with: rm -rf /var/lib/cpumon"
+}
+
+install() {
+    require_root
+    require_payload
+
+    bold "cpumon Linux client - installer"
+    echo "Requires Python 3.8+ (installed via apt if missing)"
+    echo
+
+    read_existing_config
+
+    read -rp "Server IP [${existing_ip:-auto-discover}]: " input_ip
+    SERVER_IP="${input_ip:-$existing_ip}"
+
+    read -rp "Invite token [${existing_token:-prompt on first connect}]: " input_token
+    TOKEN="${input_token:-$existing_token}"
+
+    echo
+    install_dependencies
+    write_program_files
+    write_defaults_file "$SERVER_IP" "$TOKEN"
+    write_service_file
+    restart_service
 
     echo
     green "cpumon installed and started."
+    print_useful_commands
+
+    if [[ -z "$TOKEN" ]]; then
+        echo
+        bold "No token set - on first connect the service will fail auth."
+        echo "Set CPUMON_TOKEN in $DEFAULTS_FILE and restart:"
+        echo "  systemctl restart cpumon"
+    fi
+}
+
+update() {
+    require_root
+    require_payload
+
+    bold "cpumon Linux client - updater"
+
+    if [[ ! -f "$DEFAULTS_FILE" ]]; then
+        red "No existing $DEFAULTS_FILE found."
+        echo "Run first install instead: sudo bash install.sh"
+        exit 1
+    fi
+
+    install_dependencies
+    write_program_files
+    write_service_file
+    restart_service
+
+    echo
+    green "cpumon updated and restarted."
+    echo "Kept config: $DEFAULTS_FILE"
+    echo "Kept auth:   $STATE_FILE"
+    print_useful_commands
+}
+
+print_useful_commands() {
     echo
     bold "Useful commands:"
     echo "  systemctl status  cpumon      # check status"
@@ -161,18 +205,16 @@ EOF
     echo "  systemctl start   cpumon      # start"
     echo "  journalctl -u cpumon -f       # live logs"
     echo "  nano $DEFAULTS_FILE   # change server IP / token"
-    echo "  rm /var/lib/cpumon/client_auth.json   # clear stored auth key"
-    echo
-    if [[ -z "$TOKEN" ]]; then
-        bold "No token set — on first connect the service will fail auth."
-        echo "Set CPUMON_TOKEN in $DEFAULTS_FILE and restart:"
-        echo "  systemctl restart cpumon"
-    fi
+    echo "  rm $STATE_FILE   # clear stored auth key"
 }
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 case "${1:-install}" in
     uninstall|remove) uninstall ;;
-    install|*)        install   ;;
+    update|upgrade)   update ;;
+    install)          install ;;
+    *)
+        red "Unknown command: $1"
+        echo "Usage: sudo bash install.sh [install|update|uninstall]"
+        exit 1
+        ;;
 esac

@@ -168,6 +168,14 @@ sudo bash install.sh
 
 `install.sh` installs to `/opt/cpumon`, creates `/etc/default/cpumon` for config, and registers a systemd service running as root. Edit `/etc/default/cpumon` to set `SERVER_IP` and `TOKEN` before or after install.
 
+To update an existing Linux client from a newer release zip, run:
+
+```bash
+sudo bash install.sh update
+```
+
+The update command replaces `/opt/cpumon` program files and restarts the service, while keeping `/etc/default/cpumon` and `/var/lib/cpumon/client_auth.json`.
+
 The systemd service is named `cpumon` — `systemctl status cpumon`, `journalctl -u cpumon`.
 
 ### First connection
