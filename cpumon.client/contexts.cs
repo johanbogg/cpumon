@@ -268,7 +268,9 @@ sealed class AgentContext : ApplicationContext
                             }
 
                             case "rdp_input":
-                                if (msg.Input != null)
+                                if (msg.RdpId != null &&
+                                    msg.Input != null &&
+                                    _rdpSessions.ContainsKey(msg.RdpId))
                                     InputInjector.InjectInput(msg.Input);
                                 break;
 

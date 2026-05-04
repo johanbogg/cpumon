@@ -135,6 +135,7 @@ public sealed class RdpViewerDialog : Form
     readonly System.Windows.Forms.Timer _mouseMoveTimer;
     int _pendingMouseX, _pendingMouseY;
     bool _hasPendingMouseMove;
+    bool _closed;
 
     public string RdpId => _rdpId;
 
@@ -237,6 +238,7 @@ public sealed class RdpViewerDialog : Form
 
         FormClosed += (_, _) =>
         {
+            _closed = true;
             _sendCmd(new ServerCommand { Cmd = "rdp_close", RdpId = _rdpId });
             _onClose?.Invoke();
             _mouseMoveTimer.Stop();
@@ -268,7 +270,7 @@ public sealed class RdpViewerDialog : Form
 
     void OnMouseMove(object? s, MouseEventArgs e)
     {
-        if (!_inputEnabled || _remoteW == 0) return;
+        if (_closed || !_inputEnabled || _remoteW == 0) return;
         var (rx, ry) = ToRemote(e.X, e.Y);
         _pendingMouseX = rx;
         _pendingMouseY = ry;
@@ -278,7 +280,7 @@ public sealed class RdpViewerDialog : Form
 
     void FlushMouseMove()
     {
-        if (!_hasPendingMouseMove || !_inputEnabled || _remoteW == 0)
+        if (_closed || !_hasPendingMouseMove || !_inputEnabled || _remoteW == 0)
         {
             _mouseMoveTimer.Stop();
             return;
@@ -289,7 +291,7 @@ public sealed class RdpViewerDialog : Form
 
     void OnMouseDown(object? s, MouseEventArgs e)
     {
-        if (!_inputEnabled || _remoteW == 0) return;
+        if (_closed || !_inputEnabled || _remoteW == 0) return;
         _canvas.Focus();
         FlushMouseMove();
         var (rx, ry) = ToRemote(e.X, e.Y);
@@ -299,7 +301,7 @@ public sealed class RdpViewerDialog : Form
 
     void OnMouseUp(object? s, MouseEventArgs e)
     {
-        if (!_inputEnabled || _remoteW == 0) return;
+        if (_closed || !_inputEnabled || _remoteW == 0) return;
         FlushMouseMove();
         var (rx, ry) = ToRemote(e.X, e.Y);
         int btn = e.Button == MouseButtons.Right ? 1 : e.Button == MouseButtons.Middle ? 2 : 0;
@@ -308,14 +310,14 @@ public sealed class RdpViewerDialog : Form
 
     void OnMouseWheel(object? s, MouseEventArgs e)
     {
-        if (!_inputEnabled || _remoteW == 0) return;
+        if (_closed || !_inputEnabled || _remoteW == 0) return;
         var (rx, ry) = ToRemote(e.X, e.Y);
         _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_wheel", X = rx, Y = ry, Delta = e.Delta } });
     }
 
     void OnKeyDown(object? s, KeyEventArgs e)
     {
-        if (!_inputEnabled || _remoteW == 0) return;
+        if (_closed || !_inputEnabled || _remoteW == 0) return;
         e.Handled = true; e.SuppressKeyPress = true;
         bool ext = IsExtended(e.KeyCode);
         _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "key_down", VirtualKey = (int)e.KeyCode, ScanCode = 0, Extended = ext } });
@@ -323,7 +325,7 @@ public sealed class RdpViewerDialog : Form
 
     void OnKeyUp(object? s, KeyEventArgs e)
     {
-        if (!_inputEnabled || _remoteW == 0) return;
+        if (_closed || !_inputEnabled || _remoteW == 0) return;
         e.Handled = true; e.SuppressKeyPress = true;
         bool ext = IsExtended(e.KeyCode);
         _sendCmd(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "key_up", VirtualKey = (int)e.KeyCode, ScanCode = 0, Extended = ext } });
