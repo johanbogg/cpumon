@@ -317,27 +317,70 @@ sealed class CpuMonService : ServiceBase
         string exePath = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "cpumon.client.exe");
         string updateDir = Path.GetDirectoryName(updatePath) ?? AppPaths.DataDir;
         string batPath = Path.Combine(updateDir, "cpumon_update.bat");
+        string logPath = Path.Combine(updateDir, "cpumon_update.log");
         File.WriteAllText(batPath,
             "@echo off\r\n" +
             "setlocal\r\n" +
-            $"echo %date% %time% Starting CpuMon update > \"{Path.Combine(updateDir, "cpumon_update.log")}\"\r\n" +
+            $"echo %date% %time% Starting CpuMon update > \"{logPath}\"\r\n" +
+            $"echo Running as %USERNAME% >> \"{logPath}\"\r\n" +
             "sc stop CpuMonClient\r\n" +
             "timeout /t 5 /nobreak > nul\r\n" +
-            $"move /Y \"{updatePath}\" \"{exePath}\" >> \"{Path.Combine(updateDir, "cpumon_update.log")}\" 2>&1\r\n" +
+            $"move /Y \"{updatePath}\" \"{exePath}\" >> \"{logPath}\" 2>&1\r\n" +
             "if errorlevel 1 goto fail\r\n" +
             "sc start CpuMonClient\r\n" +
             "goto done\r\n" +
             ":fail\r\n" +
-            "echo Update move failed >> \"" + Path.Combine(updateDir, "cpumon_update.log") + "\"\r\n" +
+            $"echo Update move failed >> \"{logPath}\"\r\n" +
             "sc start CpuMonClient\r\n" +
             ":done\r\n" +
             "schtasks /delete /tn \"CpuMonUpdate\" /f > nul 2>&1\r\n" +
             "del \"%~f0\"\r\n");
-        Process.Start(new ProcessStartInfo("schtasks.exe",
-            $"/create /tn \"CpuMonUpdate\" /tr \"cmd /c \\\"{batPath}\\\"\" /sc once /st 00:00 /du 00:01 /f /ru SYSTEM /rl highest")
-        { UseShellExecute = false, CreateNoWindow = true })?.WaitForExit(5000);
-        Process.Start(new ProcessStartInfo("schtasks.exe", "/run /tn \"CpuMonUpdate\"")
-        { UseShellExecute = false, CreateNoWindow = true })?.WaitForExit(3000);
+        LogSink.Info("Service.Update", $"Staged update batch: {batPath}");
+        bool scheduled = RunUpdateProcess("schtasks.exe",
+            $"/create /tn \"CpuMonUpdate\" /tr \"\\\"{batPath}\\\"\" /sc once /st 23:59 /f /ru SYSTEM /rl highest",
+            logPath, "create task");
+        bool started = scheduled && RunUpdateProcess("schtasks.exe", "/run /tn \"CpuMonUpdate\"", logPath, "run task");
+        if (!started)
+        {
+            LogSink.Warn("Service.Update", "Scheduled update task did not start; falling back to detached batch launch");
+            RunUpdateProcess("cmd.exe", $"/c start \"\" \"{batPath}\"", logPath, "fallback start");
+        }
+    }
+
+    static bool RunUpdateProcess(string fileName, string arguments, string logPath, string label)
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo(fileName, arguments)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            });
+            if (p == null)
+            {
+                File.AppendAllText(logPath, $"{DateTime.Now:u} {label}: failed to start {fileName}\r\n");
+                return false;
+            }
+            if (!p.WaitForExit(10000))
+            {
+                try { p.Kill(); } catch { }
+                File.AppendAllText(logPath, $"{DateTime.Now:u} {label}: timed out {fileName} {arguments}\r\n");
+                return false;
+            }
+            string stdout = p.StandardOutput.ReadToEnd();
+            string stderr = p.StandardError.ReadToEnd();
+            File.AppendAllText(logPath,
+                $"{DateTime.Now:u} {label}: {fileName} {arguments}\r\n" +
+                $"exit={p.ExitCode}\r\n{stdout}{stderr}\r\n");
+            return p.ExitCode == 0;
+        }
+        catch (Exception ex)
+        {
+            try { File.AppendAllText(logPath, $"{DateTime.Now:u} {label}: {ex}\r\n"); } catch { }
+            return false;
+        }
     }
 
     void SendToAgent(AgentIpc.AgentMessage msg)
