@@ -41,7 +41,7 @@ BEACON      = "CPUMON_V2"
 FULL_MS     = 1.0
 MONITOR_MS  = 30.0
 KA_MS       = 60.0
-VERSION     = "1.0.0-linux"
+VERSION     = "1.0.100-linux"
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 

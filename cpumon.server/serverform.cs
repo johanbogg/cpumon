@@ -136,6 +136,8 @@ sealed class ServerForm : BorderlessForm
             if (!cl.Authenticated) continue;
             if (cl.LastSeen < idleCutoff) { _log.Add($"Idle timeout: {kv.Key}", Th.Org); cl.Kick(); continue; }
             string desired = cl.LastReport == null || cl.Expanded ? "full" : _alertSvc.IdleMode;
+            if (desired == "keepalive" && IsLinuxClient(cl))
+                desired = "monitor";
             if (cl.SendMode != desired)
             {
                 cl.SendMode = desired;
@@ -615,6 +617,7 @@ sealed class ServerForm : BorderlessForm
                     break;
                 case "cmd": BeginInvoke(() => new TerminalDialog(cl, "cmd").Show(this)); _log.Add($"CMD→{m}", Th.Cyan); break;
                 case "powershell": BeginInvoke(() => new TerminalDialog(cl, "powershell").Show(this)); _log.Add($"PS→{m}", Th.Cyan); break;
+                case "bash": BeginInvoke(() => new TerminalDialog(cl, "bash").Show(this)); _log.Add($"Bash→{m}", Th.Cyan); break;
                 case "files": BeginInvoke(() => new FileBrowserDialog(cl).Show(this)); _log.Add($"Files→{m}", Th.Yel); break;
                 case "rdp":
                     string rdpId = Guid.NewGuid().ToString("N")[..12];
@@ -694,6 +697,13 @@ sealed class ServerForm : BorderlessForm
         if (!Version.TryParse(clientVersion, out var cv)) return false;
         if (!Version.TryParse(Proto.AppVersion, out var sv)) return false;
         return cv < sv;
+    }
+
+    static bool IsLinuxClient(RemoteClient cl)
+    {
+        if (cl.ClientVersion.Contains("linux", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return cl.LastReport?.OsVersion.Contains("linux", StringComparison.OrdinalIgnoreCase) == true;
     }
 
     // ── Painting ──
@@ -899,6 +909,7 @@ sealed class ServerForm : BorderlessForm
     int DrawExpanded(Graphics g, int x, int y, int w, RemoteClient cl, bool stale)
     {
         var r = cl.LastReport!;
+        bool linux = IsLinuxClient(cl);
         int hdrH = 100, h = hdrH + 4 + 26 + 4 + 26 + 4;
         Color brd = stale ? Th.Org : Th.Grn;
 
@@ -973,33 +984,48 @@ sealed class ServerForm : BorderlessForm
         using (var sep2 = new Pen(Color.FromArgb(35, Th.Brd), 1f))
             g.DrawLine(sep2, x + 12, y + hdrH, x + w - 12, y + hdrH);
 
-        // Row 1 — session launchers
+        // Row 1 - session launchers
         int by = y + hdrH + 4, bx = x + 14;
-        DrawBtn(g, bx, by, 72, 26, "🖥 CMD", Th.Cyan, r.MachineName, "cmd"); bx += 80;
-        DrawBtn(g, bx, by, 104, 26, "🖥 PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 112;
-        DrawBtn(g, bx, by, 74, 26, "📁 Files", Th.Yel, r.MachineName, "files"); bx += 82;
-        DrawBtn(g, bx, by, 68, 26, "🖥 RDP", Th.Cyan, r.MachineName, "rdp"); bx += 76;
-        DrawBtn(g, bx, by, 68, 26, "⚙ Svcs", Th.Grn, r.MachineName, "services"); bx += 76;
-        if (ClientNeedsUpdate(cl.ClientVersion))
-            DrawBtn(g, bx, by, 80, 26, "⬆ Update", Th.Org, r.MachineName, "update");
+        if (linux)
+        {
+            DrawBtn(g, bx, by, 78, 26, "Bash", Th.Cyan, r.MachineName, "bash"); bx += 86;
+        }
+        else
+        {
+            DrawBtn(g, bx, by, 72, 26, "CMD", Th.Cyan, r.MachineName, "cmd"); bx += 80;
+            DrawBtn(g, bx, by, 104, 26, "PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 112;
+        }
+        DrawBtn(g, bx, by, 74, 26, "Files", Th.Yel, r.MachineName, "files"); bx += 82;
+        DrawBtn(g, bx, by, 68, 26, "Svcs", Th.Grn, r.MachineName, "services"); bx += 76;
+        if (!linux)
+        {
+            DrawBtn(g, bx, by, 68, 26, "RDP", Th.Cyan, r.MachineName, "rdp"); bx += 76;
+        }
+        if (!linux && ClientNeedsUpdate(cl.ClientVersion))
+            DrawBtn(g, bx, by, 80, 26, "Update", Th.Org, r.MachineName, "update");
 
-        // Row 2 — info tools (left) + danger zone (right-aligned)
+        // Row 2 - info tools (left) + danger zone (right-aligned)
         int by2 = by + 30, bx2 = x + 14;
-        DrawBtn(g, bx2, by2, 80, 26, "☰ Procs", Th.Blu, r.MachineName, "processes"); bx2 += 88;
-        DrawBtn(g, bx2, by2, 60, 26, "ℹ Info", Th.Cyan, r.MachineName, "sysinfo"); bx2 += 68;
-        DrawBtn(g, bx2, by2, 74, 26, "⚠ Events", Th.Yel, r.MachineName, "events"); bx2 += 82;
-        DrawBtn(g, bx2, by2, 68, 26, "💬 Msg", Th.Dim, r.MachineName, "msg");
+        DrawBtn(g, bx2, by2, 80, 26, "Procs", Th.Blu, r.MachineName, "processes"); bx2 += 88;
+        DrawBtn(g, bx2, by2, 60, 26, "Info", Th.Cyan, r.MachineName, "sysinfo"); bx2 += 68;
+        if (!linux)
+        {
+            DrawBtn(g, bx2, by2, 74, 26, "Events", Th.Yel, r.MachineName, "events"); bx2 += 82;
+        }
+        DrawBtn(g, bx2, by2, 68, 26, "Msg", Th.Dim, r.MachineName, "msg");
 
-        // Danger zone — right-aligned: PAW | vline | Restart Off Forget
         bool isPaw = _store.IsPaw(r.MachineName);
         int dx = x + w - 14;
-        dx -= 74; DrawDangerBtn(g, dx, by2, 72, 26, "🗑 Forget", Th.Dim, r.MachineName, "forget");
-        dx -= 68; DrawDangerBtn(g, dx, by2, 66, 26, "⏻ Off", Th.Red, r.MachineName, "shutdown");
-        dx -= 82; DrawDangerBtn(g, dx, by2, 80, 26, "⟳ Restart", Th.Org, r.MachineName, "restart");
-        dx -= 14;
-        using (var vsp = new Pen(Color.FromArgb(45, Th.Brd), 1f))
-            g.DrawLine(vsp, dx + 6, by2 + 4, dx + 6, by2 + 22);
-        dx -= 78; DrawBtn(g, dx, by2, 76, 26, isPaw ? "🔑 PAW ✓" : "🔑 PAW", isPaw ? Th.Mag : Th.Dim, r.MachineName, "paw");
+        dx -= 74; DrawDangerBtn(g, dx, by2, 72, 26, "Forget", Th.Dim, r.MachineName, "forget");
+        dx -= 68; DrawDangerBtn(g, dx, by2, 66, 26, "Off", Th.Red, r.MachineName, "shutdown");
+        dx -= 82; DrawDangerBtn(g, dx, by2, 80, 26, "Restart", Th.Org, r.MachineName, "restart");
+        if (!linux)
+        {
+            dx -= 14;
+            using (var vsp = new Pen(Color.FromArgb(45, Th.Brd), 1f))
+                g.DrawLine(vsp, dx + 6, by2 + 4, dx + 6, by2 + 22);
+            dx -= 78; DrawBtn(g, dx, by2, 76, 26, isPaw ? "PAW yes" : "PAW", isPaw ? Th.Mag : Th.Dim, r.MachineName, "paw");
+        }
 
         return h;
     }
