@@ -12,6 +12,7 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -137,7 +138,7 @@ sealed class ServerForm : BorderlessForm
             if (cl.LastSeen < idleCutoff) { _log.Add($"Idle timeout: {kv.Key}", Th.Org); cl.Kick(); continue; }
             string desired = cl.LastReport == null || cl.Expanded ? "full" : _alertSvc.IdleMode;
             if (desired == "keepalive" && IsLinuxClient(cl))
-                desired = "monitor";
+                desired = "linux_monitor";
             if (cl.SendMode != desired)
             {
                 cl.SendMode = desired;
@@ -557,8 +558,7 @@ sealed class ServerForm : BorderlessForm
                 {
                     try
                     {
-                        var bytes = mac.Split(':', '-').Select(s => Convert.ToByte(s, 16)).ToArray();
-                        if (bytes.Length == 6)
+                        if (TryParseMacBytes(mac, out var bytes))
                         {
                             var pkt = new byte[102];
                             for (int i = 0; i < 6; i++) pkt[i] = 0xFF;
@@ -567,6 +567,7 @@ sealed class ServerForm : BorderlessForm
                             u.Send(pkt, pkt.Length, new IPEndPoint(IPAddress.Broadcast, 9));
                             _log.Add($"WoL sent to {m} ({mac})", Th.Yel);
                         }
+                        else _log.Add($"WoL failed: invalid MAC '{mac}'", Th.Red);
                     }
                     catch (Exception ex) { _log.Add($"WoL failed: {ex.Message}", Th.Red); }
                 }
@@ -704,6 +705,24 @@ sealed class ServerForm : BorderlessForm
         if (cl.ClientVersion.Contains("linux", StringComparison.OrdinalIgnoreCase))
             return true;
         return cl.LastReport?.OsVersion.Contains("linux", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    static bool TryParseMacBytes(string text, out byte[] bytes)
+    {
+        bytes = Array.Empty<byte>();
+        var match = Regex.Match(text, @"(?i)([0-9a-f]{2}[:-]){5}[0-9a-f]{2}|[0-9a-f]{12}");
+        if (!match.Success) return false;
+
+        string hex = Regex.Replace(match.Value, "[^0-9A-Fa-f]", "");
+        if (hex.Length != 12) return false;
+        var parsed = new byte[6];
+        for (int i = 0; i < parsed.Length; i++)
+        {
+            if (!byte.TryParse(hex.Substring(i * 2, 2), System.Globalization.NumberStyles.HexNumber, null, out parsed[i]))
+                return false;
+        }
+        bytes = parsed;
+        return true;
     }
 
     // ── Painting ──

@@ -40,8 +40,9 @@ DATA_PORT   = 47201
 BEACON      = "CPUMON_V2"
 FULL_MS     = 1.0
 MONITOR_MS  = 30.0
+LINUX_MONITOR_MS = 15.0
 KA_MS       = 60.0
-VERSION     = "1.0.100-linux"
+VERSION     = "1.0.101-linux"
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -719,7 +720,11 @@ class Client:
                     report = build_report(self._machine, self._cpu_name)
                     self._send({"type": "report", "report": report,
                                 "machine": self._machine, "authKey": self._ak})
-                    self._interruptible_sleep(MONITOR_MS if self._mode == "monitor" else FULL_MS)
+                    if self._mode == "linux_monitor":
+                        delay = LINUX_MONITOR_MS
+                    else:
+                        delay = MONITOR_MS if self._mode == "monitor" else FULL_MS
+                    self._interruptible_sleep(delay)
             except Exception as e:
                 print(f"Send error: {e}", flush=True)
                 self._interruptible_sleep(1)
