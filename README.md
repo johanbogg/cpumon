@@ -20,7 +20,7 @@ Windows server · Windows clients · Linux clients (Python)
 - **Offline client tracking** — approved machines appear dimmed with last-seen time even when disconnected
 - **PAW mode** — designate a client as a Privileged Access Workstation; it gets a full dashboard mirroring the server UI and can relay commands to other clients through the server
 - **Auto-discovery** — clients find the server automatically via UDP beacon; direct IP override available
-- **Per-client mode control** — server switches clients between 1-second live reporting and 60-second keepalive pings based on whether the card is expanded
+- **Per-client mode control** — server switches Windows clients between 1-second live reporting and idle keepalive pings based on whether the card is expanded; Linux clients use monitor mode while collapsed to avoid stale UI flicker
 - **Auto-update** — server can push a new client exe; service applies it via a scheduled task
 
 ---
