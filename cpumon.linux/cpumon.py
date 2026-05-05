@@ -11,6 +11,7 @@ Optional: pip install psutil   (enables CPU/RAM/disk metrics)
 
 import argparse
 import base64
+import fcntl
 import hashlib
 import json
 import os
@@ -35,6 +36,7 @@ except ImportError:
 
 _state_dir  = os.environ.get("STATE_DIRECTORY") or os.path.expanduser("~/.cpumon")
 STATE_FILE  = os.path.join(_state_dir, "client_auth.json")
+LOCK_FILE   = os.path.join(_state_dir, "cpumon.lock")
 DISC_PORT   = 47200
 DATA_PORT   = 47201
 BEACON      = "CPUMON_V2"
@@ -42,7 +44,7 @@ FULL_MS     = 1.0
 MONITOR_MS  = 30.0
 LINUX_MONITOR_MS = 15.0
 KA_MS       = 60.0
-VERSION     = "1.0.101-linux"
+VERSION     = "1.0.104-linux"
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -74,6 +76,18 @@ def clear_state():
         os.remove(STATE_FILE)
     except FileNotFoundError:
         pass
+
+def acquire_single_instance_lock():
+    os.makedirs(_state_dir, exist_ok=True)
+    fh = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"Another cpumon client is already running (lock: {LOCK_FILE})", file=sys.stderr)
+        raise SystemExit(2)
+    fh.write(str(os.getpid()))
+    fh.flush()
+    return fh
 
 # ── System info ───────────────────────────────────────────────────────────────
 
@@ -402,8 +416,10 @@ class Client:
     def _send(self, obj: dict):
         line = json.dumps(obj, separators=(",", ":")) + "\n"
         with self._send_lock:
-            if self._ssl:
-                self._ssl.sendall(line.encode())
+            s = self._ssl
+            if not s:
+                raise ConnectionError("Not connected")
+            s.sendall(line.encode())
 
     def _recv_line(self) -> str:
         while b"\n" not in self._recv_buf:
@@ -713,6 +729,7 @@ class Client:
                 psutil.cpu_percent(interval=None)
                 _primed = True
             try:
+                current_ssl = self._ssl
                 if self._mode == "keepalive":
                     self._send({"type": "keepalive", "machine": self._machine, "authKey": self._ak})
                     self._interruptible_sleep(KA_MS)
@@ -727,6 +744,8 @@ class Client:
                     self._interruptible_sleep(delay)
             except Exception as e:
                 print(f"Send error: {e}", flush=True)
+                if self._ssl is current_ssl:
+                    self._close()
                 self._interruptible_sleep(1)
 
     def _interruptible_sleep(self, seconds: float):
@@ -796,6 +815,7 @@ def main():
         print("Warning: psutil not installed — metrics will be empty. Run: pip install psutil",
               file=sys.stderr)
 
+    lock_fh = acquire_single_instance_lock()
     client = Client(server_ip=args.server_ip, token=args.token)
 
     def _sig(signum, frame):
@@ -808,6 +828,12 @@ def main():
         client.run()
     except SystemExit:
         pass
+    finally:
+        try:
+            fcntl.flock(lock_fh, fcntl.LOCK_UN)
+            lock_fh.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

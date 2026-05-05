@@ -32,7 +32,6 @@ sealed class ServerForm : BorderlessForm
     const int IdleTimeoutMinutes = 3;
     const int AuthTimeoutSeconds = 30;
     const int PendingApprovalTimeoutMinutes = 15;
-    const int LinuxDisconnectGraceSeconds = 45;
     readonly bool _nb;
     string _tok;
     DateTime _tokAt;
@@ -245,6 +244,7 @@ sealed class ServerForm : BorderlessForm
         string ip = remote.Contains(':') ? remote[..remote.LastIndexOf(':')] : remote;
         int rx = 0;
         bool pendingApproval = false;
+        string disconnectReason = "ended";
         using var authCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         authCts.CancelAfter(TimeSpan.FromSeconds(AuthTimeoutSeconds));
 
@@ -253,7 +253,7 @@ sealed class ServerForm : BorderlessForm
             while (!ct.IsCancellationRequested)
             {
                 string? line = await cl.ReadLineAsync(cl.Authenticated || pendingApproval ? ct : authCts.Token);
-                if (line == null) break;
+                if (line == null) { disconnectReason = "EOF"; break; }
 
                 try
                 {
@@ -426,43 +426,20 @@ sealed class ServerForm : BorderlessForm
                 catch (Exception ex) { _log.Add($"{name ?? remote}: {ex.Message}", Th.Red); }
             }
         }
-        catch (Exception ex) { LogSink.Warn("Server.HandleClient", $"Client loop failed: {name ?? remote}", ex); }
+        catch (OperationCanceledException) { disconnectReason = "cancelled"; }
+        catch (Exception ex) { disconnectReason = ex.GetType().Name; LogSink.Warn("Server.HandleClient", $"Client loop failed: {name ?? remote}", ex); }
         finally
         {
             if (name != null && _pendingApprovals.TryGetValue(name, out var pending) && ReferenceEquals(pending.Client, cl))
                 _pendingApprovals.TryRemove(name, out _);
-            bool keepLinuxGrace = name != null && cl.LastReport != null && IsLinuxClient(cl);
             if (name != null && _cls.TryGetValue(name, out var current) && ReferenceEquals(current, cl))
-            {
-                if (keepLinuxGrace)
-                {
-                    cl.LastSeen = DateTime.UtcNow;
-                    _ = RemoveLinuxGraceClientLater(name, cl);
-                }
-                else
-                {
-                    _cls.TryRemove(name, out _);
-                    cl.Dispose();
-                }
-            }
-            else cl.Dispose();
+                _cls.TryRemove(name, out _);
+            cl.Dispose();
             Interlocked.Decrement(ref _cc);
             PendingPowerAction? powerAction = null;
             if (name != null) lock (_pendingPowerActions) { if (_pendingPowerActions.TryGetValue(name, out var req) && (DateTime.UtcNow - req.RequestedAt).TotalMinutes < 5) powerAction = req; _pendingPowerActions.Remove(name); }
-            if (powerAction != null) _log.Add($"Disc: {name} — {powerAction.Label} ✓ ({rx})", Th.Grn);
-            else _log.Add($"Disc: {name ?? remote} ({rx})", Th.Org);
-        }
-    }
-
-    async Task RemoveLinuxGraceClientLater(string name, RemoteClient cl)
-    {
-        try { await Task.Delay(TimeSpan.FromSeconds(LinuxDisconnectGraceSeconds), _cts.Token); }
-        catch { return; }
-        if (_cls.TryGetValue(name, out var current) && ReferenceEquals(current, cl))
-        {
-            _cls.TryRemove(name, out _);
-            cl.Dispose();
-            BeginInvoke(() => _ct.Invalidate());
+            if (powerAction != null) _log.Add($"Disc: {name} — {powerAction.Label} ✓ ({rx}, {disconnectReason})", Th.Grn);
+            else _log.Add($"Disc: {name ?? remote} ({rx}, {disconnectReason})", Th.Org);
         }
     }
 
