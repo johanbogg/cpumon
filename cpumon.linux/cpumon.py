@@ -44,7 +44,7 @@ FULL_MS     = 1.0
 MONITOR_MS  = 30.0
 LINUX_MONITOR_MS = 15.0
 KA_MS       = 60.0
-VERSION     = "1.0.104-linux"
+VERSION     = "1.0.106-linux"
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -399,6 +399,7 @@ class Client:
         ctx.check_hostname = False
         ctx.verify_mode    = ssl.CERT_NONE  # self-signed; TOFU via thumbprint
         s = ctx.wrap_socket(raw, server_hostname="cpumon-server")
+        s.settimeout(None)
         der = s.getpeercert(binary_form=True)
         if not der:
             s.close()
