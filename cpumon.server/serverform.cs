@@ -32,6 +32,7 @@ sealed class ServerForm : BorderlessForm
     const int IdleTimeoutMinutes = 3;
     const int AuthTimeoutSeconds = 30;
     const int PendingApprovalTimeoutMinutes = 15;
+    const int LinuxDisconnectGraceSeconds = 45;
     readonly bool _nb;
     string _tok;
     DateTime _tokAt;
@@ -274,7 +275,7 @@ sealed class ServerForm : BorderlessForm
                             cl.Send(new ServerCommand { Cmd = "mode", Mode = "full" });
                             _log.Add($"✓ {mn} re-auth", Th.Grn);
                             if (_cls.TryGetValue(mn, out var prev1) && !ReferenceEquals(prev1, cl))
-                                AdoptPreviousClientState(prev1, cl);
+                                AdoptPreviousClientState(prev1, cl, disposePrevious: true);
                             _cls[mn] = cl;
                             cl.FlushPending();
                             continue;
@@ -291,7 +292,7 @@ sealed class ServerForm : BorderlessForm
                             cl.Send(new ServerCommand { Cmd = "mode", Mode = "full" });
                             _log.Add($"✓ {mn} approved", Th.Grn);
                             if (_cls.TryGetValue(mn, out var prev2) && !ReferenceEquals(prev2, cl))
-                                AdoptPreviousClientState(prev2, cl);
+                                AdoptPreviousClientState(prev2, cl, disposePrevious: true);
                             _cls[mn] = cl;
                             cl.FlushPending();
                             continue;
@@ -430,14 +431,38 @@ sealed class ServerForm : BorderlessForm
         {
             if (name != null && _pendingApprovals.TryGetValue(name, out var pending) && ReferenceEquals(pending.Client, cl))
                 _pendingApprovals.TryRemove(name, out _);
+            bool keepLinuxGrace = name != null && cl.LastReport != null && IsLinuxClient(cl);
             if (name != null && _cls.TryGetValue(name, out var current) && ReferenceEquals(current, cl))
-                _cls.TryRemove(name, out _);
-            cl.Dispose();
+            {
+                if (keepLinuxGrace)
+                {
+                    cl.LastSeen = DateTime.UtcNow;
+                    _ = RemoveLinuxGraceClientLater(name, cl);
+                }
+                else
+                {
+                    _cls.TryRemove(name, out _);
+                    cl.Dispose();
+                }
+            }
+            else cl.Dispose();
             Interlocked.Decrement(ref _cc);
             PendingPowerAction? powerAction = null;
             if (name != null) lock (_pendingPowerActions) { if (_pendingPowerActions.TryGetValue(name, out var req) && (DateTime.UtcNow - req.RequestedAt).TotalMinutes < 5) powerAction = req; _pendingPowerActions.Remove(name); }
             if (powerAction != null) _log.Add($"Disc: {name} — {powerAction.Label} ✓ ({rx})", Th.Grn);
             else _log.Add($"Disc: {name ?? remote} ({rx})", Th.Org);
+        }
+    }
+
+    async Task RemoveLinuxGraceClientLater(string name, RemoteClient cl)
+    {
+        try { await Task.Delay(TimeSpan.FromSeconds(LinuxDisconnectGraceSeconds), _cts.Token); }
+        catch { return; }
+        if (_cls.TryGetValue(name, out var current) && ReferenceEquals(current, cl))
+        {
+            _cls.TryRemove(name, out _);
+            cl.Dispose();
+            BeginInvoke(() => _ct.Invalidate());
         }
     }
 
