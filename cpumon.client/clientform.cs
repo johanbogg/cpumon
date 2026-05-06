@@ -24,16 +24,16 @@ using Timer = System.Windows.Forms.Timer;
 // ═══════════════════════════════════════════════════
 sealed class ClientForm : BorderlessForm
 {
-    readonly ComboBox _md; readonly CheckBox _pin; readonly Panel _cpuP, _netP; readonly Timer _tm;
+    readonly Panel _netP; readonly Timer _tm;
     readonly HardwareMonitorService _mon; readonly CancellationTokenSource _cts = new(); readonly CLog _log = new(30);
     readonly string? _fip; string? _tok;
     volatile NetState _ns = NetState.Idle; volatile string _sa = ""; volatile int _sc, _ec; DateTime _ls;
     TcpClient? _tcp; SslStream? _ssl; StreamWriter? _wr; StreamReader? _rd; readonly object _tl = new();
     volatile IPEndPoint? _ep;
-    const int HL = 120; readonly Queue<float> _lh = new();
-    CpuSnapshot _latestSnapshot = CpuSnapshot.Unavailable();
     string _cpu = "", _ak = "", _sid = "", _connThumb = ""; bool _authConfirmed, _approvalRequested;
     readonly SendPacer _pacer = new();
+
+    volatile bool _svcRunning;
 
     // PAW state
     volatile bool _isPaw;
@@ -51,25 +51,74 @@ sealed class ClientForm : BorderlessForm
         if (ssid != null) _sid = ssid;
 
         Text = "CPU Monitor"; StartPosition = FormStartPosition.Manual;
-        Location = new Point(30, 30); ClientSize = new Size(360, 500); MinimumSize = new Size(320, 400);
+        Location = new Point(30, 30); ClientSize = new Size(360, 200); MinimumSize = new Size(300, 140);
         BackColor = Th.Bg; ForeColor = Th.Brt; Font = new Font("Segoe UI", 9f);
-        DoubleBuffered = true; TopMost = true; ShowInTaskbar = true;
+        DoubleBuffered = true; ShowInTaskbar = true;
 
         var tp = MkTitle("⬡ CPU Monitor", Th.Blu);
         tp.Controls.Add(new Label { Text = AppState.Admin ? "●Admin" : "●NoAdmin", Font = new Font("Segoe UI", 7f), ForeColor = AppState.Admin ? Th.Grn : Th.Yel, AutoSize = true, Location = new Point(138, 16) });
 
-        var bar = new Panel { Dock = DockStyle.Top, Height = 34, BackColor = Th.Bg };
-        _md = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Th.Card, ForeColor = Th.Brt, Location = new Point(8, 5), Size = new Size(130, 24) };
-        _md.Items.Add("Package"); _md.Items.Add("Per Core"); _md!.SelectedIndex = 0;
-        _md.SelectedIndexChanged += (_, _) => _cpuP?.Invalidate();
-        _pin = new CheckBox { Text = "Pin", ForeColor = Th.Blu, Checked = true, AutoSize = true, Location = new Point(148, 7), FlatStyle = FlatStyle.Flat };
-        _pin.CheckedChanged += (_, _) => TopMost = _pin.Checked;
-        bar.Controls.Add(_md); bar.Controls.Add(_pin);
+        _netP = new DPanel { Dock = DockStyle.Fill, BackColor = Th.Bg }; _netP.Paint += PaintNet;
 
-        _netP = new DPanel { Dock = DockStyle.Bottom, Height = 120, BackColor = Th.Bg }; _netP.Paint += PaintNet;
-        _cpuP = new DPanel { Dock = DockStyle.Fill, BackColor = Th.Bg }; _cpuP.Paint += PaintCpu;
+        var btmBar = new Panel { Dock = DockStyle.Bottom, Height = 36, BackColor = Th.TBg };
+        var installBtn = new Button { Text = "Install as Service", ForeColor = Th.Grn, BackColor = Th.Card, FlatStyle = FlatStyle.Flat, Size = new Size(140, 26), Location = new Point(8, 5), Font = new Font("Segoe UI", 8.5f), Cursor = Cursors.Hand };
+        installBtn.FlatAppearance.BorderColor = Color.FromArgb(70, Th.Grn);
+        var uninstallBtn = new Button { Text = "Uninstall", ForeColor = Th.Red, BackColor = Th.Card, FlatStyle = FlatStyle.Flat, Size = new Size(80, 26), Location = new Point(156, 5), Font = new Font("Segoe UI", 8.5f), Cursor = Cursors.Hand, Visible = false };
+        uninstallBtn.FlatAppearance.BorderColor = Color.FromArgb(70, Th.Red);
+        installBtn.Click += (_, _) =>
+        {
+            if (!AppState.Admin) { MessageBox.Show(this, "Run as administrator to install the service.", "Not Admin", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            string verb = _svcRunning ? "Reinstall" : "Install";
+            if (MessageBox.Show(this, $"{verb} CPU Monitor as a Windows service?\n\nThe exe will be copied to Program Files and the service will be started.", $"{verb} Service", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            installBtn.Enabled = false; uninstallBtn.Enabled = false; installBtn.Text = "Installing...";
+            Task.Run(() =>
+            {
+                try
+                {
+                    ServiceManager.Install(null, null);
+                    BeginInvoke(() =>
+                    {
+                        _svcRunning = true; _cts.Cancel();
+                        installBtn.Text = "Reinstall"; installBtn.Enabled = true;
+                        uninstallBtn.Visible = true; uninstallBtn.Enabled = true;
+                        _netP.Invalidate();
+                        MessageBox.Show(this, "Service installed and started.\n\nYou can close this window — the service will keep running.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke(() => { installBtn.Enabled = true; uninstallBtn.Enabled = true; installBtn.Text = _svcRunning ? "Reinstall" : "Install as Service"; MessageBox.Show(this, $"Install failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); });
+                }
+            });
+        };
+        uninstallBtn.Click += (_, _) =>
+        {
+            if (!AppState.Admin) { MessageBox.Show(this, "Run as administrator to uninstall the service.", "Not Admin", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (MessageBox.Show(this, "Uninstall the CPU Monitor service?", "Uninstall Service", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            installBtn.Enabled = false; uninstallBtn.Enabled = false; uninstallBtn.Text = "Uninstalling...";
+            Task.Run(() =>
+            {
+                try
+                {
+                    ServiceManager.Uninstall();
+                    BeginInvoke(() =>
+                    {
+                        _svcRunning = false;
+                        installBtn.Text = "Install as Service"; installBtn.Enabled = true;
+                        uninstallBtn.Visible = false; uninstallBtn.Text = "Uninstall";
+                        _netP.Invalidate();
+                        MessageBox.Show(this, "Service uninstalled.\n\nRestart this window to connect directly.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke(() => { installBtn.Enabled = true; uninstallBtn.Enabled = true; uninstallBtn.Text = "Uninstall"; MessageBox.Show(this, $"Uninstall failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); });
+                }
+            });
+        };
+        btmBar.Controls.Add(installBtn); btmBar.Controls.Add(uninstallBtn);
 
-        Controls.Add(_cpuP); Controls.Add(_netP); Controls.Add(bar); Controls.Add(tp);
+        Controls.Add(_netP); Controls.Add(btmBar); Controls.Add(tp);
 
         _mon = new HardwareMonitorService();
         _tm = new Timer { Interval = 500 };
@@ -78,6 +127,15 @@ sealed class ClientForm : BorderlessForm
 
         Load += (_, _) =>
         {
+            if (ServiceManager.IsRunning())
+            {
+                _svcRunning = true;
+                _log.Add("Service running — not connecting", Th.Dim);
+                installBtn.Text = "Reinstall"; uninstallBtn.Visible = true;
+                _tm.Start();
+                return;
+            }
+
             _mon.Start();
             _cpu = ReportBuilder.WmiStr("Win32_Processor", "Name");
             _ns = NetState.Searching;
@@ -113,7 +171,7 @@ sealed class ClientForm : BorderlessForm
         };
 
         Action? onTh = null;
-        onTh = () => { if (!IsDisposed) BeginInvoke(() => { BackColor = Th.Bg; _netP.BackColor = Th.Bg; _cpuP.BackColor = Th.Bg; _cpuP.Invalidate(); _netP.Invalidate(); }); };
+        onTh = () => { if (!IsDisposed) BeginInvoke(() => { BackColor = Th.Bg; _netP.BackColor = Th.Bg; _netP.Invalidate(); }); };
         Th.ThemeChanged += onTh;
         FormClosed += (_, _) => Th.ThemeChanged -= onTh;
     }
@@ -357,10 +415,7 @@ sealed class ClientForm : BorderlessForm
 
     void Tick()
     {
-        var s = _mon.GetSnapshot();
-        _latestSnapshot = s;
-        if (s.TotalLoadPercent.HasValue) { _lh.Enqueue(s.TotalLoadPercent.Value); if (_lh.Count > HL) _lh.Dequeue(); }
-        _cpuP.Invalidate(); _netP.Invalidate();
+        _netP.Invalidate();
         _pawForm?.RefreshView();
     }
 
@@ -368,6 +423,15 @@ sealed class ClientForm : BorderlessForm
     {
         var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
         int x = 8, y = 4, w = _netP.Width - 16;
+
+        if (_svcRunning)
+        {
+            using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, 44, 6); g.FillPath(bg, p); }
+            using (var dot = new SolidBrush(Th.Grn)) g.FillEllipse(dot, x + 12, y + 10, 10, 10);
+            using (var sf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold)) using (var sb = new SolidBrush(Th.Grn)) g.DrawString("SERVICE RUNNING", sf, sb, x + 28, y + 6);
+            using (var df = new Font("Segoe UI", 7.5f)) using (var db = new SolidBrush(Th.Dim)) g.DrawString("CpuMonClient is active — not connecting to avoid interference", df, db, x + 28, y + 24);
+            return;
+        }
 
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, 44, 6); g.FillPath(bg, p); }
 
@@ -404,72 +468,4 @@ sealed class ClientForm : BorderlessForm
         }
     }
 
-    void PaintCpu(object? sender, PaintEventArgs e)
-    {
-        var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-        var s = _latestSnapshot;
-        if (!s.IsAvailable) { using var fb = new SolidBrush(Th.Dim); using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center }; g.DrawString("CPU unavailable.\nRun as Admin.", Font, fb, _cpuP.ClientRectangle, sf); return; }
-        if (_md.SelectedIndex == 1) DrawPerCore(g, s); else DrawPackage(g, s);
-    }
-
-    void DrawPackage(Graphics g, CpuSnapshot s)
-    {
-        int x = 8, y = 8, w = _cpuP.Width - 16, h = 46, gap = 6;
-        if (!AppState.Admin) { using var wf = new Font("Segoe UI", 7.5f); using var wb = new SolidBrush(Th.Yel); g.DrawString("⚠ Not Admin", wf, wb, x, y); y += 16; }
-        float ld = s.TotalLoadPercent ?? 0;
-        DrawCard(g, x, y, w, h, "CPU LOAD", Th.F(s.TotalLoadPercent, "0.0", "%"), ld / 100f, Th.LdC(ld)); y += h + gap;
-        DrawCard(g, x, y, w, h, "FREQUENCY", Th.FF(s.PackageFrequencyMHz), Math.Clamp((s.PackageFrequencyMHz ?? 0) / 5500f, 0, 1), Th.Blu); y += h + gap;
-        float tp = s.PackageTemperatureC ?? 0;
-        DrawCard(g, x, y, w, h, "TEMPERATURE", Th.F(s.PackageTemperatureC, "0.0", "°C"), Math.Clamp(tp / 105f, 0, 1), Th.TpC(tp)); y += h + gap;
-        if (s.PackagePowerW is > 0) { DrawCard(g, x, y, w, h, "POWER", Th.F(s.PackagePowerW, "0.0", "W"), Math.Clamp(s.PackagePowerW.Value / 150f, 0, 1), Th.Org); y += h + gap; }
-        if (_lh.Count > 2) { int sH = Math.Max(36, _cpuP.Height - y - 6); DrawSparkline(g, x, y, w, sH, _lh, "LOAD HISTORY", Th.Blu); }
-    }
-
-    void DrawPerCore(Graphics g, CpuSnapshot s)
-    {
-        if (s.Cores.Count == 0) { using var fb = new SolidBrush(Th.Dim); using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center }; g.DrawString("No core data.", Font, fb, _cpuP.ClientRectangle, sf); return; }
-        int pad = 8, gap = 5, cols = s.Cores.Count > 8 ? 2 : 1;
-        int cW = (_cpuP.Width - pad * 2 - (cols - 1) * gap) / cols, cH = 50;
-        for (int i = 0; i < s.Cores.Count; i++) { int col = i % cols, row = i / cols; int cx = pad + col * (cW + gap), cy = pad + row * (cH + gap); if (cy + cH > _cpuP.Height) break; DrawCoreCard(g, cx, cy, cW, cH, s.Cores[i]); }
-    }
-
-    static void DrawCard(Graphics g, int x, int y, int w, int h, string l, string v, float bar, Color bc)
-    {
-        using var bg = new SolidBrush(Th.Card); using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p);
-        using var lf = new Font("Segoe UI", 7.5f); using var lb = new SolidBrush(Th.Dim); g.DrawString(l, lf, lb, x + 10, y + 6);
-        using var vf = new Font("Segoe UI Semibold", 13f, FontStyle.Bold); using var vb = new SolidBrush(Th.Brt);
-        var sz = g.MeasureString(v, vf); g.DrawString(v, vf, vb, x + w - sz.Width - 10, y + (h - sz.Height) / 2);
-        int bx = x + 10, by = y + h - 10, bw = (int)(w * 0.45f), bh = 4;
-        using var tb = new SolidBrush(Color.FromArgb(50, 50, 60)); g.FillRectangle(tb, bx, by, bw, bh);
-        if (bar > 0.005f) { int fw = Math.Max(4, (int)(bw * Math.Clamp(bar, 0, 1))); using var fb = new SolidBrush(bc); g.FillRectangle(fb, bx, by, fw, bh); }
-    }
-
-    static void DrawCoreCard(Graphics g, int x, int y, int w, int h, CoreSnapshot c)
-    {
-        using var bg = new SolidBrush(Th.Card); using var p = Th.RR(x, y, w, h, 5); g.FillPath(bg, p);
-        float ld = c.LoadPercent ?? 0;
-        using var hf = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold); using var hb = new SolidBrush(Th.Blu); g.DrawString($"Core {c.Index}", hf, hb, x + 8, y + 5);
-        using var vf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold); using var vlb = new SolidBrush(Th.LdC(ld));
-        string ls = Th.F(c.LoadPercent, "0", "%"); var lsz = g.MeasureString(ls, vf); g.DrawString(ls, vf, vlb, x + w - lsz.Width - 8, y + 4);
-        float fr = c.FrequencyMHz ?? 0; string fs = fr > 1000 ? Th.F(fr / 1000f, "0.00", "GHz") : Th.F(c.FrequencyMHz, "0", "MHz");
-        using var df = new Font("Segoe UI", 7.5f); using var db = new SolidBrush(Th.Dim); g.DrawString($"{fs}  ·  {Th.F(c.TemperatureC, "0", "°C")}", df, db, x + 8, y + 24);
-        int bx = x + 8, by = y + h - 7, bw = w - 16, bh = 3;
-        using var tb = new SolidBrush(Color.FromArgb(50, 50, 60)); g.FillRectangle(tb, bx, by, bw, bh);
-        if (ld > 0.5f) { int fw = Math.Max(2, (int)(bw * ld / 100f)); using var fb = new SolidBrush(Th.LdC(ld)); g.FillRectangle(fb, bx, by, fw, bh); }
-    }
-
-    static void DrawSparkline(Graphics g, int x, int y, int w, int h, Queue<float> data, string lbl, Color col)
-    {
-        using var bg = new SolidBrush(Th.Card); using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p);
-        using var lf = new Font("Segoe UI", 7f); using var lb = new SolidBrush(Th.Dim); g.DrawString(lbl, lf, lb, x + 8, y + 4);
-        float[] pts = data.ToArray(); if (pts.Length < 2) return;
-        int px = x + 4, py = y + 18, pw = w - 8, ph = h - 24;
-        var poly = new PointF[pts.Length + 2];
-        for (int i = 0; i < pts.Length; i++) poly[i] = new PointF(px + (float)i / (pts.Length - 1) * pw, py + ph - Math.Clamp(pts[i], 0, 100) / 100f * ph);
-        poly[pts.Length] = new PointF(px + pw, py + ph); poly[pts.Length + 1] = new PointF(px, py + ph);
-        using var fill = new LinearGradientBrush(new Point(px, py), new Point(px, py + ph), Color.FromArgb(40, col), Color.FromArgb(5, col)); g.FillPolygon(fill, poly);
-        using var pen = new Pen(col, 1.5f) { LineJoin = LineJoin.Round }; g.DrawLines(pen, poly.Take(pts.Length).ToArray());
-        using var vf = new Font("Segoe UI Semibold", 8f, FontStyle.Bold); using var vb = new SolidBrush(Th.Brt);
-        string cur = pts[^1].ToString("0") + "%"; var sz = g.MeasureString(cur, vf); g.DrawString(cur, vf, vb, x + w - sz.Width - 8, y + 3);
-    }
 }

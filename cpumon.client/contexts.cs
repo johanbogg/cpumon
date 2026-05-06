@@ -68,6 +68,11 @@ sealed class AgentContext : ApplicationContext
     volatile bool _connected;
     bool _authDialogOpen;
     Color _lastTrayCol = Color.Empty;
+    readonly ConcurrentDictionary<string, PawRemoteClient> _pawClients = new();
+    PawDashboardForm? _pawForm;
+    ToolStripMenuItem? _pawMenuItem;
+    volatile bool _isPaw;
+    readonly CLog _log = new();
 
     public AgentContext()
     {
@@ -81,6 +86,9 @@ sealed class AgentContext : ApplicationContext
         };
         var menu = new ContextMenuStrip();
         menu.Items.Add("Agent — connecting...");
+        menu.Items.Add(new ToolStripSeparator());
+        _pawMenuItem = new ToolStripMenuItem("PAW Dashboard", null, (_, _) => _uiCtx.Post(_ => ShowPawDashboard(), null)) { Enabled = false };
+        menu.Items.Add(_pawMenuItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit Agent", null, (_, _) =>
         {
@@ -118,9 +126,9 @@ sealed class AgentContext : ApplicationContext
         while (!ct.IsCancellationRequested)
         {
             await Task.Delay(2000, ct).ConfigureAwait(false);
-            var col = _connected ? Th.Grn : Th.Org;
+            var col = _connected ? (_isPaw ? Th.Mag : Th.Grn) : Th.Org;
             string status = _connected
-                ? $"Agent — connected, {_rdpSessions.Count} RDP"
+                ? $"Agent — connected, {_rdpSessions.Count} RDP{(_isPaw ? " [PAW]" : "")}"
                 : "Agent — connecting to service...";
             _uiCtx.Post(_ =>
             {
@@ -136,10 +144,57 @@ sealed class AgentContext : ApplicationContext
                     _tray.Text = status;
                     if (_tray.ContextMenuStrip?.Items.Count > 0)
                         _tray.ContextMenuStrip.Items[0].Text = status;
+                    if (_pawMenuItem != null) _pawMenuItem.Enabled = _isPaw;
                 }
                 catch { }
             }, null);
         }
+    }
+
+    void HandlePawPayload(ServerCommand cmd)
+    {
+        if (cmd.Cmd == "paw_clients" && cmd.PawClientList != null) HandlePawClientList(cmd.PawClientList, cmd.PawOfflineClients);
+        else if (cmd.Cmd == "paw_report" && cmd.PawSource != null && cmd.PawReport != null) HandlePawReport(cmd.PawSource, cmd.PawReport);
+        else if (cmd.Cmd == "paw_processes" && cmd.PawSource != null && cmd.PawProcesses != null) { var src = cmd.PawSource; var procs = cmd.PawProcesses; _uiCtx.Post(_ => _pawForm?.ReceiveProcessList(src, procs), null); }
+        else if (cmd.Cmd == "paw_sysinfo" && cmd.PawSource != null && cmd.PawSysInfo != null) { var src = cmd.PawSource; var si = cmd.PawSysInfo; _uiCtx.Post(_ => _pawForm?.ReceiveSysInfo(src, si), null); }
+        else if (cmd.Cmd == "paw_cmd_result" && cmd.PawSource != null) { var src = cmd.PawSource; bool ok = cmd.PawCmdSuccess; var msg2 = cmd.PawCmdMsg ?? ""; var cid = cmd.PawCmdId; _uiCtx.Post(_ => _pawForm?.ReceiveCmdResult(src, ok, msg2, cid), null); }
+        else if (cmd.Cmd == "paw_term_output" && cmd.PawSource != null && cmd.PawTermId != null && cmd.PawTermOutput != null) { var src = cmd.PawSource; var tid = cmd.PawTermId; var output = cmd.PawTermOutput; _uiCtx.Post(_ => _pawForm?.ReceiveTermOutput(src, tid, output), null); }
+        else if (cmd.Cmd == "paw_file_listing" && cmd.PawSource != null && cmd.PawFileListing != null) { var src = cmd.PawSource; var lst = cmd.PawFileListing; var cid = cmd.CmdId; _uiCtx.Post(_ => _pawForm?.ReceiveFileListing(src, lst, cid), null); }
+        else if (cmd.Cmd == "paw_file_chunk" && cmd.PawSource != null && cmd.PawFileChunk != null) { var src = cmd.PawSource; var chunk = cmd.PawFileChunk; _uiCtx.Post(_ => _pawForm?.ReceiveFileChunk(src, chunk), null); }
+        else if (cmd.Cmd == "paw_rdp_frame" && cmd.PawSource != null && cmd.RdpFrame != null) { var src = cmd.PawSource; var frame = cmd.RdpFrame; _uiCtx.Post(_ => _pawForm?.ReceiveRdpFrame(src, frame), null); }
+    }
+
+    void HandlePawClientList(List<string> online, List<string>? offline)
+    {
+        var all = offline == null ? online : online.Concat(offline).ToList();
+        foreach (var k in _pawClients.Keys.Except(all).ToList()) _pawClients.TryRemove(k, out _);
+        foreach (var id in online) { var pc = _pawClients.GetOrAdd(id, _ => new PawRemoteClient { MachineName = id }); pc.IsOffline = false; }
+        if (offline != null) foreach (var id in offline) { var pc = _pawClients.GetOrAdd(id, _ => new PawRemoteClient { MachineName = id }); pc.IsOffline = true; }
+        _uiCtx.Post(_ => _pawForm?.RefreshView(), null);
+    }
+
+    void HandlePawReport(string src, MachineReport report)
+    {
+        var pc = _pawClients.GetOrAdd(src, _ => new PawRemoteClient { MachineName = src });
+        pc.LastReport = report;
+        pc.LastSeen = DateTime.UtcNow;
+        _uiCtx.Post(_ => _pawForm?.RefreshView(), null);
+    }
+
+    void ShowPawDashboard()
+    {
+        if (_pawForm != null && !_pawForm.IsDisposed) { _pawForm.BringToFront(); return; }
+        _pawForm = new PawDashboardForm(_pawClients, SendPawCommand, _log);
+        _pawForm.FormClosed += (_, _) => _pawForm = null;
+        _pawForm.Show();
+    }
+
+    void SendPawCommand(string target, ServerCommand cmd)
+    {
+        cmd.IssuedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        cmd.Nonce = Guid.NewGuid().ToString("N");
+        var msg = new ClientMessage { Type = "paw_command", PawTarget = target, PawCmd = cmd };
+        lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(msg)); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Debug("Agent.Paw", "Failed to send paw_command to service", ex); } }
     }
 
     async Task PipeLoop(CancellationToken ct)
@@ -310,6 +365,20 @@ sealed class AgentContext : ApplicationContext
                             case "agent_exit":
                                 _uiCtx.Post(_ => Application.ExitThread(), null);
                                 return;
+
+                            case "paw_granted":
+                                _isPaw = true;
+                                break;
+
+                            case "paw_revoked":
+                                _isPaw = false;
+                                _uiCtx.Post(_ => { _pawForm?.Close(); _pawForm = null; _pawClients.Clear(); }, null);
+                                break;
+
+                            default:
+                                if (msg.Type.StartsWith("paw_") && msg.PawPayload != null)
+                                    HandlePawPayload(msg.PawPayload);
+                                break;
                         }
                     }
                     catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to handle service command", ex); }
@@ -342,6 +411,7 @@ sealed class AgentContext : ApplicationContext
             _cts.Cancel();
             _tray.Visible = false;
             _tray.Dispose();
+            _pawForm?.Close();
             foreach (var r in _rdpSessions.Values) r.Dispose();
             foreach (var s in CmdExec.Sessions.Values) s.Dispose();
             CmdExec.Sessions.Clear();
@@ -375,6 +445,10 @@ sealed class DaemonContext : ApplicationContext
     long _authFailedAt;
     bool _reAuthPending;
     Color _lastTrayCol = Color.Empty;
+    readonly ConcurrentDictionary<string, PawRemoteClient> _pawClients = new();
+    PawDashboardForm? _pawForm;
+    ToolStripMenuItem? _pawMenuItem;
+    readonly CLog _log = new(30);
 
     public DaemonContext(string? forceIp, string? token)
     {
@@ -389,6 +463,8 @@ sealed class DaemonContext : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.Add("Starting...");
         menu.Items.Add(new ToolStripSeparator());
+        _pawMenuItem = new ToolStripMenuItem("PAW Dashboard", null, (s, e) => _uiCtx.Post(_ => ShowPawDashboard(), null)) { Enabled = false };
+        menu.Items.Add(_pawMenuItem);
         menu.Items.Add("Exit", null, (_, _) => { _cts.Cancel(); _tray.Visible = false; CmdExec.DisposeAll(); ExitThread(); });
         _tray.ContextMenuStrip = menu;
 
@@ -419,7 +495,7 @@ sealed class DaemonContext : ApplicationContext
             string st = _ns switch { NetState.Connected => $"Connected {_sa} ↑{_sc} · {_peerCount} peer{(_peerCount == 1 ? "" : "s")}{(_isPaw ? " [PAW]" : "")}", NetState.AuthFailed => "Auth failed!", NetState.Searching => "Searching...", _ => $"{_ns} {_sa}" };
             _uiCtx.Post(_ =>
             {
-                try { if (col != _lastTrayCol) { var old = _tray.Icon; _tray.Icon = MkIco(col); old?.Dispose(); _lastTrayCol = col; } _tray.Text = $"CPU Monitor — {st}"; if (_tray.ContextMenuStrip?.Items.Count > 0) _tray.ContextMenuStrip.Items[0].Text = st; } catch { }
+                try { if (col != _lastTrayCol) { var old = _tray.Icon; _tray.Icon = MkIco(col); old?.Dispose(); _lastTrayCol = col; } _tray.Text = $"CPU Monitor — {st}"; if (_tray.ContextMenuStrip?.Items.Count > 0) _tray.ContextMenuStrip.Items[0].Text = st; if (_pawMenuItem != null) _pawMenuItem.Enabled = _isPaw; } catch { }
             }, null);
         }
     }
@@ -524,8 +600,17 @@ sealed class DaemonContext : ApplicationContext
                         }
                         else if (cmd.Cmd == "auth_pending") { _approvalRequested = true; _ns = NetState.AuthPending; }
                         else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
-                        else if (cmd.Cmd == "paw_granted") _isPaw = true;
-                        else if (cmd.Cmd == "paw_revoked") _isPaw = false;
+                        else if (cmd.Cmd == "paw_granted") { _isPaw = true; }
+                        else if (cmd.Cmd == "paw_revoked") { _isPaw = false; _uiCtx.Post(_ => { _pawForm?.Close(); _pawForm = null; _pawClients.Clear(); }, null); }
+                        else if (cmd.Cmd == "paw_clients" && cmd.PawClientList != null) HandlePawClientList(cmd.PawClientList, cmd.PawOfflineClients);
+                        else if (cmd.Cmd == "paw_report" && cmd.PawSource != null && cmd.PawReport != null) HandlePawReport(cmd.PawSource, cmd.PawReport);
+                        else if (cmd.Cmd == "paw_processes" && cmd.PawSource != null && cmd.PawProcesses != null) { var src = cmd.PawSource; var procs = cmd.PawProcesses; _uiCtx.Post(_ => _pawForm?.ReceiveProcessList(src, procs), null); }
+                        else if (cmd.Cmd == "paw_sysinfo" && cmd.PawSource != null && cmd.PawSysInfo != null) { var src = cmd.PawSource; var si = cmd.PawSysInfo; _uiCtx.Post(_ => _pawForm?.ReceiveSysInfo(src, si), null); }
+                        else if (cmd.Cmd == "paw_cmd_result" && cmd.PawSource != null) { var src = cmd.PawSource; bool ok = cmd.PawCmdSuccess; var msg2 = cmd.PawCmdMsg ?? ""; var cid = cmd.PawCmdId; _uiCtx.Post(_ => _pawForm?.ReceiveCmdResult(src, ok, msg2, cid), null); }
+                        else if (cmd.Cmd == "paw_term_output" && cmd.PawSource != null && cmd.PawTermId != null && cmd.PawTermOutput != null) { var src = cmd.PawSource; var tid = cmd.PawTermId; var output = cmd.PawTermOutput; _uiCtx.Post(_ => _pawForm?.ReceiveTermOutput(src, tid, output), null); }
+                        else if (cmd.Cmd == "paw_file_listing" && cmd.PawSource != null && cmd.PawFileListing != null) { var src = cmd.PawSource; var lst = cmd.PawFileListing; var cid = cmd.CmdId; _uiCtx.Post(_ => _pawForm?.ReceiveFileListing(src, lst, cid), null); }
+                        else if (cmd.Cmd == "paw_file_chunk" && cmd.PawSource != null && cmd.PawFileChunk != null) { var src = cmd.PawSource; var chunk = cmd.PawFileChunk; _uiCtx.Post(_ => _pawForm?.ReceiveFileChunk(src, chunk), null); }
+                        else if (cmd.Cmd == "paw_rdp_frame" && cmd.PawSource != null && cmd.RdpFrame != null) { var src = cmd.PawSource; var frame = cmd.RdpFrame; _uiCtx.Post(_ => _pawForm?.ReceiveRdpFrame(src, frame), null); }
                         else if (cmd.Cmd == "send_message" && cmd.Message != null) { var t = cmd.Message; _uiCtx.Post(_ => ForegroundMessage.Show(t), null); }
                         else CmdExec.Run(cmd, _tl, ref _wr);
                     }
@@ -594,9 +679,54 @@ sealed class DaemonContext : ApplicationContext
         lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }
     }
 
+    void HandlePawClientList(List<string> online, List<string>? offline)
+    {
+        var all = offline == null ? online : online.Concat(offline).ToList();
+        foreach (var k in _pawClients.Keys.Except(all).ToList())
+            _pawClients.TryRemove(k, out _);
+        foreach (var c in online)
+        {
+            var pc = _pawClients.GetOrAdd(c, _ => new PawRemoteClient { MachineName = c });
+            pc.IsOffline = false;
+        }
+        if (offline != null)
+        {
+            foreach (var c in offline)
+            {
+                var pc = _pawClients.GetOrAdd(c, _ => new PawRemoteClient { MachineName = c });
+                pc.IsOffline = true;
+            }
+        }
+        _uiCtx.Post(_ => _pawForm?.RefreshView(), null);
+    }
+
+    void HandlePawReport(string source, MachineReport report)
+    {
+        var pc = _pawClients.GetOrAdd(source, _ => new PawRemoteClient { MachineName = source });
+        pc.LastReport = report;
+        pc.LastSeen = DateTime.UtcNow;
+        _uiCtx.Post(_ => _pawForm?.RefreshView(), null);
+    }
+
+    void ShowPawDashboard()
+    {
+        if (_pawForm != null && !_pawForm.IsDisposed) { _pawForm.BringToFront(); return; }
+        _pawForm = new PawDashboardForm(_pawClients, SendPawCommand, _log);
+        _pawForm.FormClosed += (_, _) => _pawForm = null;
+        _pawForm.Show();
+    }
+
+    void SendPawCommand(string target, ServerCommand cmd)
+    {
+        cmd.IssuedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        cmd.Nonce = Guid.NewGuid().ToString("N");
+        var msg = new ClientMessage { Type = "paw_command", PawTarget = target, PawCmd = cmd };
+        lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(msg)); _wr?.Flush(); }
+    }
+
     protected override void Dispose(bool d)
     {
-        if (d) { _cts.Cancel(); _tray.Visible = false; _tray.Dispose(); lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); } _mon.Dispose(); CmdExec.DisposeAll(); }
+        if (d) { _cts.Cancel(); _tray.Visible = false; _tray.Dispose(); lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); } _mon.Dispose(); CmdExec.DisposeAll(); _pawForm?.Close(); }
         base.Dispose(d);
     }
 }

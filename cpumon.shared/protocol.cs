@@ -518,6 +518,7 @@ public static class AgentIpc
         [JsonPropertyName("cmdInput")] public string? CmdInput { get; set; }
         [JsonPropertyName("cmdId")] public string? CmdId { get; set; }
         [JsonPropertyName("fileName")] public string? FileName { get; set; }
+        [JsonPropertyName("pawPayload")] public ServerCommand? PawPayload { get; set; }
     }
 }
 

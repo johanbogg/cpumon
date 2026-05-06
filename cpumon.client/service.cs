@@ -231,6 +231,7 @@ sealed class CpuMonService : ServiceBase
                         else if (msg?.Type is "terminal_output" or "terminal_closed" or "cmdresult")
                         { lock (_tl) { try { _wr?.WriteLine(line); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.AgentPipe", $"Failed to forward {msg.Type} from agent", ex); } } }
                         else if (msg?.Type == "pong") Interlocked.Exchange(ref _agentLastPong, DateTime.UtcNow.Ticks);
+                        else if (msg?.Type == "paw_command") { lock (_tl) { try { _wr?.WriteLine(line); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.AgentPipe", "Failed to forward paw_command from agent to server", ex); } } }
                         else if (msg?.Type == "token_reply")
                         {
                             var am = JsonSerializer.Deserialize<AgentIpc.AgentMessage>(line);
@@ -635,6 +636,7 @@ sealed class CpuMonService : ServiceBase
                 }
                 else if (cmd.Cmd == "send_message" && cmd.Message != null) SendToAgent(new AgentIpc.AgentMessage { Type = "msg_popup", Message = cmd.Message });
                 else if (cmd.Cmd == "update_push" && cmd.UpdateChunk != null) HandleUpdateChunk(cmd.UpdateChunk);
+                else if (cmd.Cmd.StartsWith("paw_")) SendToAgent(new AgentIpc.AgentMessage { Type = cmd.Cmd, PawPayload = cmd });
                 else CmdExec.Run(cmd, _tl, ref _wr);
             }
             catch (Exception ex) { LogSink.Warn("Service.CmdLoop", "Command dispatch failed", ex); }
@@ -732,14 +734,14 @@ static class ServiceManager
         Thread.Sleep(500);
 
         // Create and configure service
-        ScExe($@"create {SvcName} binPath= ""{binPath}"" start= auto obj= LocalSystem DisplayName= ""{SvcDisplay}""");
+        ScExeOrThrow($@"create {SvcName} binPath= ""{binPath}"" start= auto obj= LocalSystem DisplayName= ""{SvcDisplay}""", "Service create");
         ScExe($"description {SvcName} \"{SvcDesc}\"");
         // Restart on failure: 3 attempts, 60s delay, reset counter after 24h
         ScExe($"failure {SvcName} reset= 86400 actions= restart/60000/restart/60000/restart/60000");
 
         RegisterAgentTask(dest);
 
-        ScExe($"start {SvcName}");
+        ScExeOrThrow($"start {SvcName}", "Service start");
 
         Console.WriteLine($"Installed: {SvcDisplay}");
         Console.WriteLine($"  Exe:     {dest}");
@@ -770,12 +772,32 @@ static class ServiceManager
 
     static void ScExe(string args) => Run("sc.exe", args);
 
-    static void Run(string exe, string args)
+    static void ScExeOrThrow(string args, string label)
     {
-        Process.Start(new ProcessStartInfo(exe, args)
+        int code = Run("sc.exe", args);
+        if (code != 0) throw new InvalidOperationException($"{label} failed (sc.exe exit {code})");
+    }
+
+    static int Run(string exe, string args)
+    {
+        var p = Process.Start(new ProcessStartInfo(exe, args)
         { UseShellExecute = false, CreateNoWindow = true,
-          RedirectStandardOutput = true, RedirectStandardError = true })
-        ?.WaitForExit(10000);
+          RedirectStandardOutput = true, RedirectStandardError = true });
+        if (p == null) return -1;
+        p.WaitForExit(10000);
+        return p.ExitCode;
+    }
+
+    public static bool IsInstalled()
+    {
+        try { using var sc = new ServiceController(SvcName); var _ = sc.Status; return true; }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    public static bool IsRunning()
+    {
+        try { using var sc = new ServiceController(SvcName); return sc.Status is ServiceControllerStatus.Running or ServiceControllerStatus.StartPending; }
+        catch { return false; }
     }
 
     static bool IsAdmin()
