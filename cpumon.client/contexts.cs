@@ -306,6 +306,10 @@ sealed class AgentContext : ApplicationContext
                                     finally { _authDialogOpen = false; }
                                 }, null);
                                 break;
+
+                            case "agent_exit":
+                                _uiCtx.Post(_ => Application.ExitThread(), null);
+                                return;
                         }
                     }
                     catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to handle service command", ex); }

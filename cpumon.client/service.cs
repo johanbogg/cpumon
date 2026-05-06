@@ -44,6 +44,7 @@ sealed class CpuMonService : ServiceBase
     StreamWriter? _agentWriter;
     readonly object _agentLock = new();
     volatile bool _agentConnected;
+    int _agentProcessId;
     long _agentLastPong = DateTime.UtcNow.Ticks;
     long _authFailedAt;
     volatile bool _authRequestPending;
@@ -97,10 +98,10 @@ sealed class CpuMonService : ServiceBase
     {
         try
         {
-            RequestAdditionalTime(5000);
-            _cts.Cancel();
+            RequestAdditionalTime(10000);
             StopAgentRdpSessions();
-            EndInteractiveAgentTask();
+            StopInteractiveAgentProcess();
+            _cts.Cancel();
             lock (_tl) { DisposeQuietly(_wr); DisposeQuietly(_rd); DisposeQuietly(_ssl); DisposeQuietly(_tcp); _wr = null; _rd = null; _ssl = null; _tcp = null; }
             lock (_agentLock) { DisposeQuietly(_agentReader); DisposeQuietly(_agentWriter); DisposeQuietly(_agentPipe); _agentReader = null; _agentWriter = null; _agentPipe = null; }
             DisposeQuietly(_updateStream);
@@ -151,6 +152,7 @@ sealed class CpuMonService : ServiceBase
     {
         while (!ct.IsCancellationRequested)
         {
+            int connectedAgentPid = 0;
             try
             {
                 // Grant authenticated users read/write so user-session agents can connect
@@ -176,6 +178,7 @@ sealed class CpuMonService : ServiceBase
                 {
                     if (GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(), out uint clientPid))
                     {
+                        connectedAgentPid = (int)clientPid;
                         string? clientExe = Process.GetProcessById((int)clientPid).MainModule?.FileName;
                         string? ourExe = Environment.ProcessPath;
                         authorized = clientExe != null && ourExe != null &&
@@ -191,6 +194,7 @@ sealed class CpuMonService : ServiceBase
                     _agentPipe = pipe;
                     _agentReader = new StreamReader(pipe, Encoding.UTF8);
                     _agentWriter = new StreamWriter(pipe, Encoding.UTF8) { AutoFlush = false };
+                    _agentProcessId = connectedAgentPid;
                 }
 
                 // Consume the hello line sent by the agent for protocol sync
@@ -259,6 +263,7 @@ sealed class CpuMonService : ServiceBase
                 {
                     _agentReader?.Dispose(); _agentWriter?.Dispose(); _agentPipe?.Dispose();
                     _agentReader = null; _agentWriter = null; _agentPipe = null;
+                    if (_agentProcessId == connectedAgentPid) _agentProcessId = 0;
                 }
             }
         }
@@ -407,6 +412,46 @@ sealed class CpuMonService : ServiceBase
             ?.WaitForExit(5000);
         }
         catch (Exception ex) { LogSink.Debug("Service.AgentLaunch", "Failed to end interactive agent task", ex); }
+    }
+
+    void StopInteractiveAgentProcess()
+    {
+        int pid;
+        lock (_agentLock)
+        {
+            pid = _agentProcessId;
+            if (_agentConnected && _agentWriter != null)
+            {
+                try
+                {
+                    _agentWriter.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "agent_exit" }));
+                    _agentWriter.Flush();
+                }
+                catch (Exception ex) { LogSink.Debug("Service.AgentLaunch", "Failed to request interactive agent exit", ex); }
+            }
+        }
+
+        EndInteractiveAgentTask();
+        if (pid <= 0) return;
+
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            if (proc.WaitForExit(2000)) return;
+
+            string? procPath = null;
+            try { procPath = proc.MainModule?.FileName; } catch { }
+            string? ourPath = Environment.ProcessPath;
+            if (procPath != null && ourPath != null &&
+                string.Equals(Path.GetFullPath(procPath), Path.GetFullPath(ourPath), StringComparison.OrdinalIgnoreCase))
+            {
+                LogSink.Info("Service.AgentLaunch", $"Killing interactive agent PID {pid} during service stop");
+                proc.Kill(true);
+                proc.WaitForExit(3000);
+            }
+        }
+        catch (ArgumentException) { }
+        catch (Exception ex) { LogSink.Warn("Service.AgentLaunch", "Failed to stop interactive agent process", ex); }
     }
 
     void StopAgentRdpSessions()
