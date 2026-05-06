@@ -116,7 +116,6 @@ cpumon.linux/
 
 ## Release checklist
 
-1. `.\build.ps1` — confirm clean build and note version from output.
+1. `.\build.ps1` — confirm clean build; zips are created automatically in `dist\`.
 2. Commit, push, tag `vX.Y.Z`, push tag.
-3. Zip `dist\client\*` → `cpumon-client-X.Y.Z.zip`, `dist\server\*` → `cpumon-server-X.Y.Z.zip`, `cpumon.linux\*` → `cpumon-linux-X.Y.Z.zip`.
-4. `gh release create vX.Y.Z cpumon-client-X.Y.Z.zip cpumon-server-X.Y.Z.zip cpumon-linux-X.Y.Z.zip --title vX.Y.Z --notes "..."`.
+3. `gh release create vX.Y.Z dist\cpumon-client-X.Y.Z.zip dist\cpumon-server-X.Y.Z.zip dist\cpumon-linux-X.Y.Z.zip --title vX.Y.Z --notes "..."`.

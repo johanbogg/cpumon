@@ -73,9 +73,27 @@ if (-not $ClientOnly) {
 Write-Host ''
 
 $clientExe = Join-Path $OutDir 'client\cpumon.client.exe'
-if (Test-Path $clientExe) {
-    $ver = (Get-Item $clientExe).VersionInfo.FileVersion
-    Write-Host "  Version : $ver" -ForegroundColor Yellow
-}
+$serverExe = Join-Path $OutDir 'server\cpumon.server.exe'
+$ver = $null
+if     (Test-Path $clientExe) { $ver = (Get-Item $clientExe).VersionInfo.FileVersion }
+elseif (Test-Path $serverExe) { $ver = (Get-Item $serverExe).VersionInfo.FileVersion }
+if ($ver) { $ver = $ver -replace '\.0$', '' }
+
+if ($ver) { Write-Host "  Version : $ver" -ForegroundColor Yellow }
 Write-Host "  Output  : $OutDir" -ForegroundColor DarkGray
+
+if ($ver) {
+    Write-Step "Packaging zips..."
+    if (Test-Path $clientExe) {
+        Compress-Archive -Path (Join-Path $OutDir 'client\*') -DestinationPath (Join-Path $OutDir "cpumon-client-$ver.zip") -Force
+    }
+    if (Test-Path $serverExe) {
+        Compress-Archive -Path (Join-Path $OutDir 'server\*') -DestinationPath (Join-Path $OutDir "cpumon-server-$ver.zip") -Force
+    }
+    $linuxSrc = Join-Path $PSScriptRoot 'cpumon.linux'
+    if (Test-Path $linuxSrc) {
+        Compress-Archive -Path (Join-Path $linuxSrc '*') -DestinationPath (Join-Path $OutDir "cpumon-linux-$ver.zip") -Force
+    }
+    Write-Ok
+}
 Write-Host ''
