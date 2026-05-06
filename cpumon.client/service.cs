@@ -471,7 +471,10 @@ sealed class CpuMonService : ServiceBase
         if (!string.Equals(input.Type, "mouse_move", StringComparison.Ordinal)) return true;
 
         var now = Environment.TickCount64;
-        if (_lastRdpMouseMoveMs.TryGetValue(rdpId, out var last) && now - last < 50)
+        if (input.SentAtUnixMs > 0 &&
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - input.SentAtUnixMs > Proto.RdpMouseMoveStaleMs)
+            return false;
+        if (_lastRdpMouseMoveMs.TryGetValue(rdpId, out var last) && now - last < Proto.RdpMouseMoveIntervalMs)
             return false;
         _lastRdpMouseMoveMs[rdpId] = now;
         return true;
