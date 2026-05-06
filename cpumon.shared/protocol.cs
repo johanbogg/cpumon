@@ -42,7 +42,7 @@ public static class Proto
     public const int RdpTileSize = 128;
     public const int RdpJpegQuality = 25;
     public const int RdpMouseMoveIntervalMs = 100;
-    public const int RdpMouseMoveStaleMs = 500;
+    public const int RdpMouseMoveStaleMs = 1000;
     public static string AppVersion =>
         System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "1.0.0";
 }

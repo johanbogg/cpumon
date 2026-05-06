@@ -49,7 +49,6 @@ sealed class CpuMonService : ServiceBase
     long _authFailedAt;
     volatile bool _authRequestPending;
     readonly ConcurrentDictionary<string, byte> _activeRdpSessions = new();
-    readonly ConcurrentDictionary<string, long> _lastRdpMouseMoveMs = new();
     volatile bool _isPaw;
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -261,7 +260,6 @@ sealed class CpuMonService : ServiceBase
             {
                 _agentConnected = false;
                 _activeRdpSessions.Clear();
-                _lastRdpMouseMoveMs.Clear();
                 lock (_agentLock)
                 {
                     _agentReader?.Dispose(); _agentWriter?.Dispose(); _agentPipe?.Dispose();
@@ -462,7 +460,6 @@ sealed class CpuMonService : ServiceBase
         foreach (var id in _activeRdpSessions.Keys)
             SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_stop", RdpId = id });
         _activeRdpSessions.Clear();
-        _lastRdpMouseMoveMs.Clear();
     }
 
     bool ShouldForwardRdpInput(string rdpId, RdpInputEvent input)
@@ -470,13 +467,9 @@ sealed class CpuMonService : ServiceBase
         if (!_activeRdpSessions.ContainsKey(rdpId)) return false;
         if (!string.Equals(input.Type, "mouse_move", StringComparison.Ordinal)) return true;
 
-        var now = Environment.TickCount64;
         if (input.SentAtUnixMs > 0 &&
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - input.SentAtUnixMs > Proto.RdpMouseMoveStaleMs)
             return false;
-        if (_lastRdpMouseMoveMs.TryGetValue(rdpId, out var last) && now - last < Proto.RdpMouseMoveIntervalMs)
-            return false;
-        _lastRdpMouseMoveMs[rdpId] = now;
         return true;
     }
 
@@ -620,7 +613,7 @@ sealed class CpuMonService : ServiceBase
                 else if (cmd.Cmd == "auth_pending") { _approvalRequested = true; _ns = NetState.AuthPending; }
                 else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
                 else if (cmd.Cmd == "rdp_open" && cmd.RdpId != null) { _activeRdpSessions[cmd.RdpId] = 0; SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_start", RdpId = cmd.RdpId, Fps = cmd.RdpFps, Quality = cmd.RdpQuality }); }
-                else if (cmd.Cmd == "rdp_close" && cmd.RdpId != null) { _activeRdpSessions.TryRemove(cmd.RdpId, out _); _lastRdpMouseMoveMs.TryRemove(cmd.RdpId, out _); SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_stop", RdpId = cmd.RdpId }); }
+                else if (cmd.Cmd == "rdp_close" && cmd.RdpId != null) { _activeRdpSessions.TryRemove(cmd.RdpId, out _); SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_stop", RdpId = cmd.RdpId }); }
                 else if (cmd.Cmd == "rdp_set_fps" && cmd.RdpId != null && _activeRdpSessions.ContainsKey(cmd.RdpId)) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_set_fps", RdpId = cmd.RdpId, Fps = cmd.RdpFps });
                 else if (cmd.Cmd == "rdp_set_quality" && cmd.RdpId != null && _activeRdpSessions.ContainsKey(cmd.RdpId)) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_set_quality", RdpId = cmd.RdpId, Quality = cmd.RdpQuality });
                 else if (cmd.Cmd == "rdp_refresh" && cmd.RdpId != null && _activeRdpSessions.ContainsKey(cmd.RdpId)) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_refresh", RdpId = cmd.RdpId });
