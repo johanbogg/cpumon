@@ -147,7 +147,7 @@ public sealed class RdpViewerDialog : Form
         _rdpId = rdpId;
         _sendCmd = sendCmd;
         _onClose = onClose;
-        _mouseMoveTimer = new System.Windows.Forms.Timer { Interval = 50 };
+        _mouseMoveTimer = new System.Windows.Forms.Timer { Interval = Proto.RdpMouseMoveIntervalMs };
         _mouseMoveTimer.Tick += (_, _) => FlushMouseMove();
 
         Text = $"🖥 Remote Desktop — {targetName}";
@@ -307,7 +307,7 @@ public sealed class RdpViewerDialog : Form
             return;
         }
         _hasPendingMouseMove = false;
-        SendIfOpen(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_move", X = _pendingMouseX, Y = _pendingMouseY } });
+        SendIfOpen(new ServerCommand { Cmd = "rdp_input", RdpId = _rdpId, RdpInput = new RdpInputEvent { Type = "mouse_move", X = _pendingMouseX, Y = _pendingMouseY, SentAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() } });
     }
 
     void OnMouseDown(object? s, MouseEventArgs e)

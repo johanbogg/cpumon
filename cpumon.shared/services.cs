@@ -288,6 +288,11 @@ public static class InputInjector
 
     public static void InjectInput(RdpInputEvent evt)
     {
+        if (string.Equals(evt.Type, "mouse_move", StringComparison.Ordinal) &&
+            evt.SentAtUnixMs > 0 &&
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - evt.SentAtUnixMs > Proto.RdpMouseMoveStaleMs)
+            return;
+
         switch (evt.Type)
         {
             case "mouse_move":

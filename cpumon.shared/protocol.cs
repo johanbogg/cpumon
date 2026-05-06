@@ -41,6 +41,8 @@ public static class Proto
     public const int RdpFpsDefault = 5;
     public const int RdpTileSize = 128;
     public const int RdpJpegQuality = 25;
+    public const int RdpMouseMoveIntervalMs = 100;
+    public const int RdpMouseMoveStaleMs = 1000;
     public static string AppVersion =>
         System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "1.0.0";
 }
@@ -501,6 +503,7 @@ public sealed class RdpInputEvent
     [JsonPropertyName("vk")] public int VirtualKey { get; set; }
     [JsonPropertyName("scan")] public int ScanCode { get; set; }
     [JsonPropertyName("ext")] public bool Extended { get; set; }
+    [JsonPropertyName("at")] public long SentAtUnixMs { get; set; }
 }
 public static class AgentIpc
 {

@@ -480,6 +480,8 @@ sealed class ServerForm : BorderlessForm
     {
         string? pawOwner = null;
         if (cmdId != null) source.PawCmdOwners.TryRemove(cmdId, out pawOwner);
+        if (pawOwner != null && fallbackCmd != null)
+            source.PawCmdOwners.TryRemove($"cmd:{fallbackCmd}", out _);
         if (pawOwner == null && fallbackCmd != null)
             source.PawCmdOwners.TryRemove($"cmd:{fallbackCmd}", out pawOwner);
         if (pawOwner == null)
@@ -685,7 +687,7 @@ sealed class ServerForm : BorderlessForm
                     if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
                     { _store.Forget(m); if (_cls.TryRemove(m, out var rc)) rc.Dispose(); _ct.Invalidate(); }
                     break;
-                case "services": cl.Send(new ServerCommand { Cmd = "list_services", CmdId = Guid.NewGuid().ToString("N")[..8] }); _log.Add($"Svcs→{m}", Th.Grn); break;
+                case "services": cl.Send(new ServerCommand { Cmd = "list_services", CmdId = Guid.NewGuid().ToString("N")[..8] }); _log.Add($"Services→{m}", Th.Grn); break;
                 case "events": cl.Send(new ServerCommand { Cmd = "list_events", CmdId = Guid.NewGuid().ToString("N")[..8] }); _log.Add($"Evts→{m}", Th.Yel); break;
                 case "msg":
                     BeginInvoke(() =>
@@ -1099,7 +1101,7 @@ sealed class ServerForm : BorderlessForm
             DrawBtn(g, bx, by, 104, 26, "PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 112;
         }
         DrawBtn(g, bx, by, 74, 26, "Files", Th.Yel, r.MachineName, "files"); bx += 82;
-        DrawBtn(g, bx, by, 68, 26, "Svcs", Th.Grn, r.MachineName, "services"); bx += 76;
+        DrawBtn(g, bx, by, 84, 26, "Services", Th.Grn, r.MachineName, "services"); bx += 92;
         if (!linux)
         {
             DrawBtn(g, bx, by, 68, 26, "RDP", Th.Cyan, r.MachineName, "rdp"); bx += 76;
