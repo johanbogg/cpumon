@@ -44,7 +44,7 @@ FULL_MS     = 1.0
 MONITOR_MS  = 30.0
 LINUX_MONITOR_MS = 15.0
 KA_MS       = 60.0
-VERSION     = "1.0.106-linux"
+VERSION     = "1.0.110-linux"
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -513,7 +513,7 @@ class Client:
             threading.Timer(0.5, lambda: subprocess.run(["shutdown", "-h", "now"])).start()
 
         elif c == "listprocesses":
-            threading.Thread(target=self._send_processes, daemon=True).start()
+            threading.Thread(target=self._send_processes, args=(cid,), daemon=True).start()
 
         elif c == "kill":
             pid = cmd.get("pid")
@@ -535,13 +535,15 @@ class Client:
 
         elif c == "sysinfo":
             try:
-                self._send({"type": "sysinfo", "sysinfo": collect_sysinfo(self._machine, self._cpu_name)})
+                self._send({"type": "sysinfo", "sysinfo": collect_sysinfo(self._machine, self._cpu_name), "cmdId": cid})
             except Exception as e:
                 self._res(cid, False, str(e))
 
         elif c == "terminal_open":
             tid   = cmd.get("termId")
             shell = cmd.get("shell") or "bash"
+            if shell in ("cmd", "powershell"):
+                shell = "bash"
             if tid:
                 if tid in self._terminals:
                     self._terminals.pop(tid).dispose()
@@ -651,10 +653,10 @@ class Client:
 
     # ── Helpers for file/process ops ───────────────────────────────────────
 
-    def _send_processes(self):
+    def _send_processes(self, cmd_id=None):
         try:
             procs = collect_processes()
-            self._send({"type": "processlist", "processes": procs, "machine": self._machine})
+            self._send({"type": "processlist", "processes": procs, "machine": self._machine, "cmdId": cmd_id})
         except Exception as e:
             print(f"processes error: {e}", flush=True)
 

@@ -190,8 +190,16 @@ sealed class PawDashboardForm : Form
 
         // Row 2
         int by2 = by + 28; bx = x + 12;
-        DrawBtn(g, bx, by2, 100, 22, "🖥 CMD", Th.Cyan, r.MachineName, "cmd"); bx += 108;
-        DrawBtn(g, bx, by2, 120, 22, "🖥 PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 128;
+        bool linux = IsLinuxReport(r);
+        if (linux)
+        {
+            DrawBtn(g, bx, by2, 100, 22, "Bash", Th.Cyan, r.MachineName, "bash"); bx += 108;
+        }
+        else
+        {
+            DrawBtn(g, bx, by2, 100, 22, "CMD", Th.Cyan, r.MachineName, "cmd"); bx += 108;
+            DrawBtn(g, bx, by2, 120, 22, "PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 128;
+        }
         DrawBtn(g, bx, by2, 100, 22, "📁 Files", Th.Yel, r.MachineName, "files"); bx += 108;
         DrawBtn(g, bx, by2, 80, 22, "🖥 RDP", Th.Cyan, r.MachineName, "rdp");
 
@@ -212,6 +220,10 @@ sealed class PawDashboardForm : Form
         using var lf = new Font("Segoe UI", 6.5f); using var lb = new SolidBrush(Th.Dim); g.DrawString(l, lf, lb, x, y - 12);
         using var vf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold); using var vb = new SolidBrush(c); g.DrawString(v, vf, vb, x, y);
     }
+
+    static bool IsLinuxReport(MachineReport report) =>
+        report.OsVersion.Contains("linux", StringComparison.OrdinalIgnoreCase) ||
+        report.CpuName.Contains("linux", StringComparison.OrdinalIgnoreCase);
 
     void OnClick(object? sender, MouseEventArgs e)
     {
@@ -238,6 +250,8 @@ sealed class PawDashboardForm : Form
                     OpenPawTerminal(m, "cmd"); break;
                 case "powershell":
                     OpenPawTerminal(m, "powershell"); break;
+                case "bash":
+                    OpenPawTerminal(m, "bash"); break;
                 case "files":
                     OpenPawFileBrowser(m); break;
                 case "rdp":

@@ -115,3 +115,5 @@ readonly CLog _log = new();
 - Target responses for process lists, sysinfo, cmd results, terminal output, file listings, file chunks, and RDP frames are routed back to the owning PAW client instead of falling into the server's direct UI handlers.
 - `listprocesses` and `sysinfo` responses now preserve `CmdId` so the server can correlate PAW replies.
 - PAW process refresh timer now includes a `CmdId`; PAW uploads now include a `CmdId` for result routing.
+- Linux client `sysinfo` and `processlist` responses now include `cmdId`, which fixes PAW Info/Procs routing for Linux targets.
+- PAW Dashboard detects Linux reports and shows a single `Bash` terminal button instead of `CMD`/`PowerShell`; Linux terminal requests also normalize Windows shell names to bash.
