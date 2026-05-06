@@ -299,6 +299,7 @@ sealed class ClientForm : BorderlessForm
                         else if (cmd.Cmd == "paw_report" && cmd.PawSource != null && cmd.PawReport != null) { HandlePawReport(cmd.PawSource, cmd.PawReport); }
                         else if (cmd.Cmd == "paw_processes" && cmd.PawSource != null && cmd.PawProcesses != null) { BeginInvoke(() => _pawForm?.ReceiveProcessList(cmd.PawSource, cmd.PawProcesses)); }
                         else if (cmd.Cmd == "paw_sysinfo" && cmd.PawSource != null && cmd.PawSysInfo != null) { BeginInvoke(() => _pawForm?.ReceiveSysInfo(cmd.PawSource, cmd.PawSysInfo)); }
+                        else if (cmd.Cmd == "paw_services" && cmd.PawSource != null && cmd.PawServices != null) { BeginInvoke(() => _pawForm?.ReceiveServiceList(cmd.PawSource, cmd.PawServices)); }
                         else if (cmd.Cmd == "paw_cmd_result" && cmd.PawSource != null) { BeginInvoke(() => _pawForm?.ReceiveCmdResult(cmd.PawSource, cmd.PawCmdSuccess, cmd.PawCmdMsg ?? "", cmd.PawCmdId)); }
                         else if (cmd.Cmd == "paw_term_output" && cmd.PawSource != null && cmd.PawTermId != null && cmd.PawTermOutput != null) { BeginInvoke(() => _pawForm?.ReceiveTermOutput(cmd.PawSource, cmd.PawTermId, cmd.PawTermOutput)); }
                         else if (cmd.Cmd == "paw_file_listing" && cmd.PawSource != null && cmd.PawFileListing != null) { BeginInvoke(() => _pawForm?.ReceiveFileListing(cmd.PawSource, cmd.PawFileListing, cmd.CmdId)); }

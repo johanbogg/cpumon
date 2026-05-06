@@ -44,7 +44,7 @@ FULL_MS     = 1.0
 MONITOR_MS  = 30.0
 LINUX_MONITOR_MS = 15.0
 KA_MS       = 60.0
-VERSION     = "1.0.110-linux"
+VERSION     = "1.0.111-linux"
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -566,7 +566,7 @@ class Client:
         elif c == "list_services":
             try:
                 self._send({"type": "servicelist", "serviceList": list_services(),
-                            "machine": self._machine})
+                            "machine": self._machine, "cmdId": cid})
             except Exception as e:
                 self._res(cid, False, str(e))
 

@@ -440,6 +440,8 @@ public sealed class ServerCommand
     [JsonPropertyName("pawOffline")] public List<string>? PawOfflineClients { get; set; }
     [JsonPropertyName("pawProcesses")] public List<ProcessInfo>? PawProcesses { get; set; }
     [JsonPropertyName("pawSysInfo")] public SystemInfoReport? PawSysInfo { get; set; }
+    [JsonPropertyName("pawServices")] public List<ServiceInfo>? PawServices { get; set; }
+    [JsonPropertyName("pawEvents")] public List<EventLogEntry>? PawEvents { get; set; }
     [JsonPropertyName("pawFileListing")] public FileListing? PawFileListing { get; set; }
     [JsonPropertyName("pawFileChunk")] public FileChunkData? PawFileChunk { get; set; }
     [JsonPropertyName("pawTermOutput")] public string? PawTermOutput { get; set; }

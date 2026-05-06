@@ -334,7 +334,7 @@ sealed class ServerForm : BorderlessForm
                         case "processlist" when msg.Processes != null:
                             cl.LastProcessList = msg.Processes;
                             _log.Add($"{cl.MachineName}: procs", Th.Blu);
-                            if (TryRoutePawCommandResult(cl, msg.CmdId, new ServerCommand { Cmd = "paw_processes", PawSource = cl.MachineName, PawProcesses = msg.Processes }))
+                            if (TryRoutePawCommandResult(cl, msg.CmdId, "listprocesses", new ServerCommand { Cmd = "paw_processes", PawSource = cl.MachineName, PawProcesses = msg.Processes }))
                                 break;
                             BeginInvoke(() => {
                                 if (_procDialogs.TryGetValue(cl.MachineName, out var existing) && !existing.IsDisposed)
@@ -347,7 +347,7 @@ sealed class ServerForm : BorderlessForm
                             _log.Add($"{cl.MachineName}: sysinfo", Th.Cyan);
                             var firstMac = msg.SysInfo.MacAddresses.FirstOrDefault(m => !string.IsNullOrEmpty(m));
                             if (firstMac != null) _store.SetMac(cl.MachineName, firstMac);
-                            if (TryRoutePawCommandResult(cl, msg.CmdId, new ServerCommand { Cmd = "paw_sysinfo", PawSource = cl.MachineName, PawSysInfo = msg.SysInfo }))
+                            if (TryRoutePawCommandResult(cl, msg.CmdId, "sysinfo", new ServerCommand { Cmd = "paw_sysinfo", PawSource = cl.MachineName, PawSysInfo = msg.SysInfo }))
                                 break;
                             BeginInvoke(() => { using var d = new SysInfoDialog(cl); d.ShowDialog(this); });
                             break;
@@ -355,17 +355,21 @@ sealed class ServerForm : BorderlessForm
                         case "servicelist" when msg.ServiceList != null:
                             cl.LastServiceList = msg.ServiceList;
                             _log.Add($"{cl.MachineName}: {msg.ServiceList.Count} services", Th.Grn);
+                            if (TryRoutePawCommandResult(cl, msg.CmdId, "list_services", new ServerCommand { Cmd = "paw_services", PawSource = cl.MachineName, PawServices = msg.ServiceList }))
+                                break;
                             BeginInvoke(() => { using var d = new ServicesDialog(cl); d.ShowDialog(this); });
                             break;
 
                         case "events" when msg.Events != null:
                             cl.LastEvents = msg.Events;
                             _log.Add($"{cl.MachineName}: {msg.Events.Count} events", Th.Cyan);
+                            if (TryRoutePawCommandResult(cl, msg.CmdId, "list_events", new ServerCommand { Cmd = "paw_events", PawSource = cl.MachineName, PawEvents = msg.Events }))
+                                break;
                             BeginInvoke(() => { using var d = new EventViewerDialog(cl); d.ShowDialog(this); });
                             break;
 
                         case "cmdresult":
-                            if (TryRoutePawCommandResult(cl, msg.CmdId, new ServerCommand { Cmd = "paw_cmd_result", PawSource = cl.MachineName, PawCmdSuccess = msg.Success, PawCmdMsg = msg.Message, PawCmdId = msg.CmdId }))
+                            if (TryRoutePawCommandResult(cl, msg.CmdId, null, new ServerCommand { Cmd = "paw_cmd_result", PawSource = cl.MachineName, PawCmdSuccess = msg.Success, PawCmdMsg = msg.Message, PawCmdId = msg.CmdId }))
                                 break;
                             _log.Add($"[{cl.MachineName}] {msg.CmdId}: {(msg.Success ? "✓" : "✕")} {msg.Message}",
                                 msg.Success ? Th.Grn : Th.Red);
@@ -392,7 +396,7 @@ sealed class ServerForm : BorderlessForm
                             break;
 
                         case "file_listing" when msg.FileListing != null:
-                            if (TryRoutePawCommandResult(cl, msg.CmdId, new ServerCommand { Cmd = "paw_file_listing", PawSource = cl.MachineName, PawFileListing = msg.FileListing, CmdId = msg.CmdId }))
+                            if (TryRoutePawCommandResult(cl, msg.CmdId, "file_list", new ServerCommand { Cmd = "paw_file_listing", PawSource = cl.MachineName, PawFileListing = msg.FileListing, CmdId = msg.CmdId }))
                                 break;
                             if (msg.CmdId != null && cl.FileBrowserDialogs.TryGetValue(msg.CmdId, out var fbListing))
                                 fbListing.ReceiveListing(msg.FileListing);
@@ -409,13 +413,16 @@ sealed class ServerForm : BorderlessForm
                             break;
 
                         case "rdp_frame" when msg.RdpFrame != null && msg.RdpId != null:
-                            // Route to direct RDP viewer on server
-                            if (cl.RdpDialogs.TryGetValue(msg.RdpId, out var rdpDlg))
-                                rdpDlg.ReceiveFrame(msg.RdpFrame);
                             // Relay to PAW client that opened this session
                             if (cl.PawRdpSessionOwners.TryGetValue(msg.RdpId, out var pawOwner) &&
                                 _cls.TryGetValue(pawOwner, out var pawCl))
+                            {
                                 try { pawCl.Send(new ServerCommand { Cmd = "paw_rdp_frame", PawSource = cl.MachineName, RdpId = msg.RdpId, RdpFrame = msg.RdpFrame }); } catch { }
+                                break;
+                            }
+                            // Route to direct RDP viewer on server
+                            if (cl.RdpDialogs.TryGetValue(msg.RdpId, out var rdpDlg))
+                                rdpDlg.ReceiveFrame(msg.RdpFrame);
                             break;
 
                         case "paw_command" when msg.PawTarget != null && msg.PawCmd != null && cl.IsPaw:
@@ -434,6 +441,8 @@ sealed class ServerForm : BorderlessForm
                                     pawTarget.PawRdpSessionOwners.TryRemove(pc.RdpId, out _);
                                 if (pc.CmdId != null)
                                     pawTarget.PawCmdOwners[pc.CmdId] = cl.MachineName;
+                                if (pc.Cmd is "sysinfo" or "listprocesses" or "list_services" or "list_events" or "file_list")
+                                    pawTarget.PawCmdOwners[$"cmd:{pc.Cmd}"] = cl.MachineName;
                                 if (pc.TransferId != null)
                                     pawTarget.PawCmdOwners[pc.TransferId] = cl.MachineName;
                                 if (pc.Cmd == "terminal_open" && pc.TermId != null)
@@ -463,9 +472,13 @@ sealed class ServerForm : BorderlessForm
         }
     }
 
-    bool TryRoutePawCommandResult(RemoteClient source, string? cmdId, ServerCommand response)
+    bool TryRoutePawCommandResult(RemoteClient source, string? cmdId, string? fallbackCmd, ServerCommand response)
     {
-        if (cmdId == null || !source.PawCmdOwners.TryRemove(cmdId, out var pawOwner))
+        string? pawOwner = null;
+        if (cmdId != null) source.PawCmdOwners.TryRemove(cmdId, out pawOwner);
+        if (pawOwner == null && fallbackCmd != null)
+            source.PawCmdOwners.TryRemove($"cmd:{fallbackCmd}", out pawOwner);
+        if (pawOwner == null)
             return false;
         response.PawSource = source.MachineName;
         try

@@ -117,3 +117,5 @@ readonly CLog _log = new();
 - PAW process refresh timer now includes a `CmdId`; PAW uploads now include a `CmdId` for result routing.
 - Linux client `sysinfo` and `processlist` responses now include `cmdId`, which fixes PAW Info/Procs routing for Linux targets.
 - PAW Dashboard detects Linux reports and shows a single `Bash` terminal button instead of `CMD`/`PowerShell`; Linux terminal requests also normalize Windows shell names to bash.
+- Server now also tracks PAW owners by command kind for `sysinfo`, `listprocesses`, `list_services`, `list_events`, and `file_list`, so older or mixed clients that omit `cmdId` still route replies back to PAW instead of opening server UI.
+- Added PAW service-list support: `paw_services` protocol field, PAW dashboard Services button/dialog, start/stop/restart actions, and Linux `servicelist` `cmdId` preservation.
