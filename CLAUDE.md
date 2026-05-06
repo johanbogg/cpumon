@@ -21,10 +21,11 @@ Version is auto-set from git commit count: `1.0.<N>` via an MSBuild target.
 ```
 cpumon.shared/
   protocol.cs   — Proto constants, ClientMessage, ServerCommand, ApprovedClientStore,
-                  TokenStore, CLog, Security, CertificateStore, AgentIpc, all data models
+                  TokenStore, CLog, LogSink, SendPacer, Security, CertificateStore,
+                  AgentIpc, all data models
   services.cs   — RdpCaptureSession, RemoteClient, LineLengthLimitedStream,
                   TerminalSession, CmdExec, FileBrowserService, SysInfoCollector,
-                  HardwareMonitorService, ReportBuilder, InputInjector
+                  HardwareMonitorService, ReportBuilder, InputInjector, UpdateIntegrity
   ui.cs         — RdpViewerDialog, TerminalDialog, FileBrowserDialog,
                   BorderlessForm, DPanel, Th (theme + ThemeChanged event)
 
@@ -37,9 +38,17 @@ cpumon.client/
                     PawProcDialog, PawSysInfoDialog
 
 cpumon.server/
+  program.cs       — entry point, single-instance mutex, launches ServerForm
   serverform.cs    — ServerForm, ListenLoop, HandleClient, UpdateModes, PAW relay, button actions
   serverdialogs.cs — ApprovedClientsDialog, ProcDialog (live filter), SysInfoDialog,
                      ServicesDialog, EventViewerDialog
+
+cpumon.tests/
+  Program.cs — 7 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
+              TestReceiveChunkCompletesAndValidatesOffsets, TestReceiveChunkReplacesDuplicateTransfer,
+              TestLineLengthLimitedStream, TestUpdateIntegrity,
+              TestSendPacerWakesOnModeChange, TestSendPacerWakesOnDemand,
+              TestApprovedClientAliasPersists
 
 cpumon.linux/
   cpumon.py      — Python 3.8+ client: discovery, TLS/TOFU, auth, report/keepalive,
@@ -80,6 +89,10 @@ cpumon.linux/
 **Agent pipe auth:** `GetNamedPipeClientProcessId` + exe path comparison — no command-line secret.
 
 **One-shot token refresh:** after an auth failure the client waits 5 minutes (`_authFailedAt` ticks), reloads `TokenStore`, and retries. `TokenStore.Clear()` is called on rejection.
+
+**`LogSink`:** structured JSONL logging to `%ProgramData%\CpuMon\logs\cpumon-YYYY-MM-DD.jsonl`, 10 MB cap per file, auto-rotates.
+
+**`UpdateIntegrity.VerifySha256Base64`:** validates SHA256 hash of an update payload before applying it. Called by `CmdExec` on `update_push`.
 
 **`ServerCommand.IssuedAtMs`:** set by the PAW client on `paw_command` messages. The server rejects commands more than 60 s old. The nonce prevents replay within the window.
 

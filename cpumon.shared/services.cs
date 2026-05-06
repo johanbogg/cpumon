@@ -217,6 +217,47 @@ public sealed class RdpCaptureSession : IDisposable
 // ═══════════════════════════════════════════════════
 //  Input injector (runs on client side)
 // ═══════════════════════════════════════════════════
+public static class ScreenshotService
+{
+    static ImageCodecInfo? _jpegCodec;
+
+    public static ScreenshotData Capture(string? cmdId, int quality = 80, int monitorIndex = 0)
+    {
+        try
+        {
+            var screens = Screen.AllScreens;
+            var screen = screens[Math.Clamp(monitorIndex, 0, screens.Length - 1)];
+            var bounds = screen.Bounds;
+            using var bmp = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
+            using (var g = Graphics.FromImage(bmp))
+                g.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
+
+            using var ms = new MemoryStream();
+            var encoder = JpegEncoder();
+            if (encoder != null)
+            {
+                using var ep = new EncoderParameters(1);
+                ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, Math.Clamp(quality, 20, 95));
+                bmp.Save(ms, encoder, ep);
+            }
+            else bmp.Save(ms, ImageFormat.Jpeg);
+
+            return new ScreenshotData { CmdId = cmdId, Width = bounds.Width, Height = bounds.Height, Data = Convert.ToBase64String(ms.GetBuffer(), 0, (int)ms.Length) };
+        }
+        catch (Exception ex)
+        {
+            return new ScreenshotData { CmdId = cmdId, Error = ex.Message };
+        }
+    }
+
+    static ImageCodecInfo? JpegEncoder()
+    {
+        if (_jpegCodec != null) return _jpegCodec;
+        _jpegCodec = ImageCodecInfo.GetImageEncoders().FirstOrDefault(e => e.MimeType == "image/jpeg");
+        return _jpegCodec;
+    }
+}
+
 public static class InputInjector
 {
     [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] inputs, int size);
@@ -463,6 +504,8 @@ public sealed class RemoteClient : IDisposable
     public readonly ConcurrentDictionary<string, FileBrowserDialog> FileBrowserDialogs = new();
     public readonly ConcurrentDictionary<string, FileDownloadState> ActiveDownloads = new();
     public readonly ConcurrentDictionary<string, RdpViewerDialog> RdpDialogs = new();
+    public readonly ConcurrentDictionary<string, string> PawCmdOwners = new();
+    public readonly ConcurrentDictionary<string, string> PawTerminalOwners = new();
     public readonly ConcurrentDictionary<string, string> PawRdpSessionOwners = new(); // rdpId → PAW client machine name
 
     public readonly ConcurrentQueue<ServerCommand> PendingCmds = new();
@@ -479,6 +522,7 @@ public sealed class RemoteClient : IDisposable
         foreach (var fd in FileBrowserDialogs.Values) try { fd.Dispose(); } catch { } FileBrowserDialogs.Clear();
         foreach (var rd in RdpDialogs.Values) try { rd.Close(); } catch { } RdpDialogs.Clear();
         foreach (var ds in ActiveDownloads.Values) ds.Dispose(); ActiveDownloads.Clear();
+        PawCmdOwners.Clear(); PawTerminalOwners.Clear(); PawRdpSessionOwners.Clear();
         _rd.Dispose(); _wr.Dispose(); _ssl.Dispose(); _tcp.Dispose();
     }
 }
@@ -593,7 +637,7 @@ public static class CmdExec
                             try { var p2 = Process.GetProcessById(kv.Key); var delta = (p2.TotalProcessorTime - t1).TotalMilliseconds; cpu = Math.Clamp((float)(delta / elapsed / ncpu * 100.0), 0f, 100f); } catch { }
                             return new ProcessInfo { Pid = kv.Key, Name = name, MemoryBytes = mem, CpuPercent = cpu };
                         }).OrderByDescending(p => p.MemoryBytes).ToList();
-                        var m2 = new ClientMessage { Type = "processlist", Processes = procs };
+                        var m2 = new ClientMessage { Type = "processlist", Processes = procs, CmdId = cmd.CmdId };
                         lock (lk) { wrSnap?.WriteLine(JsonSerializer.Serialize(m2)); wrSnap?.Flush(); }
                     } catch { }
                 });
@@ -601,18 +645,19 @@ public static class CmdExec
             }
             case "kill": try { var proc = Process.GetProcessById(cmd.Pid); string n = proc.ProcessName; proc.Kill(true); proc.WaitForExit(5000); Res(cmd.CmdId, true, $"Killed {n}", lk, wr); } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
             case "start": try { var s = Process.Start(new ProcessStartInfo { FileName = cmd.FileName ?? "", Arguments = cmd.Args ?? "", UseShellExecute = true }); Res(cmd.CmdId, true, $"PID {s?.Id}", lk, wr); } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
-            case "sysinfo": try { var si = SysInfoCollector.Collect(); var m2 = new ClientMessage { Type = "sysinfo", SysInfo = si }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(m2)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
+            case "sysinfo": try { var si = SysInfoCollector.Collect(); var m2 = new ClientMessage { Type = "sysinfo", SysInfo = si, CmdId = cmd.CmdId }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(m2)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
             case "terminal_open": if (cmd.TermId != null) { if (Sessions.TryRemove(cmd.TermId, out var oldTs)) oldTs.Dispose(); try { Sessions[cmd.TermId] = new TerminalSession(cmd.TermId, cmd.Shell ?? "cmd", lk, wr); } catch (Exception ex) { Res(cmd.CmdId, false, $"Terminal: {ex.Message}", lk, wr); } } break;
             case "terminal_input": if (cmd.TermId != null && cmd.Input != null && Sessions.TryGetValue(cmd.TermId, out var ts)) ts.WriteInput(cmd.Input); break;
             case "terminal_close": if (cmd.TermId != null && Sessions.TryRemove(cmd.TermId, out var closing)) closing.Dispose(); break;
+            case "screenshot": { var shot = ScreenshotService.Capture(cmd.CmdId, 80, cmd.RdpMonitorIndex); var sm = new ClientMessage { Type = "screenshot", Screenshot = shot, CmdId = cmd.CmdId }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(sm)); wr?.Flush(); } break; }
             case "file_list": try { var listing = FileBrowserService.ListDirectory(cmd.Path); var flMsg = new ClientMessage { Type = "file_listing", FileListing = listing, CmdId = cmd.CmdId }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(flMsg)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, $"List: {ex.Message}", lk, wr); } break;
             case "file_download": if (cmd.Path != null && cmd.TransferId != null) FileBrowserService.SendFile(cmd.Path, cmd.TransferId, lk, wr); break;
             case "file_upload_chunk": if (cmd.FileChunk != null && cmd.DestPath != null) { string result = FileBrowserService.ReceiveChunk(cmd.FileChunk, ActiveUploads, cmd.DestPath); if (!string.IsNullOrEmpty(result)) Res(cmd.CmdId, !result.StartsWith("Upload error"), result, lk, wr); } break;
             case "file_delete": if (cmd.Path != null) { string r = FileBrowserService.DeletePath(cmd.Path, cmd.Recursive); Res(cmd.CmdId, !r.Contains("error", StringComparison.OrdinalIgnoreCase), r, lk, wr); } break;
             case "file_mkdir": if (cmd.Path != null) { string r = FileBrowserService.CreateDirectory(cmd.Path); Res(cmd.CmdId, !r.StartsWith("Error"), r, lk, wr); } break;
             case "file_rename": if (cmd.Path != null && cmd.NewName != null) { string r = FileBrowserService.RenamePath(cmd.Path, cmd.NewName); Res(cmd.CmdId, !r.Contains("error", StringComparison.OrdinalIgnoreCase), r, lk, wr); } break;
-            case "list_services": try { var svcs = ServiceController.GetServices().Select(s => { try { return new ServiceInfo { Name = s.ServiceName, DisplayName = s.DisplayName, Status = s.Status.ToString(), StartType = s.StartType.ToString() }; } catch { return new ServiceInfo { Name = s.ServiceName, DisplayName = s.ServiceName }; } }).OrderBy(s => s.DisplayName).ToList(); var svcMsg = new ClientMessage { Type = "servicelist", ServiceList = svcs }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(svcMsg)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
-            case "list_events": try { var evts = new List<EventLogEntry>(); foreach (var logName in new[] { "System", "Application" }) { try { using var el = new System.Diagnostics.EventLog(logName); var entries = el.Entries.Cast<System.Diagnostics.EventLogEntry>().Where(e => e.EntryType is System.Diagnostics.EventLogEntryType.Error or System.Diagnostics.EventLogEntryType.Warning).OrderByDescending(e => e.TimeGenerated).Take(25).Select(e => new EventLogEntry { Level = e.EntryType.ToString(), Source = e.Source, Message = (e.Message ?? "").Split('\n')[0].Trim(), TimestampUtcMs = new DateTimeOffset(e.TimeGenerated).ToUnixTimeMilliseconds() }); evts.AddRange(entries); } catch { } } evts = evts.OrderByDescending(e => e.TimestampUtcMs).Take(50).ToList(); var evtMsg = new ClientMessage { Type = "events", Events = evts }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(evtMsg)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
+            case "list_services": try { var svcs = ServiceController.GetServices().Select(s => { try { return new ServiceInfo { Name = s.ServiceName, DisplayName = s.DisplayName, Status = s.Status.ToString(), StartType = s.StartType.ToString() }; } catch { return new ServiceInfo { Name = s.ServiceName, DisplayName = s.ServiceName }; } }).OrderBy(s => s.DisplayName).ToList(); var svcMsg = new ClientMessage { Type = "servicelist", ServiceList = svcs, CmdId = cmd.CmdId }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(svcMsg)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
+            case "list_events": try { var evts = new List<EventLogEntry>(); foreach (var logName in new[] { "System", "Application" }) { try { using var el = new System.Diagnostics.EventLog(logName); var entries = el.Entries.Cast<System.Diagnostics.EventLogEntry>().Where(e => e.EntryType is System.Diagnostics.EventLogEntryType.Error or System.Diagnostics.EventLogEntryType.Warning).OrderByDescending(e => e.TimeGenerated).Take(25).Select(e => new EventLogEntry { Level = e.EntryType.ToString(), Source = e.Source, Message = (e.Message ?? "").Split('\n')[0].Trim(), TimestampUtcMs = new DateTimeOffset(e.TimeGenerated).ToUnixTimeMilliseconds() }); evts.AddRange(entries); } catch { } } evts = evts.OrderByDescending(e => e.TimestampUtcMs).Take(50).ToList(); var evtMsg = new ClientMessage { Type = "events", Events = evts, CmdId = cmd.CmdId }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(evtMsg)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
             case "service_start": if (cmd.FileName != null) { var sn = cmd.FileName; var sid = cmd.CmdId; var sw = wr; Task.Run(() => { try { using var sc = new ServiceController(sn); sc.Start(); sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15)); Res(sid, true, $"Started: {sn}", lk, sw); } catch (Exception ex) { Res(sid, false, ex.Message, lk, sw); } }); } break;
             case "service_stop": if (cmd.FileName != null) { var sn = cmd.FileName; var sid = cmd.CmdId; var sw = wr; Task.Run(() => { try { using var sc = new ServiceController(sn); sc.Stop(); sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15)); Res(sid, true, $"Stopped: {sn}", lk, sw); } catch (Exception ex) { Res(sid, false, ex.Message, lk, sw); } }); } break;
             case "service_restart": if (cmd.FileName != null) { var sn = cmd.FileName; var sid = cmd.CmdId; var sw = wr; Task.Run(() => { try { using var sc = new ServiceController(sn); if (sc.Status == ServiceControllerStatus.Running) { sc.Stop(); sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15)); } sc.Start(); sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(20)); Res(sid, true, $"Restarted: {sn}", lk, sw); } catch (Exception ex) { Res(sid, false, ex.Message, lk, sw); } }); } break;

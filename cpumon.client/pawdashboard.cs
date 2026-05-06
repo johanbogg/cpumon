@@ -42,6 +42,7 @@ sealed class PawDashboardForm : Form
 
     // PAW process dialog tracking
     readonly Dictionary<string, PawProcDialog> _procDialogs = new();
+    readonly Dictionary<string, PawServicesDialog> _serviceDialogs = new();
 
     // PAW RDP tracking: rdpId → viewer
     readonly ConcurrentDictionary<string, RdpViewerDialog> _rdpViewers = new();
@@ -185,13 +186,22 @@ sealed class PawDashboardForm : Form
         int by = y + hdrH, bx = x + 12;
         DrawBtn(g, bx, by, 72, 22, "⟳ Restart", Th.Org, r.MachineName, "restart"); bx += 80;
         DrawBtn(g, bx, by, 78, 22, "☰ Procs", Th.Blu, r.MachineName, "processes"); bx += 86;
-        DrawBtn(g, bx, by, 68, 22, "ℹ Info", Th.Cyan, r.MachineName, "sysinfo"); bx += 76;
-        DrawBtn(g, bx, by, 72, 22, "⏻ Off", Th.Red, r.MachineName, "shutdown");
+        DrawBtn(g, bx, by, 68, 22, "Info", Th.Cyan, r.MachineName, "sysinfo"); bx += 76;
+        DrawBtn(g, bx, by, 76, 22, "Services", Th.Grn, r.MachineName, "services"); bx += 84;
+        DrawBtn(g, bx, by, 72, 22, "Off", Th.Red, r.MachineName, "shutdown");
 
         // Row 2
         int by2 = by + 28; bx = x + 12;
-        DrawBtn(g, bx, by2, 100, 22, "🖥 CMD", Th.Cyan, r.MachineName, "cmd"); bx += 108;
-        DrawBtn(g, bx, by2, 120, 22, "🖥 PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 128;
+        bool linux = IsLinuxReport(r);
+        if (linux)
+        {
+            DrawBtn(g, bx, by2, 100, 22, "Bash", Th.Cyan, r.MachineName, "bash"); bx += 108;
+        }
+        else
+        {
+            DrawBtn(g, bx, by2, 100, 22, "CMD", Th.Cyan, r.MachineName, "cmd"); bx += 108;
+            DrawBtn(g, bx, by2, 120, 22, "PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 128;
+        }
         DrawBtn(g, bx, by2, 100, 22, "📁 Files", Th.Yel, r.MachineName, "files"); bx += 108;
         DrawBtn(g, bx, by2, 80, 22, "🖥 RDP", Th.Cyan, r.MachineName, "rdp");
 
@@ -212,6 +222,10 @@ sealed class PawDashboardForm : Form
         using var lf = new Font("Segoe UI", 6.5f); using var lb = new SolidBrush(Th.Dim); g.DrawString(l, lf, lb, x, y - 12);
         using var vf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold); using var vb = new SolidBrush(c); g.DrawString(v, vf, vb, x, y);
     }
+
+    static bool IsLinuxReport(MachineReport report) =>
+        report.OsVersion.Contains("linux", StringComparison.OrdinalIgnoreCase) ||
+        report.CpuName.Contains("linux", StringComparison.OrdinalIgnoreCase);
 
     void OnClick(object? sender, MouseEventArgs e)
     {
@@ -234,10 +248,14 @@ sealed class PawDashboardForm : Form
                     OpenProcessDialog(m); break;
                 case "sysinfo":
                     _sendCmd(m, new ServerCommand { Cmd = "sysinfo", CmdId = Guid.NewGuid().ToString("N")[..8] }); break;
+                case "services":
+                    OpenServicesDialog(m); break;
                 case "cmd":
                     OpenPawTerminal(m, "cmd"); break;
                 case "powershell":
                     OpenPawTerminal(m, "powershell"); break;
+                case "bash":
+                    OpenPawTerminal(m, "bash"); break;
                 case "files":
                     OpenPawFileBrowser(m); break;
                 case "rdp":
@@ -322,12 +340,37 @@ sealed class PawDashboardForm : Form
         d.ShowDialog(this);
     }
 
+    void OpenServicesDialog(string source)
+    {
+        if (_serviceDialogs.TryGetValue(source, out var existing) && !existing.IsDisposed)
+        {
+            existing.BringToFront();
+            _sendCmd(source, new ServerCommand { Cmd = "list_services", CmdId = Guid.NewGuid().ToString("N")[..8] });
+            return;
+        }
+
+        var d = new PawServicesDialog(source, _sendCmd);
+        _serviceDialogs[source] = d;
+        d.FormClosed += (_, _) => _serviceDialogs.Remove(source);
+        d.Show(this);
+        _sendCmd(source, new ServerCommand { Cmd = "list_services", CmdId = Guid.NewGuid().ToString("N")[..8] });
+    }
+
+    public void ReceiveServiceList(string source, List<ServiceInfo> services)
+    {
+        if (!IsHandleCreated || IsDisposed) return;
+        if (_serviceDialogs.TryGetValue(source, out var existing) && !existing.IsDisposed)
+            existing.UpdateList(services);
+    }
+
     public void ReceiveCmdResult(string source, bool success, string message, string? cmdId)
     {
         _log.Add($"[PAW {source}] {(success ? "✓" : "✕")} {message}", success ? Th.Grn : Th.Red);
         // Route to file browsers
         foreach (var fb in _fileBrowsers.Values.Where(f => f.Target == source))
             fb.Dialog.ReceiveCmdResult(success, message);
+        if (_serviceDialogs.TryGetValue(source, out var svc) && !svc.IsDisposed)
+            svc.ReceiveCmdResult(success, message);
     }
 
     public void ReceiveTermOutput(string source, string termId, string output)
@@ -520,7 +563,7 @@ sealed class PawFileBrowserDialogClient : Form
         Task.Delay(500).ContinueWith(_ => { if (IsHandleCreated) BeginInvoke(() => Nav(_currentPath)); });
     }
 
-    void UploadFile() { if (string.IsNullOrEmpty(_currentPath)) { _statusLabel.Text = "Navigate to a folder first"; _statusLabel.ForeColor = Th.Org; return; } using var ofd = new OpenFileDialog { Title = "Upload file to remote" }; if (ofd.ShowDialog() != DialogResult.OK) return; string tid = Guid.NewGuid().ToString("N")[..12]; string dest = _currentPath; string src = ofd.FileName; _statusLabel.Text = "Uploading..."; _progressBar.Value = 0; _progressBar.Visible = true; Task.Run(() => { try { var fi = new FileInfo(src); long total = fi.Length; long offset = 0; var buf = new byte[Proto.FileChunkSize]; using var fs = fi.OpenRead(); while (true) { int n = fs.Read(buf, 0, buf.Length); bool last = n == 0 || offset + n >= total; _send(_target, new ServerCommand { Cmd = "file_upload_chunk", DestPath = dest, FileChunk = new FileChunkData { TransferId = tid, FileName = fi.Name, Data = n > 0 ? Convert.ToBase64String(buf, 0, n) : "", Offset = offset, TotalSize = total, IsLast = last } }); if (IsHandleCreated) { int pct = total > 0 ? (int)((offset + n) * 100 / total) : 0; BeginInvoke(() => { _progressBar.Value = Math.Min(pct, 100); _statusLabel.Text = $"Uploading: {pct}%"; _statusLabel.ForeColor = Th.Blu; }); } offset += n; if (last) break; Thread.Sleep(5); } if (IsHandleCreated) BeginInvoke(() => { _progressBar.Visible = false; _statusLabel.Text = $"Upload: {fi.Name}"; _statusLabel.ForeColor = Th.Grn; }); } catch (Exception ex) { LogSink.Warn("PawFileBrowser.Upload", $"Upload failed for transfer {tid}", ex); if (IsHandleCreated) BeginInvoke(() => { _progressBar.Visible = false; _statusLabel.Text = $"Upload error: {ex.Message}"; _statusLabel.ForeColor = Th.Red; }); } }); }
+    void UploadFile() { if (string.IsNullOrEmpty(_currentPath)) { _statusLabel.Text = "Navigate to a folder first"; _statusLabel.ForeColor = Th.Org; return; } using var ofd = new OpenFileDialog { Title = "Upload file to remote" }; if (ofd.ShowDialog() != DialogResult.OK) return; string tid = Guid.NewGuid().ToString("N")[..12]; string dest = _currentPath; string src = ofd.FileName; _statusLabel.Text = "Uploading..."; _progressBar.Value = 0; _progressBar.Visible = true; Task.Run(() => { try { var fi = new FileInfo(src); long total = fi.Length; long offset = 0; var buf = new byte[Proto.FileChunkSize]; using var fs = fi.OpenRead(); while (true) { int n = fs.Read(buf, 0, buf.Length); bool last = n == 0 || offset + n >= total; _send(_target, new ServerCommand { Cmd = "file_upload_chunk", CmdId = tid, DestPath = dest, FileChunk = new FileChunkData { TransferId = tid, FileName = fi.Name, Data = n > 0 ? Convert.ToBase64String(buf, 0, n) : "", Offset = offset, TotalSize = total, IsLast = last } }); if (IsHandleCreated) { int pct = total > 0 ? (int)((offset + n) * 100 / total) : 0; BeginInvoke(() => { _progressBar.Value = Math.Min(pct, 100); _statusLabel.Text = $"Uploading: {pct}%"; _statusLabel.ForeColor = Th.Blu; }); } offset += n; if (last) break; Thread.Sleep(5); } if (IsHandleCreated) BeginInvoke(() => { _progressBar.Visible = false; _statusLabel.Text = $"Upload: {fi.Name}"; _statusLabel.ForeColor = Th.Grn; }); } catch (Exception ex) { LogSink.Warn("PawFileBrowser.Upload", $"Upload failed for transfer {tid}", ex); if (IsHandleCreated) BeginInvoke(() => { _progressBar.Visible = false; _statusLabel.Text = $"Upload error: {ex.Message}"; _statusLabel.ForeColor = Th.Red; }); } }); }
 
     public void ReceiveListing(FileListing listing)
     {
@@ -612,7 +655,7 @@ sealed class PawProcDialog : Form
         bp.Controls.Add(kill);
 
         _timer = new Timer { Interval = 2000 };
-        _timer.Tick += (_, _) => _send(_source, new ServerCommand { Cmd = "listprocesses" });
+        _timer.Tick += (_, _) => _send(_source, new ServerCommand { Cmd = "listprocesses", CmdId = Guid.NewGuid().ToString("N")[..8] });
         _timer.Start();
 
         FormClosed += (_, _) => { _timer.Stop(); _timer.Dispose(); };
@@ -646,6 +689,90 @@ sealed class PawProcDialog : Form
             if (p.Pid == selPid) _grid.Rows[idx].Selected = true;
         }
         _grid.ResumeLayout();
+    }
+}
+
+sealed class PawServicesDialog : Form
+{
+    readonly string _source;
+    readonly Action<string, ServerCommand> _send;
+    readonly DataGridView _grid;
+    readonly Label _status;
+    readonly Timer _timer;
+
+    public PawServicesDialog(string source, Action<string, ServerCommand> send)
+    {
+        _source = source; _send = send;
+        Text = $"Services - {source}"; Size = new Size(780, 520); StartPosition = FormStartPosition.CenterParent;
+        BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
+
+        _grid = new DataGridView
+        {
+            Dock = DockStyle.Fill, BackgroundColor = Th.Bg, ForeColor = Th.Brt, GridColor = Th.Brd,
+            DefaultCellStyle = new DataGridViewCellStyle { BackColor = Th.Card, ForeColor = Th.Brt, SelectionBackColor = Color.FromArgb(50, 80, 160) },
+            ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = Th.TBg, ForeColor = Th.Blu },
+            EnableHeadersVisualStyles = false, RowHeadersVisible = false, AllowUserToAddRows = false, ReadOnly = true,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, BorderStyle = BorderStyle.None
+        };
+        _grid.Columns.Add("DisplayName", "Service"); _grid.Columns.Add("Status", "Status"); _grid.Columns.Add("StartType", "Start"); _grid.Columns.Add("Name", "Name");
+        if (_grid.Columns["Name"] is { } nc) nc.Visible = false;
+        if (_grid.Columns["Status"] is { } stc) stc.AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells;
+        if (_grid.Columns["StartType"] is { } stac) stac.AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells;
+
+        var bp = new Panel { Dock = DockStyle.Bottom, Height = 42, BackColor = Th.TBg };
+        var refresh = MkBtn("Refresh", Th.Blu); refresh.Location = new Point(8, 6);
+        var start = MkBtn("Start", Th.Grn); start.Location = new Point(116, 6);
+        var stop = MkBtn("Stop", Th.Red); stop.Location = new Point(224, 6);
+        var restart = MkBtn("Restart", Th.Org); restart.Location = new Point(332, 6);
+        _status = new Label { Text = "", ForeColor = Th.Dim, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Location = new Point(440, 12), Size = new Size(300, 18), Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top };
+        refresh.Click += (_, _) => RequestRefresh();
+        start.Click += (_, _) => SendService("service_start");
+        stop.Click += (_, _) => SendService("service_stop");
+        restart.Click += (_, _) => SendService("service_restart");
+        bp.Controls.AddRange(new Control[] { refresh, start, stop, restart, _status });
+
+        _timer = new Timer { Interval = 5000 };
+        _timer.Tick += (_, _) => RequestRefresh();
+        _timer.Start();
+        FormClosed += (_, _) => { _timer.Stop(); _timer.Dispose(); };
+        Controls.Add(_grid); Controls.Add(bp);
+    }
+
+    void RequestRefresh() => _send(_source, new ServerCommand { Cmd = "list_services", CmdId = Guid.NewGuid().ToString("N")[..8] });
+
+    void SendService(string cmd)
+    {
+        if (_grid.SelectedRows.Count == 0) return;
+        var name = _grid.SelectedRows[0].Cells["Name"].Value?.ToString();
+        if (string.IsNullOrWhiteSpace(name)) return;
+        _status.Text = "Working..."; _status.ForeColor = Th.Org;
+        _send(_source, new ServerCommand { Cmd = cmd, FileName = name, CmdId = Guid.NewGuid().ToString("N")[..8] });
+    }
+
+    public void UpdateList(List<ServiceInfo> services)
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        if (InvokeRequired) { BeginInvoke(() => UpdateList(services)); return; }
+        _grid.Rows.Clear();
+        foreach (var s in services.OrderBy(s => s.DisplayName))
+        {
+            int row = _grid.Rows.Add(s.DisplayName, s.Status, s.StartType, s.Name);
+            _grid.Rows[row].DefaultCellStyle.ForeColor = s.Status == "Running" ? Th.Grn : s.Status == "Stopped" ? Th.Dim : Th.Org;
+        }
+        _status.Text = $"{services.Count} service(s)"; _status.ForeColor = Th.Dim;
+    }
+
+    public void ReceiveCmdResult(bool ok, string message)
+    {
+        if (!IsHandleCreated || IsDisposed) return;
+        BeginInvoke(() => { _status.Text = message; _status.ForeColor = ok ? Th.Grn : Th.Red; RequestRefresh(); });
+    }
+
+    static Button MkBtn(string text, Color fg)
+    {
+        var b = new Button { Text = text, ForeColor = fg, BackColor = Th.Card, FlatStyle = FlatStyle.Flat, Size = new Size(100, 28), Cursor = Cursors.Hand };
+        b.FlatAppearance.BorderColor = fg;
+        return b;
     }
 }
 

@@ -402,6 +402,7 @@ public sealed class ClientMessage
     [JsonPropertyName("output")] public string? Output { get; set; }
     [JsonPropertyName("fileListing")] public FileListing? FileListing { get; set; }
     [JsonPropertyName("fileChunk")] public FileChunkData? FileChunk { get; set; }
+    [JsonPropertyName("screenshot")] public ScreenshotData? Screenshot { get; set; }
     [JsonPropertyName("transferId")] public string? TransferId { get; set; }
     [JsonPropertyName("appVersion")] public string? AppVersion { get; set; }
     [JsonPropertyName("serviceList")] public List<ServiceInfo>? ServiceList { get; set; }
@@ -440,8 +441,11 @@ public sealed class ServerCommand
     [JsonPropertyName("pawOffline")] public List<string>? PawOfflineClients { get; set; }
     [JsonPropertyName("pawProcesses")] public List<ProcessInfo>? PawProcesses { get; set; }
     [JsonPropertyName("pawSysInfo")] public SystemInfoReport? PawSysInfo { get; set; }
+    [JsonPropertyName("pawServices")] public List<ServiceInfo>? PawServices { get; set; }
+    [JsonPropertyName("pawEvents")] public List<EventLogEntry>? PawEvents { get; set; }
     [JsonPropertyName("pawFileListing")] public FileListing? PawFileListing { get; set; }
     [JsonPropertyName("pawFileChunk")] public FileChunkData? PawFileChunk { get; set; }
+    [JsonPropertyName("pawScreenshot")] public ScreenshotData? PawScreenshot { get; set; }
     [JsonPropertyName("pawTermOutput")] public string? PawTermOutput { get; set; }
     [JsonPropertyName("pawTermId")] public string? PawTermId { get; set; }
     [JsonPropertyName("pawCmdResult")] public bool PawCmdSuccess { get; set; }
@@ -518,12 +522,23 @@ public static class AgentIpc
         [JsonPropertyName("cmdInput")] public string? CmdInput { get; set; }
         [JsonPropertyName("cmdId")] public string? CmdId { get; set; }
         [JsonPropertyName("fileName")] public string? FileName { get; set; }
+        [JsonPropertyName("screenshot")] public ScreenshotData? Screenshot { get; set; }
+        [JsonPropertyName("pawPayload")] public ServerCommand? PawPayload { get; set; }
     }
 }
 
 // ═══════════════════════════════════════════════════
 //  File browser data models
 // ═══════════════════════════════════════════════════
+public sealed class ScreenshotData
+{
+    [JsonPropertyName("cmdId")] public string? CmdId { get; set; }
+    [JsonPropertyName("w")] public int Width { get; set; }
+    [JsonPropertyName("h")] public int Height { get; set; }
+    [JsonPropertyName("data")] public string Data { get; set; } = "";
+    [JsonPropertyName("error")] public string? Error { get; set; }
+}
+
 public sealed class FileListing
 {
     [JsonPropertyName("path")] public string Path { get; set; } = "";
