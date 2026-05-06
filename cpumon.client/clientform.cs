@@ -33,7 +33,7 @@ sealed class ClientForm : BorderlessForm
     string _cpu = "", _ak = "", _sid = "", _connThumb = ""; bool _authConfirmed, _approvalRequested;
     readonly SendPacer _pacer = new();
 
-    volatile bool _svcRunning;
+    volatile bool _svcInstalled, _svcRunning;
 
     // PAW state
     volatile bool _isPaw;
@@ -65,10 +65,18 @@ sealed class ClientForm : BorderlessForm
         installBtn.FlatAppearance.BorderColor = Color.FromArgb(70, Th.Grn);
         var uninstallBtn = new Button { Text = "Uninstall", ForeColor = Th.Red, BackColor = Th.Card, FlatStyle = FlatStyle.Flat, Size = new Size(80, 26), Location = new Point(156, 5), Font = new Font("Segoe UI", 8.5f), Cursor = Cursors.Hand, Visible = false };
         uninstallBtn.FlatAppearance.BorderColor = Color.FromArgb(70, Th.Red);
+        void UpdateServiceButtons()
+        {
+            installBtn.Text = _svcInstalled ? "Reinstall" : "Install as Service";
+            installBtn.Enabled = true;
+            uninstallBtn.Text = "Uninstall";
+            uninstallBtn.Visible = _svcInstalled;
+            uninstallBtn.Enabled = true;
+        }
         installBtn.Click += (_, _) =>
         {
             if (!AppState.Admin) { MessageBox.Show(this, "Run as administrator to install the service.", "Not Admin", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            string verb = _svcRunning ? "Reinstall" : "Install";
+            string verb = _svcInstalled ? "Reinstall" : "Install";
             if (MessageBox.Show(this, $"{verb} CPU Monitor as a Windows service?\n\nThe exe will be copied to Program Files and the service will be started.", $"{verb} Service", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             installBtn.Enabled = false; uninstallBtn.Enabled = false; installBtn.Text = "Installing...";
             Task.Run(() =>
@@ -78,16 +86,15 @@ sealed class ClientForm : BorderlessForm
                     ServiceManager.Install(null, null);
                     BeginInvoke(() =>
                     {
-                        _svcRunning = true; _cts.Cancel();
-                        installBtn.Text = "Reinstall"; installBtn.Enabled = true;
-                        uninstallBtn.Visible = true; uninstallBtn.Enabled = true;
+                        _svcInstalled = true; _svcRunning = true; _cts.Cancel();
+                        UpdateServiceButtons();
                         _netP.Invalidate();
                         MessageBox.Show(this, "Service installed and started.\n\nYou can close this window — the service will keep running.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     });
                 }
                 catch (Exception ex)
                 {
-                    BeginInvoke(() => { installBtn.Enabled = true; uninstallBtn.Enabled = true; installBtn.Text = _svcRunning ? "Reinstall" : "Install as Service"; MessageBox.Show(this, $"Install failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); });
+                    BeginInvoke(() => { UpdateServiceButtons(); MessageBox.Show(this, $"Install failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); });
                 }
             });
         };
@@ -103,16 +110,15 @@ sealed class ClientForm : BorderlessForm
                     ServiceManager.Uninstall();
                     BeginInvoke(() =>
                     {
-                        _svcRunning = false;
-                        installBtn.Text = "Install as Service"; installBtn.Enabled = true;
-                        uninstallBtn.Visible = false; uninstallBtn.Text = "Uninstall";
+                        _svcInstalled = false; _svcRunning = false;
+                        UpdateServiceButtons();
                         _netP.Invalidate();
                         MessageBox.Show(this, "Service uninstalled.\n\nRestart this window to connect directly.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     });
                 }
                 catch (Exception ex)
                 {
-                    BeginInvoke(() => { installBtn.Enabled = true; uninstallBtn.Enabled = true; uninstallBtn.Text = "Uninstall"; MessageBox.Show(this, $"Uninstall failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); });
+                    BeginInvoke(() => { UpdateServiceButtons(); MessageBox.Show(this, $"Uninstall failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); });
                 }
             });
         };
@@ -127,11 +133,12 @@ sealed class ClientForm : BorderlessForm
 
         Load += (_, _) =>
         {
-            if (ServiceManager.IsRunning())
+            _svcInstalled = ServiceManager.IsInstalled();
+            _svcRunning = ServiceManager.IsRunning();
+            UpdateServiceButtons();
+            if (_svcRunning)
             {
-                _svcRunning = true;
                 _log.Add("Service running — not connecting", Th.Dim);
-                installBtn.Text = "Reinstall"; uninstallBtn.Visible = true;
                 _tm.Start();
                 return;
             }

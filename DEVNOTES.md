@@ -96,3 +96,16 @@ readonly CLog _log = new();
 - **CpuMonService + AgentContext** (`--service` + `--agent`): a coupled pair. The service owns the TLS connection (Session 0). AgentContext runs in the user session and communicates exclusively via the named pipe `cpumon_agent_pipe`. AgentContext has no direct network access.
 - PAW relay path (service mode): `server → TLS → CpuMonService.CmdLoop → SendToAgent(AgentMessage{PawPayload}) → named pipe → AgentContext.PipeLoop → HandlePawPayload → PawDashboardForm`
 - PAW command path (service mode): `PawDashboardForm → AgentContext.SendPawCommand → _pipeWriter → named pipe → CpuMonService.AgentPipeLoop → _wr (TLS) → server`
+## Codex follow-up changes
+
+### `cpumon.client/service.cs`
+- Added `_isPaw` service-side state. `paw_granted`/`paw_revoked` now update this state before forwarding to AgentContext.
+- When a new AgentContext connects to the named pipe, CpuMonService replays `paw_granted` if `_isPaw` is already true. This prevents a restarted or late-starting user-session agent from losing PAW dashboard access.
+
+### `cpumon.client/contexts.cs`
+- AgentContext now ignores PAW command sends when the service pipe is disconnected instead of attempting a null write.
+- Added a null guard around `msg.Type.StartsWith("paw_")` in AgentContext's pipe handler.
+
+### `cpumon.client/clientform.cs`
+- GUI service controls now distinguish installed vs running service state. Installed-but-stopped services show `Reinstall` and `Uninstall`.
+- Install/uninstall failure paths now restore button labels through one shared helper.

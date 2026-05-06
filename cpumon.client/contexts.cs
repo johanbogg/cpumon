@@ -194,7 +194,12 @@ sealed class AgentContext : ApplicationContext
         cmd.IssuedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         cmd.Nonce = Guid.NewGuid().ToString("N");
         var msg = new ClientMessage { Type = "paw_command", PawTarget = target, PawCmd = cmd };
-        lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(msg)); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Debug("Agent.Paw", "Failed to send paw_command to service", ex); } }
+        lock (_pipeLock)
+        {
+            if (!_connected || _pipeWriter == null) return;
+            try { _pipeWriter.WriteLine(JsonSerializer.Serialize(msg)); _pipeWriter.Flush(); }
+            catch (Exception ex) { LogSink.Debug("Agent.Paw", "Failed to send paw_command to service", ex); }
+        }
     }
 
     async Task PipeLoop(CancellationToken ct)
@@ -376,7 +381,7 @@ sealed class AgentContext : ApplicationContext
                                 break;
 
                             default:
-                                if (msg.Type.StartsWith("paw_") && msg.PawPayload != null)
+                                if (msg.Type != null && msg.Type.StartsWith("paw_") && msg.PawPayload != null)
                                     HandlePawPayload(msg.PawPayload);
                                 break;
                         }

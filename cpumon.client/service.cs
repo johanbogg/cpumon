@@ -50,6 +50,7 @@ sealed class CpuMonService : ServiceBase
     volatile bool _authRequestPending;
     readonly ConcurrentDictionary<string, byte> _activeRdpSessions = new();
     readonly ConcurrentDictionary<string, long> _lastRdpMouseMoveMs = new();
+    volatile bool _isPaw;
 
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool GetNamedPipeClientProcessId(IntPtr hPipe, out uint clientProcessId);
@@ -204,6 +205,7 @@ sealed class CpuMonService : ServiceBase
 
                 _agentConnected = true;
                 Interlocked.Exchange(ref _agentLastPong, DateTime.UtcNow.Ticks);
+                if (_isPaw) SendToAgent(new AgentIpc.AgentMessage { Type = "paw_granted" });
                 if (_authRequestPending) SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" });
 
                 _ = Task.Run(async () =>
@@ -636,11 +638,19 @@ sealed class CpuMonService : ServiceBase
                 }
                 else if (cmd.Cmd == "send_message" && cmd.Message != null) SendToAgent(new AgentIpc.AgentMessage { Type = "msg_popup", Message = cmd.Message });
                 else if (cmd.Cmd == "update_push" && cmd.UpdateChunk != null) HandleUpdateChunk(cmd.UpdateChunk);
-                else if (cmd.Cmd.StartsWith("paw_")) SendToAgent(new AgentIpc.AgentMessage { Type = cmd.Cmd, PawPayload = cmd });
+                else if (cmd.Cmd.StartsWith("paw_")) HandlePawForAgent(cmd);
                 else CmdExec.Run(cmd, _tl, ref _wr);
             }
             catch (Exception ex) { LogSink.Warn("Service.CmdLoop", "Command dispatch failed", ex); }
         }
+    }
+
+    void HandlePawForAgent(ServerCommand cmd)
+    {
+        if (cmd.Cmd == "paw_granted") _isPaw = true;
+        else if (cmd.Cmd == "paw_revoked") _isPaw = false;
+
+        SendToAgent(new AgentIpc.AgentMessage { Type = cmd.Cmd, PawPayload = cmd });
     }
 
     void HandleAuthRejected(string reason)
