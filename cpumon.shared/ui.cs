@@ -454,6 +454,77 @@ public sealed class RdpViewerDialog : Form
 // ═══════════════════════════════════════════════════
 //  Terminal dialog (server side) — unchanged
 // ═══════════════════════════════════════════════════
+public sealed class ScreenshotPreviewDialog : Form
+{
+    readonly Panel _surface;
+    readonly PictureBox _pic;
+    readonly Bitmap? _image;
+    float _zoom = 1f;
+
+    public ScreenshotPreviewDialog(string machine, ScreenshotData shot)
+    {
+        Text = $"Screenshot - {machine}";
+        Size = new Size(980, 700); MinimumSize = new Size(420, 300);
+        StartPosition = FormStartPosition.CenterParent;
+        BackColor = Th.Bg; ForeColor = Th.Brt;
+
+        var top = new Panel { Dock = DockStyle.Top, Height = 38, BackColor = Th.TBg };
+        var fit = Btn("Fit", Th.Blu, 8);
+        var actual = Btn("100%", Th.Grn, 68);
+        var plus = Btn("+", Th.Cyan, 128);
+        var minus = Btn("-", Th.Cyan, 174);
+        var info = new Label { Text = shot.Error ?? $"{shot.Width} x {shot.Height}", ForeColor = shot.Error == null ? Th.Dim : Th.Red, AutoSize = true, Location = new Point(226, 11), Font = new Font("Segoe UI", 8.5f) };
+        top.Controls.AddRange(new Control[] { fit, actual, plus, minus, info });
+
+        _surface = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Color.FromArgb(10, 10, 12) };
+        _pic = new PictureBox { Location = new Point(0, 0), SizeMode = PictureBoxSizeMode.StretchImage };
+        _surface.Controls.Add(_pic);
+        Controls.Add(_surface); Controls.Add(top);
+
+        if (shot.Error == null && !string.IsNullOrEmpty(shot.Data))
+        {
+            try
+            {
+                var bytes = Convert.FromBase64String(shot.Data);
+                using var ms = new MemoryStream(bytes);
+                _image = new Bitmap(ms);
+                _pic.Image = _image;
+                Shown += (_, _) => Fit();
+            }
+            catch (Exception ex) { info.Text = $"Decode failed: {ex.Message}"; info.ForeColor = Th.Red; }
+        }
+
+        fit.Click += (_, _) => Fit();
+        actual.Click += (_, _) => SetZoom(1f);
+        plus.Click += (_, _) => SetZoom(_zoom * 1.25f);
+        minus.Click += (_, _) => SetZoom(_zoom / 1.25f);
+        _surface.MouseWheel += (_, e) => { if ((ModifierKeys & Keys.Control) == Keys.Control) SetZoom(e.Delta > 0 ? _zoom * 1.15f : _zoom / 1.15f); };
+        FormClosed += (_, _) => _image?.Dispose();
+    }
+
+    Button Btn(string text, Color fg, int x)
+    {
+        var b = new Button { Text = text, ForeColor = fg, BackColor = Th.Card, FlatStyle = FlatStyle.Flat, Size = new Size(52, 26), Location = new Point(x, 6), Font = new Font("Segoe UI", 8f), Cursor = Cursors.Hand };
+        b.FlatAppearance.BorderColor = fg;
+        return b;
+    }
+
+    void Fit()
+    {
+        if (_image == null || _surface.ClientSize.Width <= 0 || _surface.ClientSize.Height <= 0) return;
+        float zx = (float)(_surface.ClientSize.Width - 8) / _image.Width;
+        float zy = (float)(_surface.ClientSize.Height - 8) / _image.Height;
+        SetZoom(Math.Min(1f, Math.Max(0.05f, Math.Min(zx, zy))));
+    }
+
+    void SetZoom(float zoom)
+    {
+        if (_image == null) return;
+        _zoom = Math.Clamp(zoom, 0.05f, 8f);
+        _pic.Size = new Size(Math.Max(1, (int)(_image.Width * _zoom)), Math.Max(1, (int)(_image.Height * _zoom)));
+    }
+}
+
 public sealed class TerminalDialog : Form
 {
     readonly RemoteClient _client; readonly string _shell; readonly string _termId; readonly RichTextBox _output; readonly TextBox _input;

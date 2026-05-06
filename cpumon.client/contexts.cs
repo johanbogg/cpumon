@@ -319,6 +319,14 @@ sealed class AgentContext : ApplicationContext
                                     termClose.Dispose();
                                 break;
 
+                            case "screenshot":
+                            {
+                                var shot = ScreenshotService.Capture(msg.CmdId, msg.Quality > 0 ? msg.Quality : 80, msg.Fps);
+                                var reply = new ClientMessage { Type = "screenshot", CmdId = msg.CmdId, Screenshot = shot };
+                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(reply)); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to send screenshot to service", ex); } }
+                                break;
+                            }
+
                             case "start":
                             {
                                 ClientMessage r;

@@ -412,6 +412,10 @@ sealed class ServerForm : BorderlessForm
                             }
                             break;
 
+                        case "screenshot" when msg.Screenshot != null:
+                            BeginInvoke(() => new ScreenshotPreviewDialog(cl.MachineName, msg.Screenshot).Show(this));
+                            break;
+
                         case "rdp_frame" when msg.RdpFrame != null && msg.RdpId != null:
                             // Relay to PAW client that opened this session
                             if (cl.PawRdpSessionOwners.TryGetValue(msg.RdpId, out var pawOwner) &&
@@ -676,6 +680,7 @@ sealed class ServerForm : BorderlessForm
                     }
                     break;
                 case "sysinfo": cl.Send(new ServerCommand { Cmd = "sysinfo", CmdId = Guid.NewGuid().ToString("N")[..8] }); break;
+                case "screenshot": cl.Send(new ServerCommand { Cmd = "screenshot", CmdId = Guid.NewGuid().ToString("N")[..8] }); _log.Add($"Shotâ†’{m}", Th.Cyan); break;
                 case "forget":
                     if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
                     { _store.Forget(m); if (_cls.TryRemove(m, out var rc)) rc.Dispose(); _ct.Invalidate(); }
@@ -1108,6 +1113,7 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, bx2, by2, 60, 26, "Info", Th.Cyan, r.MachineName, "sysinfo"); bx2 += 68;
         if (!linux)
         {
+            DrawBtn(g, bx2, by2, 92, 26, "Screenshot", Th.Cyan, r.MachineName, "screenshot"); bx2 += 100;
             DrawBtn(g, bx2, by2, 74, 26, "Events", Th.Yel, r.MachineName, "events"); bx2 += 82;
         }
         DrawBtn(g, bx2, by2, 68, 26, "Msg", Th.Dim, r.MachineName, "msg");

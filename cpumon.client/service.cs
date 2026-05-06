@@ -230,7 +230,7 @@ sealed class CpuMonService : ServiceBase
                     {
                         var msg = JsonSerializer.Deserialize<ClientMessage>(line);
                         if (msg?.Type == "rdp_frame") { lock (_tl) { _wr?.WriteLine(line); _wr?.Flush(); } }
-                        else if (msg?.Type is "terminal_output" or "terminal_closed" or "cmdresult")
+                        else if (msg?.Type is "terminal_output" or "terminal_closed" or "cmdresult" or "screenshot")
                         { lock (_tl) { try { _wr?.WriteLine(line); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.AgentPipe", $"Failed to forward {msg.Type} from agent", ex); } } }
                         else if (msg?.Type == "pong") Interlocked.Exchange(ref _agentLastPong, DateTime.UtcNow.Ticks);
                         else if (msg?.Type == "paw_command") { lock (_tl) { try { _wr?.WriteLine(line); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.AgentPipe", "Failed to forward paw_command from agent to server", ex); } } }
@@ -637,6 +637,11 @@ sealed class CpuMonService : ServiceBase
                     else SendToAgent(new AgentIpc.AgentMessage { Type = "start", FileName = cmd.FileName, CmdInput = cmd.Args, CmdId = cmd.CmdId });
                 }
                 else if (cmd.Cmd == "send_message" && cmd.Message != null) SendToAgent(new AgentIpc.AgentMessage { Type = "msg_popup", Message = cmd.Message });
+                else if (cmd.Cmd == "screenshot")
+                {
+                    if (!_agentConnected) { var e = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = "Agent not connected" }; lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(e)); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.CmdLoop", "Failed to report unavailable agent for screenshot", ex); } } }
+                    else SendToAgent(new AgentIpc.AgentMessage { Type = "screenshot", CmdId = cmd.CmdId, Quality = 80, Fps = cmd.RdpMonitorIndex });
+                }
                 else if (cmd.Cmd == "update_push" && cmd.UpdateChunk != null) HandleUpdateChunk(cmd.UpdateChunk);
                 else if (cmd.Cmd.StartsWith("paw_")) HandlePawForAgent(cmd);
                 else CmdExec.Run(cmd, _tl, ref _wr);

