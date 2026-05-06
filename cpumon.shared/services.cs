@@ -463,6 +463,8 @@ public sealed class RemoteClient : IDisposable
     public readonly ConcurrentDictionary<string, FileBrowserDialog> FileBrowserDialogs = new();
     public readonly ConcurrentDictionary<string, FileDownloadState> ActiveDownloads = new();
     public readonly ConcurrentDictionary<string, RdpViewerDialog> RdpDialogs = new();
+    public readonly ConcurrentDictionary<string, string> PawCmdOwners = new();
+    public readonly ConcurrentDictionary<string, string> PawTerminalOwners = new();
     public readonly ConcurrentDictionary<string, string> PawRdpSessionOwners = new(); // rdpId → PAW client machine name
 
     public readonly ConcurrentQueue<ServerCommand> PendingCmds = new();
@@ -479,6 +481,7 @@ public sealed class RemoteClient : IDisposable
         foreach (var fd in FileBrowserDialogs.Values) try { fd.Dispose(); } catch { } FileBrowserDialogs.Clear();
         foreach (var rd in RdpDialogs.Values) try { rd.Close(); } catch { } RdpDialogs.Clear();
         foreach (var ds in ActiveDownloads.Values) ds.Dispose(); ActiveDownloads.Clear();
+        PawCmdOwners.Clear(); PawTerminalOwners.Clear(); PawRdpSessionOwners.Clear();
         _rd.Dispose(); _wr.Dispose(); _ssl.Dispose(); _tcp.Dispose();
     }
 }
@@ -593,7 +596,7 @@ public static class CmdExec
                             try { var p2 = Process.GetProcessById(kv.Key); var delta = (p2.TotalProcessorTime - t1).TotalMilliseconds; cpu = Math.Clamp((float)(delta / elapsed / ncpu * 100.0), 0f, 100f); } catch { }
                             return new ProcessInfo { Pid = kv.Key, Name = name, MemoryBytes = mem, CpuPercent = cpu };
                         }).OrderByDescending(p => p.MemoryBytes).ToList();
-                        var m2 = new ClientMessage { Type = "processlist", Processes = procs };
+                        var m2 = new ClientMessage { Type = "processlist", Processes = procs, CmdId = cmd.CmdId };
                         lock (lk) { wrSnap?.WriteLine(JsonSerializer.Serialize(m2)); wrSnap?.Flush(); }
                     } catch { }
                 });
@@ -601,7 +604,7 @@ public static class CmdExec
             }
             case "kill": try { var proc = Process.GetProcessById(cmd.Pid); string n = proc.ProcessName; proc.Kill(true); proc.WaitForExit(5000); Res(cmd.CmdId, true, $"Killed {n}", lk, wr); } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
             case "start": try { var s = Process.Start(new ProcessStartInfo { FileName = cmd.FileName ?? "", Arguments = cmd.Args ?? "", UseShellExecute = true }); Res(cmd.CmdId, true, $"PID {s?.Id}", lk, wr); } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
-            case "sysinfo": try { var si = SysInfoCollector.Collect(); var m2 = new ClientMessage { Type = "sysinfo", SysInfo = si }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(m2)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
+            case "sysinfo": try { var si = SysInfoCollector.Collect(); var m2 = new ClientMessage { Type = "sysinfo", SysInfo = si, CmdId = cmd.CmdId }; lock (lk) { wr?.WriteLine(JsonSerializer.Serialize(m2)); wr?.Flush(); } } catch (Exception ex) { Res(cmd.CmdId, false, ex.Message, lk, wr); } break;
             case "terminal_open": if (cmd.TermId != null) { if (Sessions.TryRemove(cmd.TermId, out var oldTs)) oldTs.Dispose(); try { Sessions[cmd.TermId] = new TerminalSession(cmd.TermId, cmd.Shell ?? "cmd", lk, wr); } catch (Exception ex) { Res(cmd.CmdId, false, $"Terminal: {ex.Message}", lk, wr); } } break;
             case "terminal_input": if (cmd.TermId != null && cmd.Input != null && Sessions.TryGetValue(cmd.TermId, out var ts)) ts.WriteInput(cmd.Input); break;
             case "terminal_close": if (cmd.TermId != null && Sessions.TryRemove(cmd.TermId, out var closing)) closing.Dispose(); break;

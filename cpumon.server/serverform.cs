@@ -51,7 +51,7 @@ sealed class ServerForm : BorderlessForm
         "list_events",
         "terminal_open", "terminal_input", "terminal_close",
         "file_list", "file_download", "file_upload_chunk", "file_delete", "file_mkdir", "file_rename",
-        "rdp_open", "rdp_close", "rdp_set_fps", "rdp_set_quality", "rdp_refresh", "rdp_input",
+        "rdp_open", "rdp_close", "rdp_set_fps", "rdp_set_quality", "rdp_refresh", "rdp_input", "rdp_set_monitor", "rdp_set_bandwidth",
     };
 
     public ServerForm(bool noBroadcast)
@@ -334,6 +334,8 @@ sealed class ServerForm : BorderlessForm
                         case "processlist" when msg.Processes != null:
                             cl.LastProcessList = msg.Processes;
                             _log.Add($"{cl.MachineName}: procs", Th.Blu);
+                            if (TryRoutePawCommandResult(cl, msg.CmdId, new ServerCommand { Cmd = "paw_processes", PawSource = cl.MachineName, PawProcesses = msg.Processes }))
+                                break;
                             BeginInvoke(() => {
                                 if (_procDialogs.TryGetValue(cl.MachineName, out var existing) && !existing.IsDisposed)
                                     existing.UpdateList(msg.Processes);
@@ -345,6 +347,8 @@ sealed class ServerForm : BorderlessForm
                             _log.Add($"{cl.MachineName}: sysinfo", Th.Cyan);
                             var firstMac = msg.SysInfo.MacAddresses.FirstOrDefault(m => !string.IsNullOrEmpty(m));
                             if (firstMac != null) _store.SetMac(cl.MachineName, firstMac);
+                            if (TryRoutePawCommandResult(cl, msg.CmdId, new ServerCommand { Cmd = "paw_sysinfo", PawSource = cl.MachineName, PawSysInfo = msg.SysInfo }))
+                                break;
                             BeginInvoke(() => { using var d = new SysInfoDialog(cl); d.ShowDialog(this); });
                             break;
 
@@ -361,6 +365,8 @@ sealed class ServerForm : BorderlessForm
                             break;
 
                         case "cmdresult":
+                            if (TryRoutePawCommandResult(cl, msg.CmdId, new ServerCommand { Cmd = "paw_cmd_result", PawSource = cl.MachineName, PawCmdSuccess = msg.Success, PawCmdMsg = msg.Message, PawCmdId = msg.CmdId }))
+                                break;
                             _log.Add($"[{cl.MachineName}] {msg.CmdId}: {(msg.Success ? "✓" : "✕")} {msg.Message}",
                                 msg.Success ? Th.Grn : Th.Red);
                             if (msg.CmdId != null)
@@ -372,21 +378,29 @@ sealed class ServerForm : BorderlessForm
                             break;
 
                         case "terminal_output" when msg.TermId != null && msg.Output != null:
+                            if (TryRoutePawTerminal(cl, msg.TermId, new ServerCommand { Cmd = "paw_term_output", PawSource = cl.MachineName, PawTermId = msg.TermId, PawTermOutput = msg.Output }))
+                                break;
                             if (cl.TerminalDialogs.TryGetValue(msg.TermId, out var td))
                                 td.ReceiveOutput(msg.Output);
                             break;
 
                         case "terminal_closed" when msg.TermId != null:
+                            if (TryRoutePawTerminal(cl, msg.TermId, new ServerCommand { Cmd = "paw_term_output", PawSource = cl.MachineName, PawTermId = msg.TermId, PawTermOutput = "\r\n[terminal closed]\r\n" }, remove: true))
+                                break;
                             if (cl.TerminalDialogs.TryGetValue(msg.TermId, out var closedTd))
                                 BeginInvoke(() => closedTd.ReceiveClosed());
                             break;
 
                         case "file_listing" when msg.FileListing != null:
+                            if (TryRoutePawCommandResult(cl, msg.CmdId, new ServerCommand { Cmd = "paw_file_listing", PawSource = cl.MachineName, PawFileListing = msg.FileListing, CmdId = msg.CmdId }))
+                                break;
                             if (msg.CmdId != null && cl.FileBrowserDialogs.TryGetValue(msg.CmdId, out var fbListing))
                                 fbListing.ReceiveListing(msg.FileListing);
                             break;
 
                         case "file_chunk" when msg.FileChunk != null:
+                            if (TryRoutePawTransfer(cl, msg.FileChunk.TransferId, new ServerCommand { Cmd = "paw_file_chunk", PawSource = cl.MachineName, PawFileChunk = msg.FileChunk }, msg.FileChunk.IsLast))
+                                break;
                             // Route to the appropriate file browser dialog
                             foreach (var fb in cl.FileBrowserDialogs.Values)
                             {
@@ -418,6 +432,12 @@ sealed class ServerForm : BorderlessForm
                                     pawTarget.PawRdpSessionOwners[pc.RdpId] = cl.MachineName;
                                 else if (pc.Cmd == "rdp_close" && pc.RdpId != null)
                                     pawTarget.PawRdpSessionOwners.TryRemove(pc.RdpId, out _);
+                                if (pc.CmdId != null)
+                                    pawTarget.PawCmdOwners[pc.CmdId] = cl.MachineName;
+                                if (pc.TransferId != null)
+                                    pawTarget.PawCmdOwners[pc.TransferId] = cl.MachineName;
+                                if (pc.Cmd == "terminal_open" && pc.TermId != null)
+                                    pawTarget.PawTerminalOwners[pc.TermId] = cl.MachineName;
                                 try { pawTarget.Send(pc); } catch { }
                             }
                             break;
@@ -441,6 +461,50 @@ sealed class ServerForm : BorderlessForm
             if (powerAction != null) _log.Add($"Disc: {name} — {powerAction.Label} ✓ ({rx}, {disconnectReason})", Th.Grn);
             else _log.Add($"Disc: {name ?? remote} ({rx}, {disconnectReason})", Th.Org);
         }
+    }
+
+    bool TryRoutePawCommandResult(RemoteClient source, string? cmdId, ServerCommand response)
+    {
+        if (cmdId == null || !source.PawCmdOwners.TryRemove(cmdId, out var pawOwner))
+            return false;
+        response.PawSource = source.MachineName;
+        try
+        {
+            if (_cls.TryGetValue(pawOwner, out var pawClient) && pawClient.IsPaw)
+                pawClient.Send(response);
+        }
+        catch { }
+        return true;
+    }
+
+    bool TryRoutePawTransfer(RemoteClient source, string? transferId, ServerCommand response, bool remove)
+    {
+        if (transferId == null || !source.PawCmdOwners.TryGetValue(transferId, out var pawOwner))
+            return false;
+        response.PawSource = source.MachineName;
+        try
+        {
+            if (_cls.TryGetValue(pawOwner, out var pawClient) && pawClient.IsPaw)
+                pawClient.Send(response);
+        }
+        catch { }
+        if (remove) source.PawCmdOwners.TryRemove(transferId, out _);
+        return true;
+    }
+
+    bool TryRoutePawTerminal(RemoteClient source, string termId, ServerCommand response, bool remove = false)
+    {
+        if (!source.PawTerminalOwners.TryGetValue(termId, out var pawOwner))
+            return false;
+        response.PawSource = source.MachineName;
+        try
+        {
+            if (_cls.TryGetValue(pawOwner, out var pawClient) && pawClient.IsPaw)
+                pawClient.Send(response);
+        }
+        catch { }
+        if (remove) source.PawTerminalOwners.TryRemove(termId, out _);
+        return true;
     }
 
     void RegisterPendingApproval(PendingClientApproval pending)

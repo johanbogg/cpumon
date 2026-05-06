@@ -109,3 +109,9 @@ readonly CLog _log = new();
 ### `cpumon.client/clientform.cs`
 - GUI service controls now distinguish installed vs running service state. Installed-but-stopped services show `Reinstall` and `Uninstall`.
 - Install/uninstall failure paths now restore button labels through one shared helper.
+
+### PAW relay return-path fix
+- Server now records which PAW client owns relayed command ids, terminal ids, transfer ids, and RDP ids on the target `RemoteClient`.
+- Target responses for process lists, sysinfo, cmd results, terminal output, file listings, file chunks, and RDP frames are routed back to the owning PAW client instead of falling into the server's direct UI handlers.
+- `listprocesses` and `sysinfo` responses now preserve `CmdId` so the server can correlate PAW replies.
+- PAW process refresh timer now includes a `CmdId`; PAW uploads now include a `CmdId` for result routing.
