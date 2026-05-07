@@ -41,6 +41,9 @@ sealed class ServerForm : BorderlessForm
     readonly Dictionary<string, ProcDialog> _procDialogs = new();
     readonly ConcurrentDictionary<string, long> _pawSeenNonces = new();
     readonly AlertService _alertSvc;
+    readonly UpdateChecker _updater = new();
+    volatile ReleaseInfo? _availableUpdate;
+    static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(6);
 
     // Explicit allow-list for commands relayed through PAW; update_push and auth_response are never relayed
     static readonly HashSet<string> PawAllowedCmds = new(StringComparer.Ordinal)
@@ -91,6 +94,7 @@ sealed class ServerForm : BorderlessForm
             _store.Prune(90);
             if (!_nb) Task.Run(() => BeaconLoop(_cts.Token));
             Task.Run(() => ListenLoop(_cts.Token));
+            Task.Run(() => UpdateCheckLoop(_cts.Token));
             _tm.Start();
         };
 
@@ -186,6 +190,22 @@ sealed class ServerForm : BorderlessForm
                 for (int i = 0; i < 4; i++) bcast[i] = (byte)(a[i] | ~m[i]);
                 yield return (ua.Address, new IPAddress(bcast));
             }
+        }
+    }
+
+    async Task UpdateCheckLoop(CancellationToken ct)
+    {
+        try { await Task.Delay(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false); } catch { return; }
+        while (!ct.IsCancellationRequested)
+        {
+            var info = await _updater.CheckLatestAsync(ct).ConfigureAwait(false);
+            if (info != null && _availableUpdate?.Version != info.Version)
+            {
+                _availableUpdate = info;
+                if (!IsDisposed)
+                    BeginInvoke(() => { _log.Add($"↑ Update available: v{info.Version}", Th.Cyan); _ct.Invalidate(); });
+            }
+            try { await Task.Delay(UpdateCheckInterval, ct).ConfigureAwait(false); } catch { return; }
         }
     }
 
@@ -615,6 +635,12 @@ sealed class ServerForm : BorderlessForm
             if (a == "showapproved") { BeginInvoke(() => { using var d = new ApprovedClientsDialog(_store, _cls, _log); d.ShowDialog(this); }); break; }
             if (a == "theme") { Th.Toggle(); break; }
             if (a == "alerts") { BeginInvoke(() => { using var d = new AlertConfigDialog(_alertSvc); if (d.ShowDialog(this) == DialogResult.OK) _ct.Invalidate(); }); break; }
+            if (a == "openrelease")
+            {
+                var url = _availableUpdate?.ReleaseUrl;
+                if (url != null) { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); } catch (Exception ex) { LogSink.Warn("Server.UI", $"Failed to open release URL {url}", ex); } }
+                break;
+            }
             if (a == "approve_pending") { ApprovePending(m); break; }
             if (a == "reject_pending") { RejectPending(m); break; }
             if (a == "forget_offline")
@@ -907,7 +933,10 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, bx, y + 23, 70, 24, "🔄 New", Th.Org, "", "newtoken"); bx += 78;
         DrawBtn(g, bx, y + 23, 84, 24, "👥 Clients", Th.Cyan, "", "showapproved"); bx += 92;
         DrawBtn(g, bx, y + 23, 68, 24, Th.IsDark ? "☀ Light" : "🌙 Dark", Th.Dim, "", "theme"); bx += 76;
-        DrawBtn(g, bx, y + 23, 80, 24, "🔔 Alerts", _alertSvc.ThresholdsConfigured ? Th.Org : Th.Dim, "", "alerts");
+        DrawBtn(g, bx, y + 23, 80, 24, "🔔 Alerts", _alertSvc.ThresholdsConfigured ? Th.Org : Th.Dim, "", "alerts"); bx += 88;
+        var update = _availableUpdate;
+        if (update != null)
+            DrawBtn(g, bx, y + 23, 110, 24, $"↑ Update v{update.Version}", Th.Cyan, "", "openrelease");
 
         using (var cf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var ccb = new SolidBrush(_cc > 0 ? Th.Grn : Th.Dim))
