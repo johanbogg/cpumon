@@ -48,10 +48,6 @@ VERSION     = "1.0.111-linux"
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
-def derive_key(token: str, machine: str) -> str:
-    raw = f"{token}:{machine}:cpumon_v2".encode()
-    return base64.b64encode(hashlib.sha256(raw).digest()).decode()[:32]
-
 def cert_thumbprint(der: bytes) -> str:
     return hashlib.sha1(der).hexdigest().upper()
 
