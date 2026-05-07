@@ -35,7 +35,8 @@ sealed class CpuMonService : ServiceBase
     TcpClient? _tcp; SslStream? _ssl; StreamWriter? _wr; StreamReader? _rd;
     readonly object _tl = new();
     string _cpu = "", _ak = "", _sid = "", _connThumb = "";
-    bool _authConfirmed, _approvalRequested;
+    bool _authConfirmed;
+    volatile bool _approvalRequested;
     readonly SendPacer _pacer = new();
     FileStream? _updateStream;
 

@@ -452,7 +452,7 @@ sealed class DaemonContext : ApplicationContext
     readonly string? _fip; string? _tok;
     volatile NetState _ns = NetState.Idle; volatile string _sa = ""; volatile int _sc;
     volatile IPEndPoint? _ep; TcpClient? _tcp; SslStream? _ssl; StreamWriter? _wr; StreamReader? _rd;
-    readonly object _tl = new(); string _cpu = "", _ak = "", _sid = "", _connThumb = ""; bool _authConfirmed, _approvalRequested;
+    readonly object _tl = new(); string _cpu = "", _ak = "", _sid = "", _connThumb = ""; bool _authConfirmed; volatile bool _approvalRequested;
     readonly SendPacer _pacer = new();
     volatile bool _isPaw;
     volatile int _peerCount;
