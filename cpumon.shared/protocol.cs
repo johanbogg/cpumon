@@ -194,8 +194,25 @@ public static class LogSink
         return LevelRank[level] >= LevelRank[_minLevel];
     }
 
-    public static string StripControlChars(string value) =>
-        string.Concat((value ?? "").Where(ch => ch >= ' ' || ch == '\t'));
+    public static string StripControlChars(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return "";
+        StringBuilder? sb = null;
+        for (int i = 0; i < value.Length; i++)
+        {
+            char ch = value[i];
+            if (ch >= ' ' || ch == '\t')
+            {
+                sb?.Append(ch);
+            }
+            else if (sb == null)
+            {
+                sb = new StringBuilder(value.Length);
+                sb.Append(value, 0, i);
+            }
+        }
+        return sb?.ToString() ?? value;
+    }
 
     static string Clean(string value)
     {
