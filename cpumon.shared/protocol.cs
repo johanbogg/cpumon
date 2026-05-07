@@ -253,7 +253,7 @@ public static class CertificateStore
             AppPaths.EnsureDataDir();
             File.Copy(legacy, target, overwrite: false);
         }
-        catch { }
+        catch (Exception ex) { LogSink.Warn("CertificateStore", $"Legacy {fileName} migration failed", ex); }
     }
 }
 
@@ -285,7 +285,7 @@ public sealed class ApprovedClientStore
                 if (list != null) foreach (var c in list) { c.Key = DecryptKey(c.Key); _c[c.Name] = c; }
             }
         }
-        catch { }
+        catch (Exception ex) { LogSink.Warn("ApprovedClientStore", $"Failed to load {_path}", ex); }
     }
     void Save()
     {
@@ -298,7 +298,7 @@ public sealed class ApprovedClientStore
             File.WriteAllText(tmp, json);
             File.Move(tmp, _path, overwrite: true);
         }
-        catch { }
+        catch (Exception ex) { LogSink.Error("ApprovedClientStore", $"Failed to save {_path}", ex); }
     }
     void TryMigrateLegacyFile(string fileName)
     {
@@ -310,7 +310,7 @@ public sealed class ApprovedClientStore
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
             File.Copy(legacy, _path, overwrite: false);
         }
-        catch { }
+        catch (Exception ex) { LogSink.Warn("ApprovedClientStore", $"Legacy {fileName} migration failed", ex); }
     }
     static string EncryptKey(string k) { return Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(k), null, DataProtectionScope.LocalMachine)); }
     static string DecryptKey(string k) { try { return Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(k), null, DataProtectionScope.LocalMachine)); } catch { return ""; } }
