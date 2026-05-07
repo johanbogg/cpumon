@@ -39,6 +39,8 @@ public static class Proto
     public const int KAMs      = 60_000;
     public const int FileChunkSize = 65536;
     public const int RdpFpsDefault = 5;
+    public const int RdpFpsMin = 1;
+    public const int RdpFpsMax = 30;
     public const int RdpTileSize = 128;
     public const int RdpJpegQuality = 25;
     public const int RdpMouseMoveIntervalMs = 100;

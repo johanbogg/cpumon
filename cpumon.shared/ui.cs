@@ -178,7 +178,7 @@ public sealed class RdpViewerDialog : Form
         top.Controls.Add(_statusLbl);
 
         top.Controls.Add(new Label { Text = "FPS:", ForeColor = Th.Dim, Font = new Font("Segoe UI", 7.5f), AutoSize = true, Location = new Point(400, 10) });
-        _fpsSlider = new TrackBar { Minimum = 1, Maximum = 30, Value = Proto.RdpFpsDefault, TickFrequency = 5, SmallChange = 1, Size = new Size(100, 20), Location = new Point(430, 4), BackColor = Th.TBg };
+        _fpsSlider = new TrackBar { Minimum = Proto.RdpFpsMin, Maximum = Proto.RdpFpsMax, Value = Proto.RdpFpsDefault, TickFrequency = 5, SmallChange = 1, Size = new Size(100, 20), Location = new Point(430, 4), BackColor = Th.TBg };
         _fpsSlider.ValueChanged += (_, _) => SendIfOpen(new ServerCommand { Cmd = "rdp_set_fps", RdpId = _rdpId, RdpFps = _fpsSlider.Value });
         top.Controls.Add(_fpsSlider);
 
