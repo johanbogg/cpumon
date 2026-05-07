@@ -395,7 +395,7 @@ sealed class CpuMonService : ServiceBase
         {
             if (!_agentConnected || _agentWriter == null) return;
             try { _agentWriter.WriteLine(JsonSerializer.Serialize(msg)); _agentWriter.Flush(); }
-            catch (Exception ex) { LogSink.Warn("Service.CmdLoop", "Command loop iteration failed", ex); }
+            catch (Exception ex) { LogSink.Warn("Service.SendToAgent", "Failed to write to agent pipe", ex); }
         }
     }
 
