@@ -60,7 +60,7 @@ sealed class ServerForm : BorderlessForm
         _alertSvc = new AlertService(_log);
         _tok = Security.GenToken(); _tokAt = DateTime.UtcNow;
 
-        Text = "CPU Monitor — Server";
+        Text = $"CPU Monitor — Server  v{Proto.AppVersion}";
         StartPosition = FormStartPosition.Manual;
         Location = new Point(50, 50);
         ClientSize = new Size(820, 640);
