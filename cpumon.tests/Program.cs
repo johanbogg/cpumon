@@ -18,6 +18,7 @@ internal static class Program
             TestSendPacerWakesOnModeChange();
             TestSendPacerWakesOnDemand();
             TestApprovedClientAliasPersists();
+            TestApprovedClientForgetPersists();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -159,6 +160,24 @@ internal static class Program
         var reloaded = new ApprovedClientStore(path);
         Assert(reloaded.GetAlias("DESKTOP-123") == "Kids PC", "alias should persist after reload");
         Assert(reloaded.IsOk("DESKTOP-123", "key"), "alias persistence should not break stored key");
+    }
+
+    static void TestApprovedClientForgetPersists()
+    {
+        using var td = new TempDir();
+        string path = Path.Combine(td.Path, "approved_clients.json");
+        var store = new ApprovedClientStore(path);
+        store.Approve("DESKTOP-A", "keyA", "10.0.0.1", "saltA");
+        store.Approve("DESKTOP-B", "keyB", "10.0.0.2", "saltB");
+        Assert(store.IsOk("DESKTOP-A", "keyA"), "DESKTOP-A should be approved");
+        Assert(store.IsOk("DESKTOP-B", "keyB"), "DESKTOP-B should be approved");
+
+        store.Forget("DESKTOP-A");
+        Assert(!store.IsOk("DESKTOP-A", "keyA"), "forgotten client should not be approved in memory");
+
+        var reloaded = new ApprovedClientStore(path);
+        Assert(!reloaded.IsOk("DESKTOP-A", "keyA"), "forgotten client should be persisted as removed");
+        Assert(reloaded.IsOk("DESKTOP-B", "keyB"), "non-forgotten client should still be approved after reload");
     }
 
     static void Assert(bool condition, string message)
