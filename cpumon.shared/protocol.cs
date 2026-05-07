@@ -111,7 +111,7 @@ public sealed class CLog
     public void Add(string m, Color c)
     {
         // Strip control characters to prevent log injection via client-controlled strings
-        m = string.Concat(m.Where(ch => ch >= ' ' || ch == '\t'));
+        m = LogSink.StripControlChars(m);
         var now = DateTime.Now;
         lock (_l)
         {
@@ -194,9 +194,12 @@ public static class LogSink
         return LevelRank[level] >= LevelRank[_minLevel];
     }
 
+    public static string StripControlChars(string value) =>
+        string.Concat((value ?? "").Where(ch => ch >= ' ' || ch == '\t'));
+
     static string Clean(string value)
     {
-        string clean = string.Concat((value ?? "").Where(ch => ch >= ' ' || ch == '\t'));
+        string clean = StripControlChars(value);
         return clean.Length <= 2048 ? clean : clean[..2048];
     }
 }
