@@ -1135,7 +1135,7 @@ sealed class ServerForm : BorderlessForm
 
         // Metrics row 2 — storage & net
         int my2 = y + 87, mx2 = x + 14;
-        if (r.RamTotalGB > 0) { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); DrawMetric(g, mx2, my2, $"RAM {pct}%", $"{FmtGb(r.RamUsedGB, "0.1")} GB used", pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); mx2 += 128; }
+        if (r.RamTotalGB > 0) { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); DrawMetric(g, mx2, my2, $"RAM {pct}%", $"{FmtGb(r.RamUsedGB, "0")} GB used", pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); mx2 += 128; }
         foreach (var drv in r.Drives.Take(3)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); mx2 += 104; }
         if (r.GpuVramTotalMB is > 0 && r.GpuVramUsedMB.HasValue) { string vram = r.GpuVramTotalMB > 1024 ? $"{FmtGb(r.GpuVramUsedMB.Value / 1024.0, "0.1")}/{FmtGb(r.GpuVramTotalMB.Value / 1024.0, "0.0")}G" : $"{r.GpuVramUsedMB.Value.ToString("0", CultureInfo.InvariantCulture)}/{r.GpuVramTotalMB.Value.ToString("0", CultureInfo.InvariantCulture)}M"; DrawMetric(g, mx2, my2, "VRAM", vram, Th.Blu); mx2 += 112; }
         if (r.NetUpKBps + r.NetDownKBps > 0.5) DrawMetric(g, mx2, my2, "NET ↑↓", $"{FmtNet(r.NetUpKBps)}/{FmtNet(r.NetDownKBps)}", Th.Dim);
