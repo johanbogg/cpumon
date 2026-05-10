@@ -923,7 +923,7 @@ sealed class ServerForm : BorderlessForm
                 g.DrawString("OFFLINE", hf, hb, x + 4, y + 4);
             y += 18;
             foreach (var ac in offlineClients)
-            { DrawOffline(g, x, y, w, ac); y += 38; }
+            { DrawOffline(g, x, y, w, ac); y += 52; }
         }
 
         int logY = Math.Max(y + 8, _ct.Height - 110);
@@ -1223,22 +1223,20 @@ sealed class ServerForm : BorderlessForm
 
     void DrawOffline(Graphics g, int x, int y, int w, ApprovedClient ac)
     {
-        int h = 34;
+        int h = 48;
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
         using (var bp = new Pen(Color.FromArgb(Th.IsDark ? 35 : 90, Th.Brd), 1f)) { using var p = Th.RR(x, y, w, h, 6); g.DrawPath(bp, p); }
         using (var ac2 = new SolidBrush(Color.FromArgb(80, Th.Dim)))
             g.FillRectangle(ac2, x + 1, y + 6, 4, h - 12);
-        using (var dot = new SolidBrush(Th.Dim)) g.FillEllipse(dot, x + 12, y + 13, 7, 7);
+        using (var dot = new SolidBrush(Th.Dim)) g.FillEllipse(dot, x + 12, y + 12, 7, 7);
         string offDisplay = string.IsNullOrEmpty(ac.Alias) ? ac.Name : ac.Alias;
         using (var nf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold)) using (var nb = new SolidBrush(Th.Dim))
-            g.DrawString(offDisplay, nf, nb, x + 24, y + 8);
+            g.DrawString(offDisplay, nf, nb, x + 24, y + 6);
         if (!string.IsNullOrEmpty(ac.Alias))
         {
-            using var hnf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold);
-            var offNsz = g.MeasureString(offDisplay, hnf);
             using var hnf2 = new Font("Segoe UI", 7f);
             using var hnb = new SolidBrush(Th.Dim);
-            g.DrawString(ac.Name, hnf2, hnb, x + 26 + (int)offNsz.Width, y + 12);
+            g.DrawString(ac.Name, hnf2, hnb, x + 26, y + 25);
         }
         var ago = DateTime.UtcNow - ac.Seen;
         string agoStr = ago.TotalDays >= 1 ? $"{(int)ago.TotalDays}d ago" : ago.TotalHours >= 1 ? $"{(int)ago.TotalHours}h ago" : ago.TotalMinutes >= 1 ? $"{(int)ago.TotalMinutes}m ago" : "just now";
