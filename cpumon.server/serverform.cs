@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.IO;
 using System.Net.Security;
 using System.Security.Cryptography;
@@ -1134,9 +1135,9 @@ sealed class ServerForm : BorderlessForm
 
         // Metrics row 2 — storage & net
         int my2 = y + 87, mx2 = x + 14;
-        if (r.RamTotalGB > 0) { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); DrawMetric(g, mx2, my2, "RAM", $"{r.RamUsedGB:0.1}/{r.RamTotalGB:0.0} GB", pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); mx2 += 140; }
+        if (r.RamTotalGB > 0) { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); DrawMetric(g, mx2, my2, "RAM", $"{FmtGb(r.RamUsedGB, "0.1")}/{FmtGb(r.RamTotalGB, "0.0")} GB", pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); mx2 += 152; }
         foreach (var drv in r.Drives.Take(3)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); mx2 += 104; }
-        if (r.GpuVramTotalMB is > 0 && r.GpuVramUsedMB.HasValue) { string vram = r.GpuVramTotalMB > 1024 ? $"{r.GpuVramUsedMB/1024:0.1}/{r.GpuVramTotalMB/1024:0.0}G" : $"{r.GpuVramUsedMB:0}/{r.GpuVramTotalMB:0}M"; DrawMetric(g, mx2, my2, "VRAM", vram, Th.Blu); mx2 += 112; }
+        if (r.GpuVramTotalMB is > 0 && r.GpuVramUsedMB.HasValue) { string vram = r.GpuVramTotalMB > 1024 ? $"{FmtGb(r.GpuVramUsedMB.Value / 1024.0, "0.1")}/{FmtGb(r.GpuVramTotalMB.Value / 1024.0, "0.0")}G" : $"{r.GpuVramUsedMB.Value.ToString("0", CultureInfo.InvariantCulture)}/{r.GpuVramTotalMB.Value.ToString("0", CultureInfo.InvariantCulture)}M"; DrawMetric(g, mx2, my2, "VRAM", vram, Th.Blu); mx2 += 112; }
         if (r.NetUpKBps + r.NetDownKBps > 0.5) DrawMetric(g, mx2, my2, "NET ↑↓", $"{FmtNet(r.NetUpKBps)}/{FmtNet(r.NetDownKBps)}", Th.Dim);
 
         // Separator: metrics / buttons
@@ -1271,6 +1272,7 @@ sealed class ServerForm : BorderlessForm
     }
 
     static string FmtNet(double kbps) => kbps >= 1024 ? $"{kbps / 1024.0:0.0}M" : $"{kbps:0}K";
+    static string FmtGb(double value, string format) => value.ToString(format, CultureInfo.InvariantCulture);
     static void DrawMetric(Graphics g, int x, int y, string l, string v, Color c)
     {
         using var lf = new Font("Segoe UI", 6f); using var lb = new SolidBrush(Color.FromArgb(110, Th.Brt));
