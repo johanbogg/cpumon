@@ -24,6 +24,7 @@ sealed class ServerForm : BorderlessForm
     readonly Timer _tm;
     readonly CancellationTokenSource _cts = new();
     readonly CLog _log = new(50, "cpumon_server.log");
+    readonly ToolTip _toolTip = new();
     readonly ConcurrentDictionary<string, RemoteClient> _cls = new();
     readonly ConcurrentDictionary<string, PendingClientApproval> _pendingApprovals = new();
     readonly ApprovedClientStore _store = new();
@@ -38,6 +39,7 @@ sealed class ServerForm : BorderlessForm
     volatile int _cc;
     int _sy;
     readonly List<(Rectangle R, string M, string A)> _btns = new();
+    string _currentToolTip = "";
     readonly Dictionary<string, ProcDialog> _procDialogs = new();
     readonly ConcurrentDictionary<string, long> _pawSeenNonces = new();
     readonly AlertService _alertSvc;
@@ -78,6 +80,7 @@ sealed class ServerForm : BorderlessForm
         _ct.Paint += PaintContent;
         _ct.MouseWheel += (_, e) => { _sy = Math.Max(0, _sy - e.Delta / 4); _ct.Invalidate(); };
         _ct.MouseClick += OnClick;
+        _ct.MouseMove += OnMouseMove;
 
         Controls.Add(_ct);
         Controls.Add(tp);
@@ -101,6 +104,7 @@ sealed class ServerForm : BorderlessForm
         FormClosed += (_, _) =>
         {
             _tm.Stop(); _tm.Dispose(); _cts.Cancel();
+            _toolTip.Dispose();
             foreach (var p in _pendingApprovals.Values) p.Client.Dispose();
             foreach (var c in _cls.Values) c.Dispose();
             CmdExec.DisposeAll();
@@ -763,6 +767,27 @@ sealed class ServerForm : BorderlessForm
             break;
         }
     }
+
+    void OnMouseMove(object? sender, MouseEventArgs e)
+    {
+        string tip = "";
+        foreach (var (r, _, a) in _btns)
+        {
+            if (!r.Contains(e.Location)) continue;
+            tip = TooltipForAction(a);
+            break;
+        }
+
+        if (tip == _currentToolTip) return;
+        _currentToolTip = tip;
+        _toolTip.SetToolTip(_ct, tip);
+    }
+
+    static string TooltipForAction(string action) => action switch
+    {
+        "openrelease" => "Open the GitHub release page in your browser",
+        _ => ""
+    };
 
     void PushUpdate(RemoteClient cl, string exePath)
     {
