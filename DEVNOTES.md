@@ -1,121 +1,114 @@
-# Dev session notes — 2026-05-06
+# Dev notes
 
-## Branch: test-20260506
-
-Summary of changes made in this session. Written for handoff to Codex or other collaborators.
+Architecture and implementation notes that don't belong in `README.md` (user-facing) or `CLAUDE.md` (terse codebase context). Read both of those first.
 
 ---
 
-## Changes by file
+## Two client topologies
 
-### `cpumon.shared/protocol.cs`
-- Added `[JsonPropertyName("pawPayload")] public ServerCommand? PawPayload { get; set; }` to `AgentIpc.AgentMessage`.
-  This lets CpuMonService embed a full `ServerCommand` when relaying PAW events to AgentContext over the named pipe.
+cpumon Windows clients run in one of two topologies. Each owns its own state machine; do not assume code in one applies to the other.
 
----
+### `--daemon` (DaemonContext)
 
-### `cpumon.client/service.cs`
+Self-contained. One process. Owns the TLS connection to the server, the systray icon, the local hardware monitor, and the PAW dashboard. No named pipe, no second process. Used when the client is running interactively (logged-in user, no SCM service).
 
-**`CmdLoop`**
-- Added `else if (cmd.Cmd.StartsWith("paw_")) SendToAgent(new AgentIpc.AgentMessage { Type = cmd.Cmd, PawPayload = cmd });`
-  before the final `CmdExec.Run` fallthrough. All `paw_*` commands from the server are now forwarded to the agent process.
+### `--service` + `--agent` (CpuMonService + AgentContext)
 
-**`AgentPipeLoop`**
-- Added `else if (msg?.Type == "paw_command") { lock (_tl) { _wr?.WriteLine(line); _wr?.Flush(); } }`
-  Agent-originated `paw_command` messages are forwarded verbatim to the server on the TLS connection.
+A coupled pair launched by the SCM service install (`--install`).
 
-**`ServiceManager`** (pre-existing changes from this session, not from a prior branch)
-- Added `ScExeOrThrow(string args, string label)` — throws `InvalidOperationException` on non-zero sc.exe exit.
-- `Install()` now uses `ScExeOrThrow` for the `create` and `start` calls.
-- Added `public static bool IsInstalled()` and `public static bool IsRunning()` using `ServiceController`.
+- **CpuMonService** runs in Session 0 as `LocalSystem`. Owns the TLS connection to the server. Has no UI. Spawns a per-session `--agent` process in each interactive user's session via `schtasks`.
+- **AgentContext** runs in the user session. Owns the systray icon, screen capture, input injection, message popups, and the PAW dashboard UI. Has no direct network access. Talks to CpuMonService over the named pipe `cpumon_agent_pipe`.
+
+The pipe is authenticated by `GetNamedPipeClientProcessId` + exe path comparison — no shared secret on the command line.
 
 ---
 
-### `cpumon.client/contexts.cs`
+## PAW relay paths
 
-#### `AgentContext` — new PAW support
-AgentContext previously had no PAW awareness (no UI, no handling of `paw_*` pipe messages).
+PAW (Privileged Access Workstation) lets one client see the server's full dashboard and dispatch commands to other clients. The path differs by topology:
 
-**Fields added:**
-```csharp
-readonly ConcurrentDictionary<string, PawRemoteClient> _pawClients = new();
-PawDashboardForm? _pawForm;
-ToolStripMenuItem? _pawMenuItem;
-volatile bool _isPaw;
-readonly CLog _log = new();
+### DaemonContext (one process owns everything)
+
+```
+server → TLS → DaemonContext.CmdLoop → PawDashboardForm
+PawDashboardForm → DaemonContext.SendPawCommand → TLS → server
 ```
 
-**Constructor:** Added "PAW Dashboard" `ToolStripMenuItem` (disabled until `paw_granted` received) between the separator and "Exit Agent".
+### CpuMonService + AgentContext (two processes, named pipe between them)
 
-**`TrayUpdateLoop`:** Tray icon turns magenta when `_isPaw`, status text appends `[PAW]`, `_pawMenuItem.Enabled` toggled each tick.
+```
+incoming:  server → TLS → CpuMonService.CmdLoop
+                       → SendToAgent(AgentMessage{ Type="paw_*", PawPayload=ServerCommand })
+                       → named pipe → AgentContext.PipeLoop
+                       → HandlePawPayload → PawDashboardForm
 
-**`PipeLoop` switch — new cases:**
-- `"paw_granted"` → sets `_isPaw = true`
-- `"paw_revoked"` → sets `_isPaw = false`, closes and nulls `_pawForm`, clears `_pawClients`
-- `default` → if `msg.Type.StartsWith("paw_") && msg.PawPayload != null`, calls `HandlePawPayload(msg.PawPayload)`
+outgoing:  PawDashboardForm → AgentContext.SendPawCommand
+                            → ClientMessage{ Type="paw_command", PawCmd=ServerCommand }
+                            → named pipe → CpuMonService.AgentPipeLoop
+                            → TLS → server
+```
 
-**New methods:**
-- `HandlePawPayload(ServerCommand cmd)` — dispatches all data-carrying `paw_*` commands to the right `_pawForm` method or `_uiCtx.Post` call. Mirrors DaemonContext's CmdLoop handlers exactly.
-- `HandlePawClientList(List<string> online, List<string>? offline)` — syncs `_pawClients` dict, marks offline entries, posts `RefreshView`.
-- `HandlePawReport(string src, MachineReport report)` — upserts client entry, stamps `LastSeen`, posts `RefreshView`.
-- `ShowPawDashboard()` — shows or focuses `PawDashboardForm`, wires `FormClosed` to null `_pawForm`.
-- `SendPawCommand(string target, ServerCommand cmd)` — stamps `IssuedAtMs` + `Nonce`, serializes as `ClientMessage { Type = "paw_command" }`, writes via `_pipeLock`/`_pipeWriter` (not the TLS lock — agent has no TLS).
+`AgentIpc.AgentMessage.PawPayload` is the field that wraps a full `ServerCommand` for relay between the service and the agent.
 
-**`Dispose`:** Added `_pawForm?.Close()`.
+PAW state survives agent restart: when a fresh AgentContext connects, CpuMonService replays `paw_granted` if `_isPaw` is already true. Otherwise the dashboard menu item would stay disabled until the next server-side toggle.
 
-#### `DaemonContext` — PAW improvements (self-contained, no pipe involvement)
-- `paw_granted` handler: previously auto-opened the PAW dashboard. Now just sets `_isPaw = true` and lets the user open it via the menu item.
-- Tray icon turns magenta when `_isPaw`; status appends `[PAW]`; `_pawMenuItem.Enabled` toggled in `TrayLoop`.
+### Reply routing on the server
 
----
+The server records which PAW client owns relayed `cmdId`, `termId`, `transferId`, and `rdpId` values on the target `RemoteClient`. When the target sends a response, the server consults that ownership table and forwards the reply back to the owning PAW client instead of opening its own UI dialog.
 
-### `cpumon.client/clientform.cs`
-
-**Stripped hardware monitoring UI:**
-- Removed `_md`, `_pin`, `_cpuP`, toolbar, `_latestSnapshot`, `_lh`, `HL`, `PaintCpu`, `DrawPackage`, `DrawPerCore`, `DrawCard`, `DrawCoreCard`, `DrawSparkline`, `TopMost`.
-- `_netP` is now `DockStyle.Fill`; window is 360×200, min 300×140.
-- `Tick()` simplified to just `_netP.Invalidate()` + `_pawForm?.RefreshView()`.
-
-**Service detection on Load:**
-- Calls `ServiceManager.IsRunning()` on startup.
-- If the service is already running: sets `_svcRunning = true`, updates button labels, starts only the timer (skips `_mon`, network loops, token dialog). Prevents the GUI from competing with the service for the server connection.
-- After a successful install: `_svcRunning = true; _cts.Cancel()` — stops any running network loops.
-
-**Install / Uninstall buttons:**
-- Bottom bar with Install and Uninstall buttons.
-- Install: verb is "Reinstall" if already running; runs `ServiceManager.Install()` on `Task.Run`.
-- Uninstall: runs `ServiceManager.Uninstall()` on `Task.Run`; on success sets `_svcRunning = false`.
-
-**`PaintNet`:** If `_svcRunning`, draws a green "SERVICE RUNNING" placeholder card and returns early.
+For older clients (or the Linux client) that may omit `cmdId` on certain replies, the server also tracks PAW owners per command kind (`sysinfo`, `listprocesses`, `list_services`, `list_events`, `file_list`) so those replies still route correctly.
 
 ---
 
-## Architecture notes (for Codex context)
+## Auth and approval flows
 
-- **DaemonContext** (`--daemon`): fully self-contained, has its own TLS connection to the server, handles PAW itself. No named pipe, no interaction with AgentContext or CpuMonService.
-- **CpuMonService + AgentContext** (`--service` + `--agent`): a coupled pair. The service owns the TLS connection (Session 0). AgentContext runs in the user session and communicates exclusively via the named pipe `cpumon_agent_pipe`. AgentContext has no direct network access.
-- PAW relay path (service mode): `server → TLS → CpuMonService.CmdLoop → SendToAgent(AgentMessage{PawPayload}) → named pipe → AgentContext.PipeLoop → HandlePawPayload → PawDashboardForm`
-- PAW command path (service mode): `PawDashboardForm → AgentContext.SendPawCommand → _pipeWriter → named pipe → CpuMonService.AgentPipeLoop → _wr (TLS) → server`
-## Codex follow-up changes
+Three ways a client becomes approved:
 
-### `cpumon.client/service.cs`
-- Added `_isPaw` service-side state. `paw_granted`/`paw_revoked` now update this state before forwarding to AgentContext.
-- When a new AgentContext connects to the named pipe, CpuMonService replays `paw_granted` if `_isPaw` is already true. This prevents a restarted or late-starting user-session agent from losing PAW dashboard access.
+1. **Token-based** (default) — server shows a 10-minute invite token. Client sends `auth { token, machine }`. Server derives `key = SHA256(token:machine:salt:cpumon_v2)[..32]` with a per-enrollment salt and persists in `approved_clients.json`. Returns the key in `auth_response`.
 
-### `cpumon.client/contexts.cs`
-- AgentContext now ignores PAW command sends when the service pipe is disconnected instead of attempting a null write.
-- Added a null guard around `msg.Type.StartsWith("paw_")` in AgentContext's pipe handler.
+2. **Stored key** — once `client_auth.json` exists, the client re-auths with the saved key directly. No token, no derivation.
 
-### `cpumon.client/clientform.cs`
-- GUI service controls now distinguish installed vs running service state. Installed-but-stopped services show `Reinstall` and `Uninstall`.
-- Install/uninstall failure paths now restore button labels through one shared helper.
+3. **Server-side approval** — client sends `auth { ApprovalRequested=true }` (no token, no key). Server inserts into `_pendingApprovals`, shows the machine under "AWAITING APPROVAL", and waits up to `PendingApprovalTimeoutMinutes` (15) for the operator to click Approve or Reject.
 
-### PAW relay return-path fix
-- Server now records which PAW client owns relayed command ids, terminal ids, transfer ids, and RDP ids on the target `RemoteClient`.
-- Target responses for process lists, sysinfo, cmd results, terminal output, file listings, file chunks, and RDP frames are routed back to the owning PAW client instead of falling into the server's direct UI handlers.
-- `listprocesses` and `sysinfo` responses now preserve `CmdId` so the server can correlate PAW replies.
-- PAW process refresh timer now includes a `CmdId`; PAW uploads now include a `CmdId` for result routing.
-- Linux client `sysinfo` and `processlist` responses now include `cmdId`, which fixes PAW Info/Procs routing for Linux targets.
-- PAW Dashboard detects Linux reports and shows a single `Bash` terminal button instead of `CMD`/`PowerShell`; Linux terminal requests also normalize Windows shell names to bash.
-- Server now also tracks PAW owners by command kind for `sysinfo`, `listprocesses`, `list_services`, `list_events`, and `file_list`, so older or mixed clients that omit `cmdId` still route replies back to PAW instead of opening server UI.
-- Added PAW service-list support: `paw_services` protocol field, PAW dashboard Services button/dialog, start/stop/restart actions, and Linux `servicelist` `cmdId` preservation.
+All three paths write through `_store.Approve(...)` which is `lock`-then-`Save()`. `Save()` writes to `.tmp` then `File.Move(overwrite:true)`. This atomic pattern can fail with `UnauthorizedAccessException` if the existing file was created by an elevated process and the current process is non-elevated — `LogSink.Error` surfaces this; do not silently swallow.
+
+---
+
+## TLS, MITM guards, and TOFU
+
+- Self-signed ECDSA P-256 cert auto-generated to `cpumon.pfx` in `%ProgramData%\CpuMon` on first server start.
+- UDP beacon on port 47200 includes the cert thumbprint. Clients that already paired ignore beacons from any other thumbprint.
+- Clients pin the cert thumbprint on first TLS connection (TOFU) and reject any different cert thereafter.
+- `auth_response` carries the server's TLS cert thumbprint as `serverId`. Every client (Windows × 3 contexts + Linux) compares this against the thumbprint actually seen during the handshake and drops the connection on mismatch. `auth_response` is accepted only once per connection (`_authConfirmed` flag).
+
+If the server cert is replaced, run `cpumon.client.exe --reset-auth` on each Windows client (or delete `/var/lib/cpumon/client_auth.json` on Linux) to clear the saved key and pinned thumbprint.
+
+---
+
+## Update mechanisms (3 separate paths)
+
+| Path | Direction | How |
+|------|-----------|-----|
+| Server-pushed client update | server → Windows client | `update_push` chunked transfer with SHA256, written to `cpumon_update.exe.tmp`, atomic rename, bat script runs via scheduled task to swap and restart |
+| Linux client update | manual | `sudo bash install.sh update <release.zip>` — replaces `/opt/cpumon`, restarts the service, preserves config and auth |
+| Server self-update notification | GitHub → server | `UpdateChecker` polls `api.github.com/repos/johanbogg/cpumon/releases/latest` every 6 h. UI surfaces a button that opens the release page in the browser. **Tier 2 (one-click self-update) is not implemented**; the `ReleaseInfo` record already carries the asset download URL and a SHA256 slot to make it easy to add. |
+
+`UpdateIntegrity.VerifySha256Base64` validates SHA256 hashes for the server-pushed client update. The GitHub-published zips do not currently have hash files; if you add Tier 2, generate hashes during `build.ps1` and embed them in the release body, then populate `ReleaseInfo.ServerAssetSha256` from a parse step.
+
+---
+
+## Threading rules worth remembering
+
+- `_tl` (transport lock) guards `_wr`, `_rd`, `_ssl`, `_tcp` everywhere. Never hold `_tl` across a blocking read — the write path will deadlock.
+- `AgentContext.PipeLoop` reads `_pipeReader` under `_pipeLock`. `CpuMonService.AgentPipeLoop` reads `_agentReader` without any lock (only that loop touches it).
+- `RdpCaptureSession` uses `volatile` on `_fps`, `_quality`, `_disposed`, `_needFull`, `_monitorIndex`, `_maxKBps` because `Set*`/`Dispose`/`RequestFull` write from external threads and the capture loop reads.
+- `_approvalRequested` (in `CpuMonService` and `DaemonContext`) is `volatile` because it crosses CmdLoop / SendLoop / AgentPipeLoop without a lock.
+- All cross-thread UI updates go through `BeginInvoke` / `_uiCtx.Post` — never touch a control directly from a background task.
+
+---
+
+## Custom GDI rendering
+
+All server cards, the PAW dashboard, and the daemon overlay are drawn manually with `Graphics` calls — no `Label` / `PictureBox` controls except inside dialogs. The paint timer fires every 500 ms in `ServerForm`. Theme changes raise `Th.ThemeChanged`; subscribers re-paint and rebuild any caches.
+
+Currently every paint allocates a fresh `SolidBrush` / `Pen` / `Font` per draw call. There is a known opportunity to cache these on the form and rebuild on `ThemeChanged` for a measurable allocation reduction; not yet implemented.

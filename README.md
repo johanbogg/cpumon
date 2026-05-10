@@ -8,20 +8,26 @@ Windows server · Windows clients · Linux clients (Python)
 
 ## Features
 
-- **Live hardware stats** — CPU load, temperature, frequency, power draw, RAM usage, and per-drive free space
-- **Remote Desktop** — tile-based JPEG screen capture with delta skipping; mouse and keyboard injection
+- **Live hardware stats** — CPU load, temperature, frequency, power draw, RAM usage, GPU load/temp/VRAM, network throughput, and per-drive free space
+- **Remote Desktop** — tile-based JPEG screen capture with delta skipping; mouse and keyboard injection; multi-monitor and bandwidth cap
 - **Interactive terminals** — full PTY sessions for CMD and PowerShell (Windows); bash/sh (Linux)
-- **File browser** — navigate, upload, download, delete, rename, and create folders
+- **File browser** — navigate, upload, download, delete, rename, and create folders; drag-and-drop uploads
 - **Services manager** — list Windows services, start / stop / restart with one click; `systemctl` on Linux
 - **Process list** — view running processes with PID and memory; kill or launch processes
 - **System info** — OS, CPU, GPU, RAM, disks, IPs, uptime in one dialog
+- **Windows Event Viewer** — recent system / application errors and warnings
 - **Send message** — pop up a notice on any remote machine
-- **Wake-on-LAN** — wake sleeping machines from the server
+- **Wake-on-LAN** — wake sleeping machines from the server; "Set MAC" button for offline cards without a recorded MAC
 - **Offline client tracking** — approved machines appear dimmed with last-seen time even when disconnected
+- **Friendly aliases** — give each machine a display name; the original hostname is shown alongside
+- **Server-side approval flow** — clients can request approval interactively instead of typing the invite token locally
+- **Threshold alerts** — monitor CPU / GPU / RAM / temperature against configurable thresholds; email notifications via SMTP / STARTTLS / SMTPS
 - **PAW mode** — designate a client as a Privileged Access Workstation; it gets a full dashboard mirroring the server UI and can relay commands to other clients through the server
 - **Auto-discovery** — clients find the server automatically via UDP beacon; direct IP override available
 - **Per-client mode control** — server switches Windows clients between 1-second live reporting and idle keepalive pings based on whether the card is expanded; Linux clients use monitor mode while collapsed to avoid stale UI flicker
-- **Auto-update** — server can push a new client exe; service applies it via a scheduled task
+- **Auto-update for clients** — server can push a new client exe; service applies it via a scheduled task. Linux clients update via `install.sh update`.
+- **GitHub update check** — server polls GitHub releases every 6 hours and surfaces a "↑ Update vX.Y.Z" button in the status bar when a newer release is available
+- **Light / dark theme** — toggle from the status bar; all custom GDI rendering refreshes immediately
 
 ---
 
@@ -67,7 +73,7 @@ The service launches an agent process in the interactive user session automatica
 
 ### Linux client
 
-`cpumon.linux/cpumon.py` implements the same protocol as the Windows clients. It supports: reports, keepalives, process list, sysinfo, terminal (full PTY via `pty.openpty()`), file browser, and `systemctl` service management. RDP, PAW, and auto-update are not supported on Linux.
+`cpumon.linux/cpumon.py` implements the same protocol as the Windows clients. It supports: reports, keepalives, process list, sysinfo, terminal (full PTY via `pty.openpty()`), file browser, and `systemctl` service management. Updates are applied via `sudo bash install.sh update` from a downloaded release zip. RDP, PAW relay, server-pushed `update_push`, and the Windows event viewer are not implemented on Linux.
 
 ### PAW relay
 
@@ -197,27 +203,32 @@ Windows clients can also request server-side approval instead of typing the invi
 ```
 cpumon/
 ├── cpumon.shared/
-│   ├── protocol.cs        — Proto constants, ClientMessage, ServerCommand, auth stores, CLog, AgentIpc
+│   ├── protocol.cs        — Proto constants, ClientMessage, ServerCommand, auth stores, CLog, LogSink, AgentIpc
 │   ├── services.cs        — RdpCaptureSession, CmdExec, TerminalSession, FileBrowserService, RemoteClient, …
 │   ├── ui.cs              — RdpViewerDialog, TerminalDialog, FileBrowserDialog, Th (theme), BorderlessForm
 │   └── cpumon.shared.csproj
 ├── cpumon.server/
-│   ├── serverform.cs      — server UI, ListenLoop, HandleClient, UpdateModes, PAW relay
+│   ├── serverform.cs      — server UI, ListenLoop, HandleClient, UpdateModes, PAW relay, update notifier
 │   ├── serverdialogs.cs   — ApprovedClientsDialog, ProcDialog, SysInfoDialog, ServicesDialog, EventViewerDialog
+│   ├── email.cs           — AlertConfig, AlertService, AlertConfigDialog (SMTP threshold notifications)
+│   ├── updatechecker.cs   — UpdateChecker + ReleaseInfo (GitHub releases polling)
 │   ├── program.cs
 │   └── cpumon.server.csproj
 ├── cpumon.client/
-│   ├── clientform.cs      — interactive GUI client (WinForms overlay)
-│   ├── contexts.cs        — AgentContext (screen capture), DaemonContext (systray)
+│   ├── clientform.cs      — interactive GUI client (WinForms overlay) + install / service detection
+│   ├── contexts.cs        — AgentContext (screen capture, PAW), DaemonContext (systray)
 │   ├── service.cs         — CpuMonService (SCM), ServiceManager (install/uninstall)
 │   ├── pawdashboard.cs    — PawDashboardForm and PAW dialogs
 │   ├── program.cs
 │   └── cpumon.client.csproj
+├── cpumon.tests/
+│   ├── Program.cs         — 8 smoke tests run automatically by build.ps1 before publish
+│   └── cpumon.tests.csproj
 ├── cpumon.linux/
 │   ├── cpumon.py          — Python client (discovery, TLS/TOFU, auth, terminal, file browser, systemctl)
-│   ├── install.sh         — Debian/Ubuntu installer
+│   ├── install.sh         — Debian/Ubuntu installer; supports `update` mode for in-place upgrades
 │   └── requirements.txt
-├── build.ps1              — publish client + server to dist/
+├── build.ps1              — runs smoke tests, publishes client + server to dist/, packages versioned zips
 ├── install.ps1            — PowerShell install/uninstall helper
 └── cpumon.slnx
 ```
@@ -226,11 +237,13 @@ Runtime files (created automatically):
 
 | File | Location | Contents |
 |------|----------|---------|
-| `cpumon.pfx` | Server working dir | Auto-generated TLS certificate (ECDSA P-256) |
-| `approved_clients.json` | Server working dir | Approved client keys (DPAPI-encrypted) and metadata |
-| `client_auth.json` | Client working dir | Saved auth key and pinned server thumbprint |
+| `cpumon.pfx` | `%ProgramData%\CpuMon\` | Auto-generated TLS certificate (ECDSA P-256) |
+| `approved_clients.json` | `%ProgramData%\CpuMon\` | Approved client keys (DPAPI-encrypted) and metadata (alias, MAC, PAW flag, salt) |
+| `client_auth.json` | `%ProgramData%\CpuMon\` | Saved auth key and pinned server thumbprint (DPAPI-encrypted) |
+| `alert_config.json` | `%ProgramData%\CpuMon\` | Threshold alert thresholds and SMTP settings |
+| `cpumon_server.log` | Server working dir | Rolling on-screen log entries (2 MB cap) |
 | `/var/lib/cpumon/client_auth.json` | Linux client | Same as above; chmod 600 |
-| `cpumon-YYYY-MM-DD.jsonl` | `%ProgramData%\CpuMon\logs` | Structured diagnostics for server/client/service paths |
+| `cpumon-YYYY-MM-DD.jsonl` | `%ProgramData%\CpuMon\logs\` | Structured diagnostics for server/client/service paths (10 MB cap, auto-rotates) |
 
 Set `CPUMON_LOG_LEVEL=debug` before starting a process if you need more verbose troubleshooting logs.
 

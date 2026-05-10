@@ -21,8 +21,8 @@ Version is auto-set from git commit count: `1.0.<N>` via an MSBuild target.
 ```
 cpumon.shared/
   protocol.cs   — Proto constants, ClientMessage, ServerCommand, ApprovedClientStore,
-                  TokenStore, CLog, LogSink, SendPacer, Security, CertificateStore,
-                  AgentIpc, all data models
+                  TokenStore, CLog, LogSink (+ StripControlChars helper), SendPacer,
+                  Security, CertificateStore, AgentIpc, AppPaths, all data models
   services.cs   — RdpCaptureSession, RemoteClient, LineLengthLimitedStream,
                   TerminalSession, CmdExec, FileBrowserService, SysInfoCollector,
                   HardwareMonitorService, ReportBuilder, InputInjector, UpdateIntegrity
@@ -31,29 +31,36 @@ cpumon.shared/
 
 cpumon.client/
   program.cs      — arg parsing, mode dispatch
-  clientform.cs   — GUI mode WinForms overlay
-  contexts.cs     — DaemonContext (systray) + AgentContext (user-session RDP/input)
+  clientform.cs   — GUI mode WinForms overlay; install/uninstall buttons + service detection
+  contexts.cs     — DaemonContext (systray, full PAW dashboard) + AgentContext (user-session
+                    RDP/input, PAW relay through the named pipe)
   service.cs      — CpuMonService (SCM service, Session 0) + ServiceManager (--install/--uninstall)
   pawdashboard.cs — PawDashboardForm, PawTerminalDialog, PawFileBrowserDialogClient,
-                    PawProcDialog, PawSysInfoDialog
+                    PawProcDialog, PawSysInfoDialog, PawServicesDialog
 
 cpumon.server/
   program.cs       — entry point, single-instance mutex, launches ServerForm
-  serverform.cs    — ServerForm, ListenLoop, HandleClient, UpdateModes, PAW relay, button actions
+  serverform.cs    — ServerForm, ListenLoop, HandleClient, UpdateModes, PAW relay,
+                     ApprovePending/RejectPending, UpdateCheckLoop, button actions
   serverdialogs.cs — ApprovedClientsDialog, ProcDialog (live filter), SysInfoDialog,
                      ServicesDialog, EventViewerDialog
+  email.cs         — EmailSecurity, AlertConfig, AlertConfigStore, AlertService,
+                     AlertConfigDialog (SMTP/STARTTLS/SMTPS via MailKit)
+  updatechecker.cs — UpdateChecker (polls api.github.com/repos/{Repo}/releases/latest)
+                     and ReleaseInfo record carrying tag, version, download URL, asset size
 
 cpumon.tests/
-  Program.cs — 7 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
+  Program.cs — 8 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
               TestReceiveChunkCompletesAndValidatesOffsets, TestReceiveChunkReplacesDuplicateTransfer,
               TestLineLengthLimitedStream, TestUpdateIntegrity,
               TestSendPacerWakesOnModeChange, TestSendPacerWakesOnDemand,
-              TestApprovedClientAliasPersists
+              TestApprovedClientAliasPersists, TestApprovedClientForgetPersists
 
 cpumon.linux/
   cpumon.py      — Python 3.8+ client: discovery, TLS/TOFU, auth, report/keepalive,
                    terminal (pty), file browser, systemctl services, process list
-  install.sh     — Debian/Ubuntu installer: /opt/cpumon, /etc/default/cpumon, systemd service
+  install.sh     — Debian/Ubuntu installer: /opt/cpumon, /etc/default/cpumon, systemd service.
+                   Also supports `install.sh update` for in-place upgrades from a release zip.
   requirements.txt
 ```
 
@@ -78,7 +85,7 @@ cpumon.linux/
 
 **Volatile fields in `RdpCaptureSession`:** `_fps`, `_quality`, `_disposed`, `_needFull`, `_monitorIndex`, `_maxKBps` are `volatile`. They are written by `Set*/Dispose/RequestFull` from external threads and read by the capture loop thread.
 
-**Atomic file writes:** both `ApprovedClientStore.Save` and `TokenStore.Save` write to a `.tmp` file then rename with `File.Move(overwrite:true)`. Do not revert to direct `WriteAllText`.
+**Atomic file writes:** all persistent state goes through a `.tmp` file + `File.Move(overwrite:true)` rename. Sites: `ApprovedClientStore.Save`, `TokenStore.Save`, `AlertConfigStore.Save`, `FileBrowserService.ReceiveChunk` (uploads), `FileDownloadState` (downloads), `CmdExec.Run` update_push, `CpuMonService.HandleUpdateChunk`. Do not revert any of them to direct `WriteAllText`.
 
 **Line length limit:** `LineLengthLimitedStream` (4 MB/line) wraps `SslStream` on all readers — server-side in `RemoteClient`, client-side in all three Windows contexts and in the Python client.
 
@@ -96,6 +103,14 @@ cpumon.linux/
 
 **`ServerCommand.IssuedAtMs`:** set by the PAW client on `paw_command` messages. The server rejects commands more than 60 s old. The nonce prevents replay within the window.
 
+**`UpdateChecker`:** server-only background task. Polls `https://api.github.com/repos/johanbogg/cpumon/releases/latest` 30 s after startup, then every 6 h. Failures log at debug and are silent in the UI. `_availableUpdate` only updates the UI on a *version change* — re-detecting the same version does not re-notify. The `ReleaseInfo` record carries the asset download URL and a (currently always null) SHA256 slot to make Tier 2 self-update straightforward.
+
+**Server-side approval flow:** when a client sends `auth` with `ApprovalRequested = true` (no token, no stored key), the server inserts it into `_pendingApprovals` (`ConcurrentDictionary<string, PendingClientApproval>`) and renders an "AWAITING APPROVAL" card. `ApprovePending` mints a 32-byte key, persists via `_store.Approve`, and sends `auth_response`. Pending approvals expire after `PendingApprovalTimeoutMinutes` (15) so abandoned requests don't pile up.
+
+**Disconnect cause tracking:** `_pendingPowerActions` (`Dictionary<string, PendingPowerAction>`) records that a `restart` or `shutdown` command was just sent. `HandleClient`'s finally block reads this within 5 minutes of disconnect and logs `"Disc: machine — restarting ✓"` instead of a plain disconnect. Distinguish restart vs shutdown via the record's `Label` field — do not collapse to a single bool.
+
+**Status bar update button:** `_availableUpdate != null` triggers a cyan "↑ Update vX.Y.Z" button in `DrawStatusBar`. The action `openrelease` opens `_availableUpdate.ReleaseUrl` via `Process.Start` with `UseShellExecute = true`.
+
 ## Code conventions
 
 - Very terse field names: `_tl`, `_wr`, `_rd`, `_ssl`, `_tcp`, `_cts`, `_ns`, `_ak`, `_sid`, `_tok`.
@@ -108,14 +123,17 @@ cpumon.linux/
 ## Linux client specifics
 
 - State file: `$STATE_DIRECTORY/client_auth.json` (systemd sets this to `/var/lib/cpumon`) or `~/.cpumon/client_auth.json`. Plaintext JSON, chmod 600.
-- Auth key stored as-received from server — `derive_key()` in the file is dead code.
+- Auth key stored as-received from server (no key derivation on the Linux side).
 - Terminal: `pty.openpty()` for a real PTY (bash/sh by default).
-- Does NOT support: RDP capture, PAW mode, update_push, Windows event log.
+- Does NOT support: RDP capture, PAW relay, server-pushed `update_push`, Windows event viewer.
+- Updates: handled by `install.sh update <release.zip>` — replaces `/opt/cpumon` and restarts the service while preserving `/etc/default/cpumon` and `/var/lib/cpumon/client_auth.json`.
 - Systemd unit runs as root.
 - `install.sh` handles Debian 12+ externally-managed pip by falling back to `apt install python3-psutil`.
+- Linux replies for `sysinfo`, `processlist`, and `servicelist` include `cmdId` so PAW dashboards can route the response.
 
 ## Release checklist
 
-1. `.\build.ps1` — confirm clean build; zips are created automatically in `dist\`.
-2. Commit, push, tag `vX.Y.Z`, push tag.
-3. `gh release create vX.Y.Z dist\cpumon-client-X.Y.Z.zip dist\cpumon-server-X.Y.Z.zip dist\cpumon-linux-X.Y.Z.zip --title vX.Y.Z --notes "..."`.
+1. `.\build.ps1` — runs the 8 smoke tests and publishes; versioned zips for client/server/linux are created automatically in `dist\` (filename pattern `cpumon-{client|server|linux}-X.Y.Z.zip`).
+2. Commit, push, tag `vX.Y.Z` (matches the version printed by build.ps1), push tag.
+3. `gh release create vX.Y.Z dist\cpumon-client-X.Y.Z.zip dist\cpumon-server-X.Y.Z.zip dist\cpumon-linux-X.Y.Z.zip --title "vX.Y.Z - <one-line>" --notes-file <notes.md> --latest`.
+4. Existing v1.0.128+ servers will pick the new release up within 6 hours and surface the "↑ Update vX.Y.Z" button.
