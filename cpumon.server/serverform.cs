@@ -1282,8 +1282,10 @@ sealed class ServerForm : BorderlessForm
     void DrawLog(Graphics g, int x, int y, int w, int h)
     {
         if (h < 24) return;
-        using (var bg = new SolidBrush(Color.FromArgb(26, 26, 32)))
+        using (var bg = new SolidBrush(Th.Card))
         { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
+        using (var bp = new Pen(Color.FromArgb(Th.IsDark ? 55 : 95, Th.Brd), 1f))
+        { using var p = Th.RR(x, y, w, h, 6); g.DrawPath(bp, p); }
         using (var hf = new Font("Segoe UI", 7f)) using (var hb = new SolidBrush(Th.Dim))
             g.DrawString("LOG", hf, hb, x + 8, y + 3);
 
@@ -1294,7 +1296,7 @@ sealed class ServerForm : BorderlessForm
         foreach (var (t, m, c) in entries)
         {
             if (ey + lh > y + h) break;
-            using var tb = new SolidBrush(Color.FromArgb(85, 85, 95));
+            using var tb = new SolidBrush(Th.Dim);
             g.DrawString(t.ToString("HH:mm:ss"), ef, tb, x + 6, ey);
             using var mb = new SolidBrush(c);
             g.DrawString(m, ef, mb, x + 68, ey);
