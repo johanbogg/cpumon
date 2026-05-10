@@ -51,7 +51,7 @@ public static class Th
     {
         IsDark = !IsDark;
         if (IsDark) { Bg = Color.FromArgb(18, 18, 22); TBg = Color.FromArgb(22, 22, 28); Card = Color.FromArgb(36, 36, 44); Brd = Color.FromArgb(55, 55, 65); Brt = Color.FromArgb(230, 230, 240); Dim = Color.FromArgb(140, 140, 155); Blu = Color.FromArgb(80, 160, 255); Grn = Color.FromArgb(80, 220, 140); Org = Color.FromArgb(255, 180, 60); Red = Color.FromArgb(255, 80, 80); Yel = Color.FromArgb(255, 220, 80); Cyan = Color.FromArgb(80, 220, 240); Mag = Color.FromArgb(200, 120, 255); }
-        else { Bg = Color.FromArgb(238, 240, 245); TBg = Color.FromArgb(217, 222, 231); Card = Color.FromArgb(224, 228, 236); Brd = Color.FromArgb(176, 184, 198); Brt = Color.FromArgb(26, 31, 42); Dim = Color.FromArgb(88, 96, 112); Blu = Color.FromArgb(0, 100, 190); Grn = Color.FromArgb(0, 140, 82); Org = Color.FromArgb(170, 95, 0); Red = Color.FromArgb(185, 40, 40); Yel = Color.FromArgb(140, 112, 0); Cyan = Color.FromArgb(0, 135, 160); Mag = Color.FromArgb(125, 55, 180); }
+        else { Bg = Color.FromArgb(232, 234, 240); TBg = Color.FromArgb(219, 223, 232); Card = Color.FromArgb(222, 226, 235); Brd = Color.FromArgb(176, 184, 198); Brt = Color.FromArgb(26, 31, 42); Dim = Color.FromArgb(88, 96, 112); Blu = Color.FromArgb(0, 100, 190); Grn = Color.FromArgb(0, 140, 82); Org = Color.FromArgb(170, 95, 0); Red = Color.FromArgb(185, 40, 40); Yel = Color.FromArgb(140, 112, 0); Cyan = Color.FromArgb(0, 135, 160); Mag = Color.FromArgb(125, 55, 180); }
         ThemeChanged?.Invoke();
     }
 
