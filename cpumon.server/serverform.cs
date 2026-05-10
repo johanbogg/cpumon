@@ -1224,8 +1224,8 @@ sealed class ServerForm : BorderlessForm
     void DrawOffline(Graphics g, int x, int y, int w, ApprovedClient ac)
     {
         int h = 34;
-        using (var bg = new SolidBrush(Color.FromArgb(24, 24, 30))) { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
-        using (var bp = new Pen(Color.FromArgb(35, Th.Dim), 1f)) { using var p = Th.RR(x, y, w, h, 6); g.DrawPath(bp, p); }
+        using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
+        using (var bp = new Pen(Color.FromArgb(Th.IsDark ? 35 : 90, Th.Brd), 1f)) { using var p = Th.RR(x, y, w, h, 6); g.DrawPath(bp, p); }
         using (var ac2 = new SolidBrush(Color.FromArgb(80, Th.Dim)))
             g.FillRectangle(ac2, x + 1, y + 6, 4, h - 12);
         using (var dot = new SolidBrush(Th.Dim)) g.FillEllipse(dot, x + 12, y + 13, 7, 7);
@@ -1237,14 +1237,14 @@ sealed class ServerForm : BorderlessForm
             using var hnf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold);
             var offNsz = g.MeasureString(offDisplay, hnf);
             using var hnf2 = new Font("Segoe UI", 7f);
-            using var hnb = new SolidBrush(Color.FromArgb(65, 65, 80));
+            using var hnb = new SolidBrush(Th.Dim);
             g.DrawString(ac.Name, hnf2, hnb, x + 26 + (int)offNsz.Width, y + 12);
         }
         var ago = DateTime.UtcNow - ac.Seen;
         string agoStr = ago.TotalDays >= 1 ? $"{(int)ago.TotalDays}d ago" : ago.TotalHours >= 1 ? $"{(int)ago.TotalHours}h ago" : ago.TotalMinutes >= 1 ? $"{(int)ago.TotalMinutes}m ago" : "just now";
-        using (var sf2 = new Font("Segoe UI", 7.5f)) using (var sb2 = new SolidBrush(Color.FromArgb(80, 80, 95)))
+        using (var sf2 = new Font("Segoe UI", 7.5f)) using (var sb2 = new SolidBrush(Th.Dim))
             g.DrawString($"Offline · {agoStr}", sf2, sb2, x + 150, y + 11);
-        if (!string.IsNullOrEmpty(ac.Ip)) { using var if2 = new Font("Segoe UI", 7f); using var ib = new SolidBrush(Color.FromArgb(55, 75, 95)); g.DrawString(ac.Ip, if2, ib, x + 290, y + 11); }
+        if (!string.IsNullOrEmpty(ac.Ip)) { using var if2 = new Font("Segoe UI", 7f); using var ib = new SolidBrush(Th.Dim); g.DrawString(ac.Ip, if2, ib, x + 290, y + 11); }
         if (!string.IsNullOrEmpty(ac.Mac)) DrawBtn(g, x + w - 162, y + 5, 72, 24, "⚡ Wake", Th.Yel, ac.Name, "wake_offline");
         else DrawBtn(g, x + w - 162, y + 5, 72, 24, "Set MAC", Th.Dim, ac.Name, "set_mac_offline");
         DrawBtn(g, x + w - 82, y + 5, 72, 24, "🗑 Forget", Th.Dim, ac.Name, "forget_offline");
