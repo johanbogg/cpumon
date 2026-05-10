@@ -59,7 +59,7 @@ public static class Th
     public static Color TpC(float c) => c switch { > 90 => Red, > 75 => Org, > 55 => Blu, _ => Grn };
 
     public static string F(float? v, string f, string s) =>
-        v.HasValue && v.Value > 0 ? v.Value.ToString(f, CultureInfo.InvariantCulture) + " " + s : "N/A";
+        v.HasValue ? v.Value.ToString(f, CultureInfo.InvariantCulture) + " " + s : "N/A";
 
     public static string FF(float? m)
     {
