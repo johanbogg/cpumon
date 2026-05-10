@@ -42,10 +42,37 @@ read_existing_config() {
     fi
 }
 
+have_psutil() {
+    python3 - <<'PY' >/dev/null 2>&1
+import psutil
+PY
+}
+
 install_dependencies() {
+    local required="${1:-yes}"
+    if command -v python3 >/dev/null 2>&1 && have_psutil; then
+        blue "Python 3 and psutil already installed."
+        return 0
+    fi
+
     blue "Installing Python 3 and psutil..."
-    apt-get update -qq
-    apt-get install -y --no-install-recommends python3 python3-pip > /dev/null
+    if ! apt-get update -qq; then
+        if [[ "$required" == "yes" ]]; then
+            red "apt-get update failed"
+            return 1
+        fi
+        red "apt-get update failed; keeping existing dependencies"
+        return 0
+    fi
+
+    if ! apt-get install -y --no-install-recommends python3 python3-pip > /dev/null; then
+        if [[ "$required" == "yes" ]]; then
+            red "Failed to install python3/python3-pip"
+            return 1
+        fi
+        red "Failed to refresh python packages; keeping existing dependencies"
+        return 0
+    fi
 
     if python3 -m pip install --quiet psutil 2>/dev/null; then
         true
@@ -119,6 +146,7 @@ restart_service() {
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME" >/dev/null
     systemctl restart "$SERVICE_NAME"
+    systemctl is-active --quiet "$SERVICE_NAME"
 }
 
 uninstall() {
@@ -155,7 +183,7 @@ install() {
     TOKEN="${input_token:-$existing_token}"
 
     echo
-    install_dependencies
+    install_dependencies yes
     write_program_files
     write_defaults_file "$SERVER_IP" "$TOKEN"
     write_service_file
@@ -185,10 +213,29 @@ update() {
         exit 1
     fi
 
-    install_dependencies
+    install_dependencies no
+
+    backup=""
+    if [[ -f "$INSTALL_DIR/cpumon.py" ]]; then
+        backup=$(mktemp)
+        cp "$INSTALL_DIR/cpumon.py" "$backup"
+    fi
+
     write_program_files
     write_service_file
-    restart_service
+    if ! restart_service; then
+        red "Updated service failed to start."
+        if [[ -n "$backup" && -f "$backup" ]]; then
+            red "Rolling back cpumon.py and restarting previous version..."
+            cp "$backup" "$INSTALL_DIR/cpumon.py"
+            chmod 755 "$INSTALL_DIR/cpumon.py"
+            systemctl restart "$SERVICE_NAME" || true
+        fi
+        rm -f "$backup"
+        echo "Check logs with: journalctl -u cpumon -n 100 --no-pager"
+        exit 1
+    fi
+    rm -f "$backup"
 
     echo
     green "cpumon updated and restarted."
