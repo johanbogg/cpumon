@@ -539,17 +539,30 @@ public sealed class TerminalSession : IDisposable
 {
     public string Id { get; }
     readonly Process _proc; readonly object _netLock; readonly StreamWriter? _netWriter; readonly CancellationTokenSource _cts = new(); bool _disposed;
+    readonly bool _echoPowerShellPrompt;
     public TerminalSession(string id, string shell, object netLock, StreamWriter? netWriter)
     {
         Id = id; _netLock = netLock; _netWriter = netWriter; string exe, args;
-        if (shell.Equals("powershell", StringComparison.OrdinalIgnoreCase)) { var pwsh7 = @"C:\Program Files\PowerShell\7\pwsh.exe"; exe = File.Exists(pwsh7) ? pwsh7 : "powershell.exe"; args = "-NoLogo -NoProfile -NonInteractive -Command -"; } else { exe = "cmd.exe"; args = "/Q /A"; }
+        _echoPowerShellPrompt = shell.Equals("powershell", StringComparison.OrdinalIgnoreCase);
+        if (_echoPowerShellPrompt) { var pwsh7 = @"C:\Program Files\PowerShell\7\pwsh.exe"; exe = File.Exists(pwsh7) ? pwsh7 : "powershell.exe"; args = "-NoLogo -NoProfile -NonInteractive -Command -"; } else { exe = "cmd.exe"; args = "/Q /A"; }
         _proc = new Process { StartInfo = new ProcessStartInfo { FileName = exe, Arguments = args, UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8, WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) }, EnableRaisingEvents = true };
         _proc.Start(); Task.Run(() => Pump(_proc.StandardOutput, _cts.Token)); Task.Run(() => Pump(_proc.StandardError, _cts.Token)); _proc.Exited += (_, _) => { Emit("\r\n[Session ended]\r\n"); EmitClosed(); };
     }
     async Task Pump(StreamReader reader, CancellationToken ct) { var buf = new char[4096]; try { while (!ct.IsCancellationRequested) { int n = await reader.ReadAsync(buf, 0, buf.Length); if (n == 0) break; Emit(new string(buf, 0, n)); } } catch { } }
     void Emit(string text) { if (_disposed) return; var msg = new ClientMessage { Type = "terminal_output", TermId = Id, Output = text }; lock (_netLock) { try { _netWriter?.WriteLine(JsonSerializer.Serialize(msg)); _netWriter?.Flush(); } catch { } } }
     void EmitClosed() { if (_disposed) return; var msg = new ClientMessage { Type = "terminal_closed", TermId = Id }; lock (_netLock) { try { _netWriter?.WriteLine(JsonSerializer.Serialize(msg)); _netWriter?.Flush(); } catch { } } }
-    public void WriteInput(string input) { if (_disposed || _proc.HasExited) return; try { _proc.StandardInput.Write(input); _proc.StandardInput.Flush(); } catch { } }
+    public void WriteInput(string input)
+    {
+        if (_disposed || _proc.HasExited) return;
+        try
+        {
+            if (_echoPowerShellPrompt && input.Length > 0 && input != "\x03")
+                Emit("PS> " + input.Replace("\n", "\r\n"));
+            _proc.StandardInput.Write(input);
+            _proc.StandardInput.Flush();
+        }
+        catch { }
+    }
     public void Dispose() { if (_disposed) return; _disposed = true; _cts.Cancel(); try { if (!_proc.HasExited) { _proc.StandardInput.Close(); if (!_proc.WaitForExit(2000)) _proc.Kill(true); } } catch { } _proc.Dispose(); }
 }
 
