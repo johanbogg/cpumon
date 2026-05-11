@@ -760,12 +760,18 @@ public sealed class HardwareMonitorService : IDisposable
     {
         string kind = used ? "Used" : "Total";
         var small = sensors.Where(s => s.SensorType == SensorType.SmallData && s.Name.Contains(kind, StringComparison.OrdinalIgnoreCase)).ToList();
-        return small.FirstOrDefault(s => s.Name.Contains("Dedicated", StringComparison.OrdinalIgnoreCase) && !s.Name.Contains("Shared", StringComparison.OrdinalIgnoreCase))
-            ?? small.FirstOrDefault(s => s.Name.Contains("GPU Memory", StringComparison.OrdinalIgnoreCase) && !s.Name.Contains("Shared", StringComparison.OrdinalIgnoreCase))
-            ?? small.FirstOrDefault(s => s.Name.Contains("Memory", StringComparison.OrdinalIgnoreCase) && !s.Name.Contains("Shared", StringComparison.OrdinalIgnoreCase))
+        var vram = small.Where(IsGpuVramSensor).ToList();
+        return vram.FirstOrDefault(s => s.Name.Contains("GPU Memory", StringComparison.OrdinalIgnoreCase))
+            ?? vram.FirstOrDefault(s => s.Name.Contains("Memory", StringComparison.OrdinalIgnoreCase))
+            ?? vram.FirstOrDefault(s => s.Name.Contains("Dedicated", StringComparison.OrdinalIgnoreCase))
             ?? small.FirstOrDefault(s => !s.Name.Contains("Shared", StringComparison.OrdinalIgnoreCase))
             ?? small.FirstOrDefault();
     }
+    static bool IsGpuVramSensor(ISensor s) => !s.Name.Contains("Shared", StringComparison.OrdinalIgnoreCase)
+        && !s.Name.Contains("D3D", StringComparison.OrdinalIgnoreCase)
+        && !s.Name.Contains("Allocated", StringComparison.OrdinalIgnoreCase)
+        && !s.Name.Contains("Committed", StringComparison.OrdinalIgnoreCase)
+        && !s.Name.Contains("System", StringComparison.OrdinalIgnoreCase);
     public void Dispose() { _pf?.Dispose(); _pl?.Dispose(); _c.Close(); }
     sealed class XS { public ISensor? C, T, L; }
 }

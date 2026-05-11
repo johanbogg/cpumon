@@ -260,8 +260,27 @@ def list_services() -> list:
         pass
     return svcs
 
-def _systemctl(action: str, unit: str):
-    subprocess.run(["systemctl", action, unit], check=True, timeout=20)
+def _systemctl(action: str, unit: str, timeout: int = 15):
+    unit = (unit or "").strip()
+    if not unit:
+        raise ValueError("Missing service name")
+    r = subprocess.run(
+        ["systemctl", "--no-ask-password", action, unit],
+        capture_output=True, text=True, timeout=timeout
+    )
+    if r.returncode != 0:
+        msg = (r.stderr or r.stdout or f"systemctl {action} failed").strip()
+        raise RuntimeError(msg)
+
+def _is_self_service(unit: str) -> bool:
+    return (unit or "").strip() in ("cpumon", "cpumon.service")
+
+def _systemctl_detached(action: str, unit: str):
+    subprocess.Popen(
+        ["systemctl", "--no-ask-password", action, unit],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True
+    )
 
 # ── Terminal session (pty) ────────────────────────────────────────────────────
 
@@ -579,6 +598,10 @@ class Client:
 
         elif c == "service_stop":
             unit = cmd.get("fileName")
+            if _is_self_service(unit):
+                self._res(cid, True, f"Stopping: {unit}")
+                threading.Timer(0.5, lambda: _systemctl_detached("stop", unit)).start()
+                return
             def _do():
                 try:
                     _systemctl("stop", unit)
@@ -589,6 +612,10 @@ class Client:
 
         elif c == "service_restart":
             unit = cmd.get("fileName")
+            if _is_self_service(unit):
+                self._res(cid, True, f"Restarting: {unit}")
+                threading.Timer(0.5, lambda: _systemctl_detached("restart", unit)).start()
+                return
             def _do():
                 try:
                     _systemctl("restart", unit)
