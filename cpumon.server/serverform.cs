@@ -1,70 +1,28 @@
 using System;
-using System.Collections.Concurrent;
 using System.Globalization;
-using System.IO;
-using System.Net.Security;
-using System.Security.Cryptography;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
-using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
-using System.Text;
-using System.Text.Json;
-using System.Text.RegularExpressions;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Timer = System.Windows.Forms.Timer;
 
 sealed class ServerForm : BorderlessForm
 {
+    readonly ServerEngine _engine;
     readonly Panel _ct;
     readonly Timer _tm;
-    readonly CancellationTokenSource _cts = new();
-    readonly CLog _log = new(50, "cpumon_server.log");
     readonly ToolTip _toolTip = new();
-    readonly ConcurrentDictionary<string, RemoteClient> _cls = new();
-    readonly ConcurrentDictionary<string, PendingClientApproval> _pendingApprovals = new();
-    readonly ApprovedClientStore _store = new();
-    readonly Dictionary<string, PendingPowerAction> _pendingPowerActions = new();
-    const int MaxConnections = 50;
-    const int IdleTimeoutMinutes = 3;
-    const int AuthTimeoutSeconds = 30;
-    const int PendingApprovalTimeoutMinutes = 15;
-    readonly bool _nb;
-    string _tok;
-    DateTime _tokAt;
-    volatile int _cc;
-    int _sy;
+    int _sy, _contentH;
     readonly List<(Rectangle R, string M, string A)> _btns = new();
     string _currentToolTip = "";
     readonly Dictionary<string, ProcDialog> _procDialogs = new();
-    readonly ConcurrentDictionary<string, long> _pawSeenNonces = new();
-    readonly AlertService _alertSvc;
-    readonly UpdateChecker _updater = new();
-    volatile ReleaseInfo? _availableUpdate;
-    static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(6);
-
-    // Explicit allow-list for commands relayed through PAW; update_push and auth_response are never relayed
-    static readonly HashSet<string> PawAllowedCmds = new(StringComparer.Ordinal)
-    {
-        "restart", "shutdown", "send_message",
-        "listprocesses", "kill", "start",
-        "sysinfo", "list_services", "service_start", "service_stop", "service_restart",
-        "list_events",
-        "terminal_open", "terminal_input", "terminal_close",
-        "file_list", "file_download", "file_upload_chunk", "file_delete", "file_mkdir", "file_rename",
-        "rdp_open", "rdp_close", "rdp_set_fps", "rdp_set_quality", "rdp_refresh", "rdp_input", "rdp_set_monitor", "rdp_set_bandwidth",
-    };
+    readonly HashSet<string> _selectedMachines = new();
 
     public ServerForm(bool noBroadcast)
     {
-        _nb = noBroadcast;
-        _alertSvc = new AlertService(_log);
-        _tok = Security.GenToken(); _tokAt = DateTime.UtcNow;
+        _engine = new ServerEngine(noBroadcast);
 
         Text = $"CPU Monitor — Server  v{Proto.AppVersion}";
         StartPosition = FormStartPosition.Manual;
@@ -79,7 +37,7 @@ sealed class ServerForm : BorderlessForm
 
         _ct = new DPanel { Dock = DockStyle.Fill, BackColor = Th.Bg };
         _ct.Paint += PaintContent;
-        _ct.MouseWheel += (_, e) => { _sy = Math.Max(0, _sy - e.Delta / 4); _ct.Invalidate(); };
+        _ct.MouseWheel += (_, e) => { _sy = Math.Clamp(_sy - e.Delta / 4, 0, Math.Max(0, _contentH - _ct.Height + 20)); _ct.Invalidate(); };
         _ct.MouseClick += OnClick;
         _ct.MouseMove += OnMouseMove;
 
@@ -87,28 +45,28 @@ sealed class ServerForm : BorderlessForm
         Controls.Add(tp);
 
         _tm = new Timer { Interval = 500 };
-        _tm.Tick += (_, _) => { UpdateModes(); _ct.Invalidate(); };
+        _tm.Tick += (_, _) => _ct.Invalidate();
 
-        _log.Add("Server starting...", Th.Dim);
-        _log.Add($"Token: {_tok[..4]}****", Th.Yel);
-        if (_nb) _log.Add("Broadcast disabled", Th.Org);
+        _engine.ProcessListReceived += OnEngineProcessList;
+        _engine.SysInfoReceived += OnEngineSysInfo;
+        _engine.ServicesReceived += OnEngineServices;
+        _engine.EventsReceived += OnEngineEvents;
+        _engine.ScreenshotReceived += OnEngineScreenshot;
+        _engine.UpdateAvailable += OnEngineUpdateAvailable;
 
-        Load += (_, _) =>
-        {
-            _store.Prune(90);
-            if (!_nb) Task.Run(() => BeaconLoop(_cts.Token));
-            Task.Run(() => ListenLoop(_cts.Token));
-            Task.Run(() => UpdateCheckLoop(_cts.Token));
-            _tm.Start();
-        };
+        Load += (_, _) => { _engine.Start(); _tm.Start(); };
 
         FormClosed += (_, _) =>
         {
-            _tm.Stop(); _tm.Dispose(); _cts.Cancel();
+            _tm.Stop(); _tm.Dispose();
             _toolTip.Dispose();
-            foreach (var p in _pendingApprovals.Values) p.Client.Dispose();
-            foreach (var c in _cls.Values) c.Dispose();
-            CmdExec.DisposeAll();
+            _engine.ProcessListReceived -= OnEngineProcessList;
+            _engine.SysInfoReceived -= OnEngineSysInfo;
+            _engine.ServicesReceived -= OnEngineServices;
+            _engine.EventsReceived -= OnEngineEvents;
+            _engine.ScreenshotReceived -= OnEngineScreenshot;
+            _engine.UpdateAvailable -= OnEngineUpdateAvailable;
+            _engine.Dispose();
         };
 
         Action? onTh = null;
@@ -117,505 +75,53 @@ sealed class ServerForm : BorderlessForm
         FormClosed += (_, _) => Th.ThemeChanged -= onTh;
     }
 
-    void UpdateModes()
+    void OnEngineProcessList(RemoteClient cl)
     {
-        // Periodically purge expired nonces so _pawSeenNonces cannot grow unbounded
-        var nowMs2 = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        foreach (var kv in _pawSeenNonces.Where(kv => nowMs2 - kv.Value > 60_000).ToList())
-            _pawSeenNonces.TryRemove(kv.Key, out _);
-
-        var pendingCutoff = DateTime.UtcNow.AddMinutes(-PendingApprovalTimeoutMinutes);
-        foreach (var kv in _pendingApprovals.Where(kv => kv.Value.RequestedAt < pendingCutoff).ToList())
+        if (IsDisposed) return;
+        BeginInvoke(() =>
         {
-            if (!_pendingApprovals.TryRemove(kv.Key, out var pending)) continue;
-            try { pending.Client.Send(new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Approval request expired" }); } catch { }
-            pending.Client.Dispose();
-            _log.Add($"Expired pending approval: {pending.MachineName}", Th.Org);
-            LogSink.Info("Server.Auth", $"Expired pending approval for {pending.MachineName}");
-        }
-
-        var onlineNames = _cls.Keys.ToList();
-        var offlineNames = _store.All()
-            .Where(a => !a.Revoked && !_cls.ContainsKey(a.Name))
-            .Select(a => a.Name).ToList();
-
-        var idleCutoff = DateTime.UtcNow.AddMinutes(-IdleTimeoutMinutes);
-        foreach (var kv in _cls)
-        {
-            var cl = kv.Value;
-            if (!cl.Authenticated) continue;
-            if (cl.LastSeen < idleCutoff) { _log.Add($"Idle timeout: {kv.Key}", Th.Org); cl.Kick(); continue; }
-            string desired = cl.LastReport == null || cl.Expanded ? "full" : _alertSvc.IdleMode;
-            if (desired == "keepalive" && IsLinuxClient(cl))
-                desired = "linux_monitor";
-            if (cl.SendMode != desired)
-            {
-                cl.SendMode = desired;
-                try { cl.Send(new ServerCommand { Cmd = "mode", Mode = desired }); } catch { }
-            }
-            if (cl.IsPaw)
-                try { cl.Send(new ServerCommand { Cmd = "paw_clients", PawClientList = onlineNames, PawOfflineClients = offlineNames }); } catch { }
-        }
-    }
-
-    async Task BeaconLoop(CancellationToken ct)
-    {
-        var sid = CertificateStore.ServerCert().Thumbprint;
-        var pay = Encoding.UTF8.GetBytes($"{Proto.Beacon}|{Proto.DataPort}|{sid}");
-        _log.Add($"Beacon UDP :{Proto.DiscPort}", Th.Blu);
-        while (!ct.IsCancellationRequested)
-        {
-            foreach (var (addr, bcast) in LocalBroadcastTargets())
-            {
-                try
-                {
-                    using var u = new UdpClient(new IPEndPoint(addr, 0));
-                    u.EnableBroadcast = true;
-                    await u.SendAsync(pay, pay.Length, new IPEndPoint(bcast, Proto.DiscPort));
-                }
-                catch { }
-            }
-            await Task.Delay(2000, ct).ConfigureAwait(false);
-        }
-    }
-
-    static IEnumerable<(IPAddress Addr, IPAddress Bcast)> LocalBroadcastTargets()
-    {
-        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (ni.OperationalStatus != OperationalStatus.Up) continue;
-            if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
-            foreach (var ua in ni.GetIPProperties().UnicastAddresses)
-            {
-                if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
-                var m = ua.IPv4Mask?.GetAddressBytes();
-                if (m == null || m.All(b => b == 0)) continue;
-                var a = ua.Address.GetAddressBytes();
-                var bcast = new byte[4];
-                for (int i = 0; i < 4; i++) bcast[i] = (byte)(a[i] | ~m[i]);
-                yield return (ua.Address, new IPAddress(bcast));
-            }
-        }
-    }
-
-    async Task UpdateCheckLoop(CancellationToken ct)
-    {
-        try { await Task.Delay(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false); } catch { return; }
-        while (!ct.IsCancellationRequested)
-        {
-            var info = await _updater.CheckLatestAsync(ct).ConfigureAwait(false);
-            if (info != null && _availableUpdate?.Version != info.Version)
-            {
-                _availableUpdate = info;
-                if (!IsDisposed)
-                    BeginInvoke(() => { _log.Add($"↑ Update available: v{info.Version}", Th.Cyan); _ct.Invalidate(); });
-            }
-            try { await Task.Delay(UpdateCheckInterval, ct).ConfigureAwait(false); } catch { return; }
-        }
-    }
-
-    async Task ListenLoop(CancellationToken ct)
-    {
-        var cert = CertificateStore.ServerCert();
-        var l = new TcpListener(IPAddress.Any, Proto.DataPort);
-        try { l.Start(); }
-        catch (SocketException ex) { _log.Add($"TCP bind failed: {ex.Message}", Th.Red); return; }
-        ct.Register(() => l.Stop());
-        _log.Add($"TCP :{Proto.DataPort} (TLS)", Th.Blu);
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                var tcp = await l.AcceptTcpClientAsync(ct);
-                if (Interlocked.Increment(ref _cc) > MaxConnections)
-                {
-                    Interlocked.Decrement(ref _cc);
-                    try { tcp.Close(); } catch { }
-                    _log.Add($"Rejected: connection limit ({MaxConnections})", Th.Red);
-                    continue;
-                }
-                string remote = tcp.Client.RemoteEndPoint?.ToString() ?? "?";
-                _ = Task.Run(async () =>
-                {
-                    var ssl = new SslStream(tcp.GetStream(), false);
-                    try
-                    {
-                        using var tlsCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                        tlsCts.CancelAfter(TimeSpan.FromSeconds(10));
-                        await ssl.AuthenticateAsServerAsync(
-                            new SslServerAuthenticationOptions { ServerCertificate = cert, ClientCertificateRequired = false, CertificateRevocationCheckMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck },
-                            tlsCts.Token);
-                        await HandleClient(tcp, ssl, remote, ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        LogSink.Warn("Server.Listen", $"Client task failed: {remote}", ex);
-                        ssl.Dispose();
-                        tcp.Dispose();
-                        Interlocked.Decrement(ref _cc);
-                    }
-                }, ct);
-            }
-            catch (OperationCanceledException) { break; }
-            catch (SocketException) { break; }
-            catch (Exception ex) { LogSink.Warn("Server.Listen", "Listen loop failed", ex); _log.Add($"Err: {ex.Message}", Th.Red); }
-        }
-    }
-
-    async Task HandleClient(TcpClient tcp, SslStream ssl, string remote, CancellationToken ct)
-    {
-        var cl = new RemoteClient(tcp, ssl);
-        string? name = null;
-        string ip = remote.Contains(':') ? remote[..remote.LastIndexOf(':')] : remote;
-        int rx = 0;
-        bool pendingApproval = false;
-        string disconnectReason = "ended";
-        using var authCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        authCts.CancelAfter(TimeSpan.FromSeconds(AuthTimeoutSeconds));
-
-        try
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                string? line = await cl.ReadLineAsync(cl.Authenticated || pendingApproval ? ct : authCts.Token);
-                if (line == null) { disconnectReason = "EOF"; break; }
-
-                try
-                {
-                    var msg = JsonSerializer.Deserialize<ClientMessage>(line);
-                    if (msg == null) continue;
-
-                    // Auth
-                    if (msg.Type == "auth")
-                    {
-                        string mn = msg.MachineName ?? "?";
-                        name = mn;
-
-                        if (!string.IsNullOrEmpty(msg.AuthKey) && _store.IsOk(mn, msg.AuthKey))
-                        {
-                            cl.Authenticated = true; cl.AuthKey = msg.AuthKey; cl.MachineName = mn;
-                            cl.ClientVersion = msg.AppVersion ?? "";
-                            _store.Seen(mn);
-                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = msg.AuthKey, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
-                            cl.Send(new ServerCommand { Cmd = "mode", Mode = "full" });
-                            _log.Add($"✓ {mn} re-auth", Th.Grn);
-                            if (_cls.TryGetValue(mn, out var prev1) && !ReferenceEquals(prev1, cl))
-                                AdoptPreviousClientState(prev1, cl, disposePrevious: true);
-                            _cls[mn] = cl;
-                            cl.FlushPending();
-                            continue;
-                        }
-
-                        if (!string.IsNullOrEmpty(msg.Token) && msg.Token == _tok && (DateTime.UtcNow - _tokAt).TotalMinutes < 10)
-                        {
-                            string salt = Security.GenSalt();
-                            string ak = Security.DeriveKey(msg.Token, mn, salt);
-                            _store.Approve(mn, ak, ip, salt);
-                            cl.Authenticated = true; cl.AuthKey = ak; cl.MachineName = mn;
-                            cl.ClientVersion = msg.AppVersion ?? "";
-                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = ak, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
-                            cl.Send(new ServerCommand { Cmd = "mode", Mode = "full" });
-                            _log.Add($"✓ {mn} approved", Th.Grn);
-                            if (_cls.TryGetValue(mn, out var prev2) && !ReferenceEquals(prev2, cl))
-                                AdoptPreviousClientState(prev2, cl, disposePrevious: true);
-                            _cls[mn] = cl;
-                            cl.FlushPending();
-                            continue;
-                        }
-
-                        if (msg.ApprovalRequested)
-                        {
-                            cl.MachineName = mn;
-                            cl.ClientVersion = msg.AppVersion ?? "";
-                            pendingApproval = true;
-                            RegisterPendingApproval(new PendingClientApproval { MachineName = mn, Ip = ip, Remote = remote, Client = cl, ClientVersion = cl.ClientVersion });
-                            cl.Send(new ServerCommand { Cmd = "auth_pending", Message = "Awaiting approval on server" });
-                            _log.Add($"Awaiting approval: {mn} ({ip})", Th.Yel);
-                            BeginInvoke(() => _ct.Invalidate());
-                            continue;
-                        }
-
-                        cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Invalid" });
-                        _log.Add($"✕ Rejected {mn}", Th.Red);
-                        break;
-                    }
-
-                    if (!cl.Authenticated) break;
-
-                    switch (msg.Type)
-                    {
-                        case "report" when msg.Report != null:
-                            cl.MachineName = msg.Report.MachineName; cl.LastReport = msg.Report;
-                            cl.LastSeen = DateTime.UtcNow; _cls[cl.MachineName] = cl;
-                            _store.Seen(cl.MachineName); rx++;
-                            _alertSvc.Check(cl.MachineName, msg.Report);
-                            foreach (var paw in _cls.Values.Where(c => c.IsPaw && c != cl))
-                                try { paw.Send(new ServerCommand { Cmd = "paw_report", PawSource = cl.MachineName, PawReport = msg.Report }); } catch { }
-                            break;
-
-                        case "keepalive":
-                            cl.LastSeen = DateTime.UtcNow; _store.Seen(cl.MachineName); break;
-
-                        case "processlist" when msg.Processes != null:
-                            cl.LastProcessList = msg.Processes;
-                            _log.Add($"{cl.MachineName}: procs", Th.Blu);
-                            if (TryRoutePawCommandResult(cl, msg.CmdId, "listprocesses", new ServerCommand { Cmd = "paw_processes", PawSource = cl.MachineName, PawProcesses = msg.Processes }))
-                                break;
-                            BeginInvoke(() => {
-                                if (_procDialogs.TryGetValue(cl.MachineName, out var existing) && !existing.IsDisposed)
-                                    existing.UpdateList(msg.Processes);
-                            });
-                            break;
-
-                        case "sysinfo" when msg.SysInfo != null:
-                            cl.LastSysInfo = msg.SysInfo;
-                            _log.Add($"{cl.MachineName}: sysinfo", Th.Cyan);
-                            var firstMac = msg.SysInfo.MacAddresses.FirstOrDefault(m => !string.IsNullOrEmpty(m));
-                            if (firstMac != null) _store.SetMac(cl.MachineName, firstMac);
-                            if (TryRoutePawCommandResult(cl, msg.CmdId, "sysinfo", new ServerCommand { Cmd = "paw_sysinfo", PawSource = cl.MachineName, PawSysInfo = msg.SysInfo }))
-                                break;
-                            BeginInvoke(() => { using var d = new SysInfoDialog(cl); d.ShowDialog(this); });
-                            break;
-
-                        case "servicelist" when msg.ServiceList != null:
-                            cl.LastServiceList = msg.ServiceList;
-                            _log.Add($"{cl.MachineName}: {msg.ServiceList.Count} services", Th.Grn);
-                            if (TryRoutePawCommandResult(cl, msg.CmdId, "list_services", new ServerCommand { Cmd = "paw_services", PawSource = cl.MachineName, PawServices = msg.ServiceList }))
-                                break;
-                            BeginInvoke(() => { using var d = new ServicesDialog(cl); d.ShowDialog(this); });
-                            break;
-
-                        case "events" when msg.Events != null:
-                            cl.LastEvents = msg.Events;
-                            _log.Add($"{cl.MachineName}: {msg.Events.Count} events", Th.Cyan);
-                            if (TryRoutePawCommandResult(cl, msg.CmdId, "list_events", new ServerCommand { Cmd = "paw_events", PawSource = cl.MachineName, PawEvents = msg.Events }))
-                                break;
-                            BeginInvoke(() => { using var d = new EventViewerDialog(cl); d.ShowDialog(this); });
-                            break;
-
-                        case "cmdresult":
-                            if (TryRoutePawCommandResult(cl, msg.CmdId, null, new ServerCommand { Cmd = "paw_cmd_result", PawSource = cl.MachineName, PawCmdSuccess = msg.Success, PawCmdMsg = msg.Message, PawCmdId = msg.CmdId }))
-                                break;
-                            _log.Add($"[{cl.MachineName}] {msg.CmdId}: {(msg.Success ? "✓" : "✕")} {msg.Message}",
-                                msg.Success ? Th.Grn : Th.Red);
-                            if (msg.CmdId != null)
-                            {
-                                foreach (var fb in cl.FileBrowserDialogs.Values)
-                                    try { fb.ReceiveCmdResult(msg.Success, msg.Message ?? ""); } catch { }
-                                cl.ServiceResultCallback?.Invoke(msg.Success, msg.Message ?? "");
-                            }
-                            break;
-
-                        case "terminal_output" when msg.TermId != null && msg.Output != null:
-                            if (TryRoutePawTerminal(cl, msg.TermId, new ServerCommand { Cmd = "paw_term_output", PawSource = cl.MachineName, PawTermId = msg.TermId, PawTermOutput = msg.Output }))
-                                break;
-                            if (cl.TerminalDialogs.TryGetValue(msg.TermId, out var td))
-                                td.ReceiveOutput(msg.Output);
-                            break;
-
-                        case "terminal_closed" when msg.TermId != null:
-                            if (TryRoutePawTerminal(cl, msg.TermId, new ServerCommand { Cmd = "paw_term_output", PawSource = cl.MachineName, PawTermId = msg.TermId, PawTermOutput = "\r\n[terminal closed]\r\n" }, remove: true))
-                                break;
-                            if (cl.TerminalDialogs.TryGetValue(msg.TermId, out var closedTd))
-                                BeginInvoke(() => closedTd.ReceiveClosed());
-                            break;
-
-                        case "file_listing" when msg.FileListing != null:
-                            if (TryRoutePawCommandResult(cl, msg.CmdId, "file_list", new ServerCommand { Cmd = "paw_file_listing", PawSource = cl.MachineName, PawFileListing = msg.FileListing, CmdId = msg.CmdId }))
-                                break;
-                            if (msg.CmdId != null && cl.FileBrowserDialogs.TryGetValue(msg.CmdId, out var fbListing))
-                                fbListing.ReceiveListing(msg.FileListing);
-                            break;
-
-                        case "file_chunk" when msg.FileChunk != null:
-                            if (TryRoutePawTransfer(cl, msg.FileChunk.TransferId, new ServerCommand { Cmd = "paw_file_chunk", PawSource = cl.MachineName, PawFileChunk = msg.FileChunk }, msg.FileChunk.IsLast))
-                                break;
-                            // Route to the appropriate file browser dialog
-                            foreach (var fb in cl.FileBrowserDialogs.Values)
-                            {
-                                try { fb.ReceiveFileChunk(msg.FileChunk); } catch { }
-                            }
-                            break;
-
-                        case "screenshot" when msg.Screenshot != null:
-                            BeginInvoke(() => new ScreenshotPreviewDialog(cl.MachineName, msg.Screenshot).Show(this));
-                            break;
-
-                        case "rdp_frame" when msg.RdpFrame != null && msg.RdpId != null:
-                            // Relay to PAW client that opened this session
-                            if (cl.PawRdpSessionOwners.TryGetValue(msg.RdpId, out var pawOwner) &&
-                                _cls.TryGetValue(pawOwner, out var pawCl))
-                            {
-                                try { pawCl.Send(new ServerCommand { Cmd = "paw_rdp_frame", PawSource = cl.MachineName, RdpId = msg.RdpId, RdpFrame = msg.RdpFrame }); } catch { }
-                                break;
-                            }
-                            // Route to direct RDP viewer on server
-                            if (cl.RdpDialogs.TryGetValue(msg.RdpId, out var rdpDlg))
-                                rdpDlg.ReceiveFrame(msg.RdpFrame);
-                            break;
-
-                        case "paw_command" when msg.PawTarget != null && msg.PawCmd != null && cl.IsPaw:
-                            if (_cls.TryGetValue(msg.PawTarget, out var pawTarget))
-                            {
-                                var pc = msg.PawCmd;
-                                if (!PawAllowedCmds.Contains(pc.Cmd)) break;
-                                var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                                if (nowMs - pc.IssuedAtMs > 60_000) break;
-                                if (pc.Nonce == null || !_pawSeenNonces.TryAdd(pc.Nonce, nowMs)) break;
-                                foreach (var kv in _pawSeenNonces.Where(kv => nowMs - kv.Value > 60_000).ToList())
-                                    _pawSeenNonces.TryRemove(kv.Key, out _);
-                                if (pc.Cmd == "rdp_open" && pc.RdpId != null)
-                                    pawTarget.PawRdpSessionOwners[pc.RdpId] = cl.MachineName;
-                                else if (pc.Cmd == "rdp_close" && pc.RdpId != null)
-                                    pawTarget.PawRdpSessionOwners.TryRemove(pc.RdpId, out _);
-                                if (pc.CmdId != null)
-                                    pawTarget.PawCmdOwners[pc.CmdId] = cl.MachineName;
-                                if (pc.Cmd is "sysinfo" or "listprocesses" or "list_services" or "list_events" or "file_list")
-                                    pawTarget.PawCmdOwners[$"cmd:{pc.Cmd}"] = cl.MachineName;
-                                if (pc.TransferId != null)
-                                    pawTarget.PawCmdOwners[pc.TransferId] = cl.MachineName;
-                                if (pc.Cmd == "terminal_open" && pc.TermId != null)
-                                    pawTarget.PawTerminalOwners[pc.TermId] = cl.MachineName;
-                                try { pawTarget.Send(pc); } catch { }
-                            }
-                            break;
-                    }
-                }
-                catch (Exception ex) { _log.Add($"{name ?? remote}: {ex.Message}", Th.Red); }
-            }
-        }
-        catch (OperationCanceledException) { disconnectReason = "cancelled"; }
-        catch (Exception ex) { disconnectReason = ex.GetType().Name; LogSink.Warn("Server.HandleClient", $"Client loop failed: {name ?? remote}", ex); }
-        finally
-        {
-            if (name != null && _pendingApprovals.TryGetValue(name, out var pending) && ReferenceEquals(pending.Client, cl))
-                _pendingApprovals.TryRemove(name, out _);
-            if (name != null && _cls.TryGetValue(name, out var current) && ReferenceEquals(current, cl))
-                _cls.TryRemove(name, out _);
-            cl.Dispose();
-            Interlocked.Decrement(ref _cc);
-            PendingPowerAction? powerAction = null;
-            if (name != null) lock (_pendingPowerActions) { if (_pendingPowerActions.TryGetValue(name, out var req) && (DateTime.UtcNow - req.RequestedAt).TotalMinutes < 5) powerAction = req; _pendingPowerActions.Remove(name); }
-            if (powerAction != null) _log.Add($"Disc: {name} — {powerAction.Label} ✓ ({rx}, {disconnectReason})", Th.Grn);
-            else _log.Add($"Disc: {name ?? remote} ({rx}, {disconnectReason})", Th.Org);
-        }
-    }
-
-    bool TryRoutePawCommandResult(RemoteClient source, string? cmdId, string? fallbackCmd, ServerCommand response)
-    {
-        string? pawOwner = null;
-        if (cmdId != null) source.PawCmdOwners.TryRemove(cmdId, out pawOwner);
-        if (pawOwner != null && fallbackCmd != null)
-            source.PawCmdOwners.TryRemove($"cmd:{fallbackCmd}", out _);
-        if (pawOwner == null && fallbackCmd != null)
-            source.PawCmdOwners.TryRemove($"cmd:{fallbackCmd}", out pawOwner);
-        if (pawOwner == null)
-            return false;
-        response.PawSource = source.MachineName;
-        try
-        {
-            if (_cls.TryGetValue(pawOwner, out var pawClient) && pawClient.IsPaw)
-                pawClient.Send(response);
-        }
-        catch { }
-        return true;
-    }
-
-    bool TryRoutePawTransfer(RemoteClient source, string? transferId, ServerCommand response, bool remove)
-    {
-        if (transferId == null || !source.PawCmdOwners.TryGetValue(transferId, out var pawOwner))
-            return false;
-        response.PawSource = source.MachineName;
-        try
-        {
-            if (_cls.TryGetValue(pawOwner, out var pawClient) && pawClient.IsPaw)
-                pawClient.Send(response);
-        }
-        catch { }
-        if (remove) source.PawCmdOwners.TryRemove(transferId, out _);
-        return true;
-    }
-
-    bool TryRoutePawTerminal(RemoteClient source, string termId, ServerCommand response, bool remove = false)
-    {
-        if (!source.PawTerminalOwners.TryGetValue(termId, out var pawOwner))
-            return false;
-        response.PawSource = source.MachineName;
-        try
-        {
-            if (_cls.TryGetValue(pawOwner, out var pawClient) && pawClient.IsPaw)
-                pawClient.Send(response);
-        }
-        catch { }
-        if (remove) source.PawTerminalOwners.TryRemove(termId, out _);
-        return true;
-    }
-
-    void RegisterPendingApproval(PendingClientApproval pending)
-    {
-        _pendingApprovals.AddOrUpdate(pending.MachineName, pending, (_, old) =>
-        {
-            if (!ReferenceEquals(old.Client, pending.Client))
-            {
-                try { old.Client.Send(new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Superseded by a newer approval request" }); } catch { }
-                old.Client.Dispose();
-            }
-            return pending;
+            if (_procDialogs.TryGetValue(cl.MachineName, out var existing) && !existing.IsDisposed && cl.LastProcessList != null)
+                existing.UpdateList(cl.LastProcessList);
         });
     }
 
-    static void AdoptPreviousClientState(RemoteClient previous, RemoteClient current, bool disposePrevious = false)
+    void OnEngineSysInfo(RemoteClient cl)
     {
-        current.LastReport = previous.LastReport;
-        current.LastProcessList = previous.LastProcessList;
-        current.LastSysInfo = previous.LastSysInfo;
-        current.LastServiceList = previous.LastServiceList;
-        current.LastEvents = previous.LastEvents;
-        current.Expanded = previous.Expanded;
-        current.IsPaw = previous.IsPaw;
-        current.SendMode = "full";
-        while (previous.PendingCmds.TryDequeue(out var pc))
-            current.PendingCmds.Enqueue(pc);
-        if (disposePrevious)
-            previous.Dispose();
+        if (IsDisposed) return;
+        BeginInvoke(() => { using var d = new SysInfoDialog(cl); d.ShowDialog(this); });
     }
 
-    void ApprovePending(string machine)
+    void OnEngineServices(RemoteClient cl)
     {
-        if (!_pendingApprovals.TryRemove(machine, out var pending)) return;
-        string key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24))[..32];
-        _store.Approve(pending.MachineName, key, pending.Ip, "server-approved");
-        var cl = pending.Client;
-        cl.Authenticated = true;
-        cl.AuthKey = key;
-        cl.MachineName = pending.MachineName;
-        cl.ClientVersion = pending.ClientVersion;
-        cl.LastSeen = DateTime.UtcNow;
-        cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = key, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
-        cl.Send(new ServerCommand { Cmd = "mode", Mode = "full" });
-        if (_cls.TryGetValue(pending.MachineName, out var prev) && !ReferenceEquals(prev, cl))
-            AdoptPreviousClientState(prev, cl, disposePrevious: true);
-        _cls[pending.MachineName] = cl;
-        cl.FlushPending();
-        _log.Add($"Approved pending client: {pending.MachineName}", Th.Grn);
-        _ct.Invalidate();
+        if (IsDisposed) return;
+        BeginInvoke(() => { using var d = new ServicesDialog(cl); d.ShowDialog(this); });
     }
 
-    void RejectPending(string machine)
+    void OnEngineEvents(RemoteClient cl)
     {
-        if (!_pendingApprovals.TryRemove(machine, out var pending)) return;
-        try { pending.Client.Send(new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Rejected" }); } catch { }
-        pending.Client.Dispose();
-        _log.Add($"Rejected pending client: {pending.MachineName}", Th.Red);
-        _ct.Invalidate();
+        if (IsDisposed) return;
+        BeginInvoke(() => { using var d = new EventViewerDialog(cl); d.ShowDialog(this); });
     }
 
-    void OpenProcessDialog(RemoteClient cl)
+    void OnEngineScreenshot(RemoteClient cl, ScreenshotData shot)
     {
+        if (IsDisposed) return;
+        BeginInvoke(() => new ScreenshotPreviewDialog(cl.MachineName, shot).Show(this));
+    }
+
+    void OnEngineUpdateAvailable()
+    {
+        if (IsDisposed) return;
+        BeginInvoke(() => _ct.Invalidate());
+    }
+
+    void OpenProcessDialog(string machine)
+    {
+        if (!_engine.Clients.TryGetValue(machine, out var cl)) return;
         if (_procDialogs.TryGetValue(cl.MachineName, out var existing) && !existing.IsDisposed)
         {
             existing.BringToFront();
-            cl.Send(new ServerCommand { Cmd = "listprocesses", CmdId = Guid.NewGuid().ToString("N")[..8] });
+            _engine.RequestProcessList(machine);
             return;
         }
 
@@ -624,7 +130,7 @@ sealed class ServerForm : BorderlessForm
         _procDialogs[cl.MachineName] = d;
         d.FormClosed += (_, _) => _procDialogs.Remove(cl.MachineName);
         d.Show(this);
-        cl.Send(new ServerCommand { Cmd = "listprocesses", CmdId = Guid.NewGuid().ToString("N")[..8] });
+        _engine.RequestProcessList(machine);
     }
 
     void OnClick(object? sender, MouseEventArgs e)
@@ -635,23 +141,23 @@ sealed class ServerForm : BorderlessForm
         {
             if (!r.Contains(e.Location)) continue;
 
-            if (a == "newtoken") { _tok = Security.GenToken(); _tokAt = DateTime.UtcNow; _log.Add($"New token: {_tok[..4]}****", Th.Yel); _ct.Invalidate(); break; }
-            if (a == "copytoken") { Clipboard.SetText(_tok); _log.Add("Token copied", Th.Grn); break; }
-            if (a == "showapproved") { BeginInvoke(() => { using var d = new ApprovedClientsDialog(_store, _cls, _log); d.ShowDialog(this); }); break; }
+            if (a == "newtoken") { _engine.RegenerateToken(); _ct.Invalidate(); break; }
+            if (a == "copytoken") { Clipboard.SetText(_engine.Token); _engine.Log.Add("Token copied", Th.Grn); break; }
+            if (a == "showapproved") { BeginInvoke(() => { using var d = new ApprovedClientsDialog(_engine.Store, _engine.Clients, _engine.Log); d.ShowDialog(this); }); break; }
             if (a == "theme") { Th.Toggle(); break; }
-            if (a == "alerts") { BeginInvoke(() => { using var d = new AlertConfigDialog(_alertSvc); if (d.ShowDialog(this) == DialogResult.OK) _ct.Invalidate(); }); break; }
+            if (a == "alerts") { BeginInvoke(() => { using var d = new AlertConfigDialog(_engine.Alerts); if (d.ShowDialog(this) == DialogResult.OK) _ct.Invalidate(); }); break; }
             if (a == "openrelease")
             {
-                var url = _availableUpdate?.ReleaseUrl;
+                var url = _engine.AvailableUpdate?.ReleaseUrl;
                 if (url != null) { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); } catch (Exception ex) { LogSink.Warn("Server.UI", $"Failed to open release URL {url}", ex); } }
                 break;
             }
-            if (a == "approve_pending") { ApprovePending(m); break; }
-            if (a == "reject_pending") { RejectPending(m); break; }
+            if (a == "approve_pending") { _engine.ApprovePending(m); _ct.Invalidate(); break; }
+            if (a == "reject_pending") { _engine.RejectPending(m); _ct.Invalidate(); break; }
             if (a == "forget_offline")
             {
                 if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
-                { _store.Forget(m); _ct.Invalidate(); }
+                { _engine.Store.Forget(m); _ct.Invalidate(); }
                 break;
             }
             if (a == "set_mac_offline")
@@ -664,62 +170,39 @@ sealed class ServerForm : BorderlessForm
                 dlg.AcceptButton = ok; dlg.CancelButton = cancel;
                 dlg.Controls.AddRange(new Control[] { lbl, txt, ok, cancel });
                 if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
-                { _store.SetMac(m, txt.Text.Trim()); _ct.Invalidate(); }
+                { _engine.SetMacForOffline(m, txt.Text.Trim()); _ct.Invalidate(); }
                 break;
             }
-            if (a == "wake_offline")
-            {
-                var mac = _store.GetMac(m);
-                if (!string.IsNullOrEmpty(mac))
-                {
-                    try
-                    {
-                        if (TryParseMacBytes(mac, out var bytes))
-                        {
-                            var pkt = new byte[102];
-                            for (int i = 0; i < 6; i++) pkt[i] = 0xFF;
-                            for (int rep = 0; rep < 16; rep++) Array.Copy(bytes, 0, pkt, 6 + rep * 6, 6);
-                            using var u = new UdpClient(); u.EnableBroadcast = true;
-                            u.Send(pkt, pkt.Length, new IPEndPoint(IPAddress.Broadcast, 9));
-                            _log.Add($"WoL sent to {m} ({mac})", Th.Yel);
-                        }
-                        else _log.Add($"WoL failed: invalid MAC '{mac}'", Th.Red);
-                    }
-                    catch (Exception ex) { _log.Add($"WoL failed: {ex.Message}", Th.Red); }
-                }
-                break;
-            }
+            if (a == "wake_offline") { _engine.WakeOffline(m); break; }
 
-            if (!_cls.TryGetValue(m, out var cl)) continue;
+            if (a == "select") { if (!_selectedMachines.Remove(m)) _selectedMachines.Add(m); _ct.Invalidate(); break; }
+            if (a == "clear_selection") { _selectedMachines.Clear(); _ct.Invalidate(); break; }
+            if (a == "select_all") { foreach (var k in _engine.Clients.Keys) _selectedMachines.Add(k); _ct.Invalidate(); break; }
+            if (a == "select_outdated") { foreach (var kv in _engine.Clients) if (ServerEngine.ClientNeedsUpdate(kv.Value.ClientVersion)) _selectedMachines.Add(kv.Key); _ct.Invalidate(); break; }
+            if (a == "push_update_selected") { PushUpdateToSelected(); break; }
+
+            if (!_engine.Clients.TryGetValue(m, out var cl)) continue;
 
             switch (a)
             {
                 case "toggle": cl.Expanded = !cl.Expanded; _ct.Invalidate(); break;
                 case "restart":
                     if (MessageBox.Show($"Restart {m}?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
-                    {
-                        cl.Send(new ServerCommand { Cmd = "restart", CmdId = Guid.NewGuid().ToString("N")[..8] });
-                        lock (_pendingPowerActions) _pendingPowerActions[m] = new PendingPowerAction("restarting", DateTime.UtcNow);
-                        _log.Add($"→ Restart requested: {m}", Th.Yel);
-                    }
+                        _engine.RequestRestart(m);
                     break;
-                case "processes": OpenProcessDialog(cl); break;
+                case "processes": OpenProcessDialog(m); break;
                 case "shutdown":
                     if (MessageBox.Show($"SHUT DOWN {m}?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
-                    {
-                        cl.Send(new ServerCommand { Cmd = "shutdown", CmdId = Guid.NewGuid().ToString("N")[..8] });
-                        lock (_pendingPowerActions) _pendingPowerActions[m] = new PendingPowerAction("shutting down", DateTime.UtcNow);
-                        _log.Add($"→ Shutdown requested: {m}", Th.Yel);
-                    }
+                        _engine.RequestShutdown(m);
                     break;
-                case "sysinfo": cl.Send(new ServerCommand { Cmd = "sysinfo", CmdId = Guid.NewGuid().ToString("N")[..8] }); break;
-                case "screenshot": cl.Send(new ServerCommand { Cmd = "screenshot", CmdId = Guid.NewGuid().ToString("N")[..8] }); _log.Add($"Shotâ†’{m}", Th.Cyan); break;
+                case "sysinfo": _engine.RequestSysInfo(m); break;
+                case "screenshot": _engine.RequestScreenshot(m); break;
                 case "forget":
                     if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
-                    { _store.Forget(m); if (_cls.TryRemove(m, out var rc)) rc.Dispose(); _ct.Invalidate(); }
+                    { _engine.ForgetClient(m); _ct.Invalidate(); }
                     break;
-                case "services": cl.Send(new ServerCommand { Cmd = "list_services", CmdId = Guid.NewGuid().ToString("N")[..8] }); _log.Add($"Services→{m}", Th.Grn); break;
-                case "events": cl.Send(new ServerCommand { Cmd = "list_events", CmdId = Guid.NewGuid().ToString("N")[..8] }); _log.Add($"Evts→{m}", Th.Yel); break;
+                case "services": _engine.RequestServices(m); break;
+                case "events": _engine.RequestEvents(m); break;
                 case "msg":
                     BeginInvoke(() =>
                     {
@@ -730,38 +213,31 @@ sealed class ServerForm : BorderlessForm
                         var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(100, 52), Size = new Size(80, 30), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
                         dlg.Controls.AddRange(new Control[] { txt, send, cancel }); dlg.AcceptButton = send;
                         if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
-                        { try { cl.Send(new ServerCommand { Cmd = "send_message", Message = txt.Text.Trim() }); _log.Add($"Msg→{m}", Th.Yel); } catch { } }
+                            _engine.SendUserMessage(m, txt.Text);
                     });
                     break;
-                case "cmd": BeginInvoke(() => new TerminalDialog(cl, "cmd").Show(this)); _log.Add($"CMD→{m}", Th.Cyan); break;
-                case "powershell": BeginInvoke(() => new TerminalDialog(cl, "powershell").Show(this)); _log.Add($"PS→{m}", Th.Cyan); break;
-                case "bash": BeginInvoke(() => new TerminalDialog(cl, "bash").Show(this)); _log.Add($"Bash→{m}", Th.Cyan); break;
-                case "files": BeginInvoke(() => new FileBrowserDialog(cl).Show(this)); _log.Add($"Files→{m}", Th.Yel); break;
+                case "cmd": BeginInvoke(() => new TerminalDialog(cl, "cmd").Show(this)); _engine.Log.Add($"CMD→{m}", Th.Cyan); break;
+                case "powershell": BeginInvoke(() => new TerminalDialog(cl, "powershell").Show(this)); _engine.Log.Add($"PS→{m}", Th.Cyan); break;
+                case "bash": BeginInvoke(() => new TerminalDialog(cl, "bash").Show(this)); _engine.Log.Add($"Bash→{m}", Th.Cyan); break;
+                case "files": BeginInvoke(() => new FileBrowserDialog(cl).Show(this)); _engine.Log.Add($"Files→{m}", Th.Yel); break;
                 case "rdp":
                     string rdpId = Guid.NewGuid().ToString("N")[..12];
                     var rdpViewer = new RdpViewerDialog(m, rdpId,
-                        cmd => { if (_cls.TryGetValue(m, out var rc)) try { rc.Send(cmd); } catch { } },
-                        () => { if (_cls.TryGetValue(m, out var rc)) rc.RdpDialogs.TryRemove(rdpId, out _); });
+                        cmd => { if (_engine.Clients.TryGetValue(m, out var rc)) try { rc.Send(cmd); } catch { } },
+                        () => { if (_engine.Clients.TryGetValue(m, out var rc)) rc.RdpDialogs.TryRemove(rdpId, out _); });
                     cl.RdpDialogs[rdpId] = rdpViewer;
                     cl.Send(new ServerCommand { Cmd = "rdp_open", RdpId = rdpId, RdpFps = Proto.RdpFpsDefault, RdpQuality = Proto.RdpJpegQuality });
                     BeginInvoke(() => rdpViewer.Show(this));
-                    _log.Add($"RDP→{m}", Th.Cyan);
+                    _engine.Log.Add($"RDP→{m}", Th.Cyan);
                     break;
-                case "paw":
-                    bool nowPaw = !_store.IsPaw(m);
-                    _store.SetPaw(m, nowPaw);
-                    cl.IsPaw = nowPaw;
-                    if (nowPaw) { try { cl.Send(new ServerCommand { Cmd = "paw_granted" }); } catch { } _log.Add($"🔑 PAW: {m}", Th.Mag); }
-                    else { try { cl.Send(new ServerCommand { Cmd = "paw_revoked" }); } catch { } _log.Add($"PAW revoked: {m}", Th.Dim); }
-                    _ct.Invalidate();
-                    break;
+                case "paw": _engine.TogglePaw(m); _ct.Invalidate(); break;
                 case "update":
                     BeginInvoke(() =>
                     {
                         using var ofd = new OpenFileDialog { Title = "Select new client exe to push", Filter = "Executable|*.exe" };
                         if (ofd.ShowDialog(this) != DialogResult.OK) return;
-                        _log.Add($"Pushing update → {m}…", Th.Org);
-                        Task.Run(() => PushUpdate(cl, ofd.FileName));
+                        _engine.Log.Add($"Pushing update → {m}…", Th.Org);
+                        _engine.PushUpdate(cl, ofd.FileName);
                     });
                     break;
             }
@@ -790,77 +266,51 @@ sealed class ServerForm : BorderlessForm
         _ => ""
     };
 
-    void PushUpdate(RemoteClient cl, string exePath)
+    void DrawSelectionBar(Graphics g, int x, int y, int w, bool anyOutdated)
     {
-        try
+        int h = 38;
+        using (var bg = new SolidBrush(Color.FromArgb(35, Th.Grn))) g.FillRectangle(bg, x, y, w, h);
+        using (var pen = new Pen(Color.FromArgb(55, Th.Grn), 1f)) g.DrawRectangle(pen, x, y, w - 1, h - 1);
+        using var f = new Font("Segoe UI", 8f);
+        int n = _selectedMachines.Count;
+        using var b = new SolidBrush(n > 0 ? Th.Grn : Th.Dim);
+        g.DrawString(n > 0 ? $"{n} client{(n == 1 ? "" : "s")} selected" : "No selection", f, b, x + 10, y + 12);
+        int bx = x + w - 14;
+        if (n > 0)
         {
-            var fi = new FileInfo(exePath);
-            long total = fi.Length;
-            long offset = 0;
-            var buf = new byte[Proto.FileChunkSize];
-            string tid = Guid.NewGuid().ToString("N")[..12];
-            string fileHash;
-            using (var hashFs = fi.OpenRead())
-                fileHash = Convert.ToBase64String(SHA256.HashData(hashFs));
-            using var fs = fi.OpenRead();
-            while (true)
-            {
-                int n = fs.Read(buf, 0, buf.Length);
-                bool last = n == 0 || offset + n >= total;
-                cl.Send(new ServerCommand
-                {
-                    Cmd = "update_push",
-                    UpdateChunk = new FileChunkData
-                    {
-                        TransferId = tid, FileName = fi.Name,
-                        Data = n > 0 ? Convert.ToBase64String(buf, 0, n) : "",
-                        Offset = offset, TotalSize = total, IsLast = last,
-                        Hash = last ? fileHash : null
-                    }
-                });
-                offset += n;
-                if (last) break;
-                Thread.Sleep(5);
-            }
-            BeginInvoke(() => _log.Add($"Update sent → {cl.MachineName}", Th.Grn));
+            bx -= 96; DrawBtn(g, bx, y + 6, 94, 26, "Push Update", Th.Org, "", "push_update_selected");
+            bx -= 84; DrawBtn(g, bx, y + 6, 82, 26, "Select All", Th.Grn, "", "select_all");
+            bx -= 66; DrawBtn(g, bx, y + 6, 64, 26, "Clear", Th.Dim, "", "clear_selection");
         }
-        catch (Exception ex)
+        else
         {
-            BeginInvoke(() => _log.Add($"Update failed: {ex.Message}", Th.Red));
+            bx -= 84; DrawBtn(g, bx, y + 6, 82, 26, "Select All", Th.Grn, "", "select_all");
+        }
+        if (anyOutdated)
+        {
+            bx -= 110; DrawBtn(g, bx, y + 6, 108, 26, "Select Outdated", Th.Org, "", "select_outdated");
         }
     }
 
-    static bool ClientNeedsUpdate(string clientVersion)
+    void PushUpdateToSelected()
     {
-        if (string.IsNullOrEmpty(clientVersion)) return false;
-        if (!Version.TryParse(clientVersion, out var cv)) return false;
-        if (!Version.TryParse(Proto.AppVersion, out var sv)) return false;
-        return cv < sv;
-    }
-
-    static bool IsLinuxClient(RemoteClient cl)
-    {
-        if (cl.ClientVersion.Contains("linux", StringComparison.OrdinalIgnoreCase))
-            return true;
-        return cl.LastReport?.OsVersion.Contains("linux", StringComparison.OrdinalIgnoreCase) == true;
-    }
-
-    static bool TryParseMacBytes(string text, out byte[] bytes)
-    {
-        bytes = Array.Empty<byte>();
-        var match = Regex.Match(text, @"(?i)([0-9a-f]{2}[:-]){5}[0-9a-f]{2}|[0-9a-f]{12}");
-        if (!match.Success) return false;
-
-        string hex = Regex.Replace(match.Value, "[^0-9A-Fa-f]", "");
-        if (hex.Length != 12) return false;
-        var parsed = new byte[6];
-        for (int i = 0; i < parsed.Length; i++)
+        var winClients = _engine.Clients.Where(kv => _selectedMachines.Contains(kv.Key) && !ServerEngine.IsLinuxClient(kv.Value)).Select(kv => kv.Value).ToList();
+        var linuxClients = _engine.Clients.Where(kv => _selectedMachines.Contains(kv.Key) && ServerEngine.IsLinuxClient(kv.Value)).Select(kv => kv.Value).ToList();
+        if (winClients.Count == 0 && linuxClients.Count == 0) return;
+        BeginInvoke(() =>
         {
-            if (!byte.TryParse(hex.Substring(i * 2, 2), System.Globalization.NumberStyles.HexNumber, null, out parsed[i]))
-                return false;
-        }
-        bytes = parsed;
-        return true;
+            string filter = winClients.Count > 0 && linuxClients.Count > 0
+                ? "Client files|*.exe;*.py|Executables|*.exe|Python scripts|*.py"
+                : winClients.Count > 0 ? "Executable|*.exe" : "Python script|*.py";
+            using var ofd = new OpenFileDialog { Title = $"Select file to push to {_selectedMachines.Count} client(s)", Filter = filter };
+            if (ofd.ShowDialog(this) != DialogResult.OK) return;
+            string path = ofd.FileName;
+            bool isPy = path.EndsWith(".py", StringComparison.OrdinalIgnoreCase);
+            var targets = isPy ? linuxClients : winClients;
+            if (targets.Count == 0) { _engine.Log.Add("No matching clients for selected file type", Th.Org); return; }
+            _engine.Log.Add($"Pushing update → {targets.Count} client(s)…", Th.Org);
+            _engine.PushUpdateMulti(targets, path);
+        });
     }
 
     // ── Painting ──
@@ -872,22 +322,25 @@ sealed class ServerForm : BorderlessForm
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
         _btns.Clear();
 
-        // Purge stale
-        foreach (var k in _cls.Where(kv => (DateTime.UtcNow - kv.Value.LastSeen).TotalSeconds > 120).Select(kv => kv.Key).ToList())
-            if (_cls.TryRemove(k, out var c)) c.Dispose();
+        // Purge stale clients
+        foreach (var k in _engine.Clients.Where(kv => (DateTime.UtcNow - kv.Value.LastSeen).TotalSeconds > 120).Select(kv => kv.Key).ToList())
+        { if (_engine.Clients.TryRemove(k, out var c)) c.Dispose(); _selectedMachines.Remove(k); }
 
+        _sy = Math.Clamp(_sy, 0, Math.Max(0, _contentH - _ct.Height + 20));
         int x = 10, y = 6 - _sy, w = _ct.Width - 20;
 
         DrawStatusBar(g, x, y, w);
         y += 76;
+        bool anyOutdated = _engine.Clients.Any(kv => ServerEngine.ClientNeedsUpdate(kv.Value.ClientVersion));
+        if (_selectedMachines.Count > 0 || anyOutdated) { DrawSelectionBar(g, x, y, w, anyOutdated); y += 42; }
 
-        var pendingClients = _pendingApprovals.Values.OrderBy(p => p.MachineName).ToList();
-        if (_cls.IsEmpty && pendingClients.Count == 0)
+        var pendingClients = _engine.PendingApprovals.Values.OrderBy(p => p.MachineName).ToList();
+        if (_engine.Clients.IsEmpty && pendingClients.Count == 0)
         {
             using var f = new Font("Segoe UI", 10f);
             using var b = new SolidBrush(Th.Dim);
             using var sf = new StringFormat { Alignment = StringAlignment.Center };
-            g.DrawString($"No clients.\nShare token: {_tok}", f, b, new RectangleF(x, y + 20, w, 80), sf);
+            g.DrawString($"No clients.\nShare token: {_engine.Token}", f, b, new RectangleF(x, y + 20, w, 80), sf);
             y += 80;
         }
         if (pendingClients.Count > 0)
@@ -899,9 +352,9 @@ sealed class ServerForm : BorderlessForm
             { DrawPendingApproval(g, x, y, w, pending); y += 44; }
         }
 
-        if (!_cls.IsEmpty)
+        if (!_engine.Clients.IsEmpty)
         {
-            foreach (var kv in _cls.OrderBy(k => k.Key))
+            foreach (var kv in _engine.Clients.OrderBy(k => k.Key))
             {
                 var cl = kv.Value;
                 if (cl.LastReport == null)
@@ -916,7 +369,7 @@ sealed class ServerForm : BorderlessForm
             }
         }
 
-        var offlineClients = _store.All().Where(a => !a.Revoked && !_cls.ContainsKey(a.Name)).OrderBy(a => a.Name).ToList();
+        var offlineClients = _engine.Store.All().Where(a => !a.Revoked && !_engine.Clients.ContainsKey(a.Name)).OrderBy(a => a.Name).ToList();
         if (offlineClients.Count > 0)
         {
             using (var hf = new Font("Segoe UI", 7f)) using (var hb = new SolidBrush(Th.Dim))
@@ -926,6 +379,7 @@ sealed class ServerForm : BorderlessForm
             { DrawOffline(g, x, y, w, ac); y += 52; }
         }
 
+        _contentH = y + _sy - 6;
         int logY = Math.Max(y + 8, _ct.Height - 110);
         DrawLog(g, 10, logY, w, _ct.Height - logY - 4);
     }
@@ -933,23 +387,23 @@ sealed class ServerForm : BorderlessForm
     void DrawStatusBar(Graphics g, int x, int y, int w)
     {
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, 70, 8); g.FillPath(bg, p); }
-        Color accentClr = _nb ? Th.Org : Th.Grn;
+        Color accentClr = _engine.BroadcastDisabled ? Th.Org : Th.Grn;
         using (var ac = new SolidBrush(Color.FromArgb(180, accentClr)))
             g.FillRectangle(ac, x + 1, y + 8, 4, 54);
 
         using (var d = new SolidBrush(accentClr)) g.FillEllipse(d, x + 14, y + 11, 9, 9);
         using (var sf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var sb = new SolidBrush(Th.Brt))
-            g.DrawString(_nb ? "DIRECT ONLY" : "BROADCASTING", sf, sb, x + 30, y + 9);
+            g.DrawString(_engine.BroadcastDisabled ? "DIRECT ONLY" : "BROADCASTING", sf, sb, x + 30, y + 9);
         using (var df = new Font("Segoe UI", 7.5f))
         using (var db = new SolidBrush(Th.Dim))
-            g.DrawString($"TCP :{Proto.DataPort}" + (_nb ? "" : $" | UDP :{Proto.DiscPort}"), df, db, x + 155, y + 11);
+            g.DrawString($"TCP :{Proto.DataPort}" + (_engine.BroadcastDisabled ? "" : $" | UDP :{Proto.DiscPort}"), df, db, x + 155, y + 11);
 
-        bool tokExpired = (DateTime.UtcNow - _tokAt).TotalMinutes >= 10;
-        int minsLeft = Math.Max(0, 10 - (int)(DateTime.UtcNow - _tokAt).TotalMinutes);
+        bool tokExpired = (DateTime.UtcNow - _engine.TokenIssuedAt).TotalMinutes >= 10;
+        int minsLeft = Math.Max(0, 10 - (int)(DateTime.UtcNow - _engine.TokenIssuedAt).TotalMinutes);
         using (var tf = new Font("Consolas", 8.5f, FontStyle.Bold))
         using (var tb = new SolidBrush(tokExpired ? Th.Red : Th.Yel))
-            g.DrawString($"Token: {_tok}", tf, tb, x + 14, y + 32);
+            g.DrawString($"Token: {_engine.Token}", tf, tb, x + 14, y + 32);
         using (var xf = new Font("Segoe UI", 6.5f))
         using (var xb = new SolidBrush(tokExpired ? Th.Red : Th.Dim))
             g.DrawString(tokExpired ? "⚠ EXPIRED — click New" : $"expires in {minsLeft}m", xf, xb, x + 14, y + 50);
@@ -959,15 +413,15 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, bx, y + 23, 70, 24, "🔄 New", Th.Org, "", "newtoken"); bx += 78;
         DrawBtn(g, bx, y + 23, 84, 24, "👥 Clients", Th.Cyan, "", "showapproved"); bx += 92;
         DrawBtn(g, bx, y + 23, 68, 24, Th.IsDark ? "☀ Light" : "🌙 Dark", Th.Dim, "", "theme"); bx += 76;
-        DrawBtn(g, bx, y + 23, 80, 24, "🔔 Alerts", _alertSvc.ThresholdsConfigured ? Th.Org : Th.Dim, "", "alerts"); bx += 88;
-        var update = _availableUpdate;
+        DrawBtn(g, bx, y + 23, 80, 24, "🔔 Alerts", _engine.Alerts.ThresholdsConfigured ? Th.Org : Th.Dim, "", "alerts"); bx += 88;
+        var update = _engine.AvailableUpdate;
         if (update != null)
             DrawBtn(g, bx, y + 23, 110, 24, $"↑ Update v{update.Version}", Th.Cyan, "", "openrelease");
 
         using (var cf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
-        using (var ccb = new SolidBrush(_cc > 0 ? Th.Grn : Th.Dim))
+        using (var ccb = new SolidBrush(_engine.ConnectionCount > 0 ? Th.Grn : Th.Dim))
         {
-            string ct = $"{_cc} conn · {_cls.Count} auth";
+            string ct = $"{_engine.ConnectionCount} conn · {_engine.Clients.Count} auth";
             var sz = g.MeasureString(ct, cf);
             g.DrawString(ct, cf, ccb, x + w - sz.Width - 12, y + 9);
         }
@@ -982,7 +436,7 @@ sealed class ServerForm : BorderlessForm
             g.FillRectangle(ac, x + 1, y + 6, 4, h - 12);
         using (var dot = new SolidBrush(Th.Yel)) g.FillEllipse(dot, x + 12, y + 14, 8, 8);
 
-        var alias = _store.GetAlias(cl.MachineName);
+        var alias = _engine.Store.GetAlias(cl.MachineName);
         bool hasAlias = !string.IsNullOrEmpty(alias);
         string displayName = hasAlias ? alias! : cl.MachineName;
         using var nf = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
@@ -1013,10 +467,16 @@ sealed class ServerForm : BorderlessForm
         using (var ac = new SolidBrush(Color.FromArgb(200, brd)))
             g.FillRectangle(ac, x + 1, y + 6, 4, h - 12);
 
+        bool sel = _selectedMachines.Contains(r.MachineName);
+        var cbR = new Rectangle(x + w - 20, y + 15, 12, 12);
+        _btns.Add((cbR, r.MachineName, "select"));
         _btns.Add((new Rectangle(x, y, w, h), r.MachineName, "toggle"));
+        using (var cbBg = new SolidBrush(sel ? Th.Grn : Color.FromArgb(30, Th.Brd))) g.FillRectangle(cbBg, cbR);
+        using (var cbPen = new Pen(sel ? Th.Grn : Th.Dim, 1f)) g.DrawRectangle(cbPen, cbR);
+        if (sel) { using var ck = new Pen(Color.Black, 1.5f); g.DrawLine(ck, cbR.X + 2, cbR.Y + 6, cbR.X + 4, cbR.Y + 9); g.DrawLine(ck, cbR.X + 4, cbR.Y + 9, cbR.X + 9, cbR.Y + 3); }
 
         using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 17, 8, 8);
-        var alias = _store.GetAlias(r.MachineName);
+        var alias = _engine.Store.GetAlias(r.MachineName);
         bool hasAlias = !string.IsNullOrEmpty(alias);
         string displayName = hasAlias ? alias! : r.MachineName;
         using var nf = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
@@ -1029,7 +489,17 @@ sealed class ServerForm : BorderlessForm
             g.DrawString(r.MachineName, hnf, hnb, x + 26, y + 25);
         }
         var nsz = g.MeasureString(displayName, nf);
+        bool outdated = ServerEngine.ClientNeedsUpdate(cl.ClientVersion);
         int mx = x + 30 + (int)nsz.Width + 14;
+        if (outdated)
+        {
+            string badge = $"⚠ v{cl.ClientVersion}";
+            using var bf = new Font("Segoe UI", 7f);
+            using var bb = new SolidBrush(Th.Org);
+            g.DrawString(badge, bf, bb, mx - 4, hasAlias ? y + 9 : y + 14);
+            var bsz = g.MeasureString(badge, bf);
+            mx += (int)bsz.Width + 4;
+        }
         using var mf = new Font("Segoe UI", 8f);
 
         if (r.TotalLoadPercent.HasValue)
@@ -1051,7 +521,7 @@ sealed class ServerForm : BorderlessForm
         using (var chipF = new Font("Segoe UI", 6.5f, FontStyle.Bold))
         {
             var csz = g.MeasureString(chipTxt, chipF);
-            int cx = x + w - (int)csz.Width - 36, cy = y + 14;
+            int cx = x + w - (int)csz.Width - 54, cy = y + 14;
             using (var chipBg = new SolidBrush(Color.FromArgb(35, chipC)))
             using (var chipPath = Th.RR(cx - 4, cy - 2, (int)csz.Width + 8, (int)csz.Height + 4, 4))
             { g.FillPath(chipBg, chipPath); using var chipPen = new Pen(Color.FromArgb(60, chipC), 1f); g.DrawPath(chipPen, chipPath); }
@@ -1061,7 +531,7 @@ sealed class ServerForm : BorderlessForm
 
         using var ef = new Font("Segoe UI", 10f);
         using var eb = new SolidBrush(Th.Dim);
-        g.DrawString("▾", ef, eb, x + w - 22, y + 12);
+        g.DrawString("▾", ef, eb, x + w - 38, y + 12);
 
         return h;
     }
@@ -1069,7 +539,7 @@ sealed class ServerForm : BorderlessForm
     int DrawExpanded(Graphics g, int x, int y, int w, RemoteClient cl, bool stale)
     {
         var r = cl.LastReport!;
-        bool linux = IsLinuxClient(cl);
+        bool linux = ServerEngine.IsLinuxClient(cl);
         int hdrH = 100, h = hdrH + 4 + 26 + 4 + 26 + 4;
         Color brd = stale ? Th.Org : Th.Grn;
 
@@ -1078,12 +548,18 @@ sealed class ServerForm : BorderlessForm
         using (var ac = new SolidBrush(Color.FromArgb(200, brd)))
             g.FillRectangle(ac, x + 1, y + 8, 4, h - 16);
 
+        bool selExp = _selectedMachines.Contains(r.MachineName);
+        var cbRExp = new Rectangle(x + w - 20, y + 9, 14, 14);
+        _btns.Add((cbRExp, r.MachineName, "select"));
         _btns.Add((new Rectangle(x, y, w, 32), r.MachineName, "toggle"));
+        using (var cbBg2 = new SolidBrush(selExp ? Th.Grn : Color.FromArgb(30, Th.Brd))) g.FillRectangle(cbBg2, cbRExp);
+        using (var cbPen2 = new Pen(selExp ? Th.Grn : Th.Dim, 1f)) g.DrawRectangle(cbPen2, cbRExp);
+        if (selExp) { using var ck2 = new Pen(Color.Black, 1.5f); g.DrawLine(ck2, cbRExp.X + 2, cbRExp.Y + 7, cbRExp.X + 5, cbRExp.Y + 11); g.DrawLine(ck2, cbRExp.X + 5, cbRExp.Y + 11, cbRExp.X + 11, cbRExp.Y + 4); }
 
         using (var ef = new Font("Segoe UI", 10f)) using (var eb = new SolidBrush(Th.Dim))
-            g.DrawString("▴", ef, eb, x + w - 22, y + 8);
+            g.DrawString("▴", ef, eb, x + w - 38, y + 8);
         using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 12, 9, 9);
-        var alias2 = _store.GetAlias(r.MachineName);
+        var alias2 = _engine.Store.GetAlias(r.MachineName);
         bool hasAlias2 = !string.IsNullOrEmpty(alias2);
         string displayName2 = hasAlias2 ? alias2! : r.MachineName;
         using var expNf = new Font("Segoe UI Semibold", 11f, FontStyle.Bold);
@@ -1099,7 +575,7 @@ sealed class ServerForm : BorderlessForm
         }
         if (!string.IsNullOrEmpty(cl.ClientVersion))
         {
-            bool outdated = ClientNeedsUpdate(cl.ClientVersion);
+            bool outdated = ServerEngine.ClientNeedsUpdate(cl.ClientVersion);
             using var vf = new Font("Segoe UI", 7f);
             using var vb = new SolidBrush(outdated ? Th.Org : Th.Dim);
             g.DrawString($"v{cl.ClientVersion}" + (outdated ? " ⚠" : ""), vf, vb, expX, y + 11);
@@ -1161,7 +637,7 @@ sealed class ServerForm : BorderlessForm
         {
             DrawBtn(g, bx, by, 68, 26, "RDP", Th.Cyan, r.MachineName, "rdp"); bx += 76;
         }
-        if (!linux && ClientNeedsUpdate(cl.ClientVersion))
+        if (!linux && ServerEngine.ClientNeedsUpdate(cl.ClientVersion))
             DrawBtn(g, bx, by, 80, 26, "Update", Th.Org, r.MachineName, "update");
 
         // Row 2 - info tools (left) + danger zone (right-aligned)
@@ -1175,7 +651,7 @@ sealed class ServerForm : BorderlessForm
         }
         DrawBtn(g, bx2, by2, 68, 26, "Msg", Th.Dim, r.MachineName, "msg");
 
-        bool isPaw = _store.IsPaw(r.MachineName);
+        bool isPaw = _engine.Store.IsPaw(r.MachineName);
         int dx = x + w - 14;
         dx -= 74; DrawDangerBtn(g, dx, by2, 72, 26, "Forget", Th.Dim, r.MachineName, "forget");
         dx -= 68; DrawDangerBtn(g, dx, by2, 66, 26, "Off", Th.Red, r.MachineName, "shutdown");
@@ -1290,7 +766,7 @@ sealed class ServerForm : BorderlessForm
             g.DrawString("LOG", hf, hb, x + 8, y + 3);
 
         int lh = 13, ml = Math.Max(1, (h - 18) / lh);
-        var entries = _log.Recent(ml);
+        var entries = _engine.Log.Recent(ml);
         using var ef = new Font("Consolas", 7f);
         int ey = y + 18;
         foreach (var (t, m, c) in entries)
@@ -1304,15 +780,3 @@ sealed class ServerForm : BorderlessForm
         }
     }
 }
-
-sealed class PendingClientApproval
-{
-    public required string MachineName { get; init; }
-    public required string Ip { get; init; }
-    public required string Remote { get; init; }
-    public required RemoteClient Client { get; init; }
-    public DateTime RequestedAt { get; init; } = DateTime.UtcNow;
-    public string ClientVersion { get; init; } = "";
-}
-
-sealed record PendingPowerAction(string Label, DateTime RequestedAt);

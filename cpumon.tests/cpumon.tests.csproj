@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\cpumon.shared\cpumon.shared.csproj" />
+    <ProjectReference Include="..\cpumon.server\cpumon.server.csproj" />
   </ItemGroup>
 </Project>
 

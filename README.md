@@ -208,7 +208,8 @@ cpumon/
 │   ├── ui.cs              — RdpViewerDialog, TerminalDialog, FileBrowserDialog, Th (theme), BorderlessForm
 │   └── cpumon.shared.csproj
 ├── cpumon.server/
-│   ├── serverform.cs      — server UI, ListenLoop, HandleClient, UpdateModes, PAW relay, update notifier
+│   ├── serverengine.cs    — ServerEngine: server-side state, protocol loops, PAW relay, approval flow (no WinForms dependency)
+│   ├── serverform.cs      — server UI: drawing, input, dialog ownership; subscribes to engine events
 │   ├── serverdialogs.cs   — ApprovedClientsDialog, ProcDialog, SysInfoDialog, ServicesDialog, EventViewerDialog
 │   ├── email.cs           — AlertConfig, AlertService, AlertConfigDialog (SMTP threshold notifications)
 │   ├── updatechecker.cs   — UpdateChecker + ReleaseInfo (GitHub releases polling)
@@ -222,7 +223,7 @@ cpumon/
 │   ├── program.cs
 │   └── cpumon.client.csproj
 ├── cpumon.tests/
-│   ├── Program.cs         — 8 smoke tests run automatically by build.ps1 before publish
+│   ├── Program.cs         — 12 smoke tests run automatically by build.ps1 before publish
 │   └── cpumon.tests.csproj
 ├── cpumon.linux/
 │   ├── cpumon.py          — Python client (discovery, TLS/TOFU, auth, terminal, file browser, systemctl)

@@ -40,8 +40,16 @@ cpumon.client/
 
 cpumon.server/
   program.cs       — entry point, single-instance mutex, launches ServerForm
-  serverform.cs    — ServerForm, ListenLoop, HandleClient, UpdateModes, PAW relay,
-                     ApprovePending/RejectPending, UpdateCheckLoop, button actions
+  serverengine.cs  — ServerEngine (state + protocol loops): _cls, _pendingApprovals,
+                     _store, _alertSvc, _updater, ListenLoop, HandleClient, BeaconLoop,
+                     UpdateCheckLoop, UpdateModes, PAW relay, Approve/RejectPending,
+                     Request{Restart,Shutdown,SysInfo,Processes,Services,Events,Screenshot},
+                     TogglePaw, ForgetClient, WakeOffline, PushUpdate(Multi);
+                     events: ProcessListReceived, SysInfoReceived, ServicesReceived,
+                     EventsReceived, ScreenshotReceived, UpdateAvailable.
+                     Also defines PendingClientApproval and PendingPowerAction.
+  serverform.cs    — ServerForm (presentation only): subscribes to engine events,
+                     owns painting, OnClick, scroll, _btns, _selectedMachines, _procDialogs.
   serverdialogs.cs — ApprovedClientsDialog, ProcDialog (live filter), SysInfoDialog,
                      ServicesDialog, EventViewerDialog
   email.cs         — EmailSecurity, AlertConfig, AlertConfigStore, AlertService,
@@ -50,11 +58,13 @@ cpumon.server/
                      and ReleaseInfo record carrying tag, version, download URL, asset size
 
 cpumon.tests/
-  Program.cs — 8 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
+  Program.cs — 12 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
               TestReceiveChunkCompletesAndValidatesOffsets, TestReceiveChunkReplacesDuplicateTransfer,
               TestLineLengthLimitedStream, TestUpdateIntegrity,
               TestSendPacerWakesOnModeChange, TestSendPacerWakesOnDemand,
-              TestApprovedClientAliasPersists, TestApprovedClientForgetPersists
+              TestApprovedClientAliasPersists, TestApprovedClientForgetPersists,
+              TestClientNeedsUpdate, TestIsLinuxClient,
+              TestServerEngineRegenerateToken, TestServerEnginePendingApprovalMissing
 
 cpumon.linux/
   cpumon.py      — Python 3.8+ client: discovery, TLS/TOFU, auth, report/keepalive,
@@ -107,6 +117,8 @@ cpumon.linux/
 
 **Server-side approval flow:** when a client sends `auth` with `ApprovalRequested = true` (no token, no stored key), the server inserts it into `_pendingApprovals` (`ConcurrentDictionary<string, PendingClientApproval>`) and renders an "AWAITING APPROVAL" card. `ApprovePending` mints a 32-byte key, persists via `_store.Approve`, and sends `auth_response`. Pending approvals expire after `PendingApprovalTimeoutMinutes` (15) so abandoned requests don't pile up.
 
+**Server engine/form split:** `ServerEngine` owns all server-side state and protocol loops; `ServerForm` is a thin presentation layer that subscribes to engine events and forwards UI actions to engine methods. The engine has no WinForms dependency, which makes it reusable for a future headless service mode, HTTP API, or test harness. `UpdateModes` now runs on a `System.Threading.Timer` (pool thread) rather than the WinForms `Timer`; all mutations it performs are already thread-safe (`ConcurrentDictionary`, `RemoteClient.Send` under `_tl`, `CLog` internal lock).
+
 **Disconnect cause tracking:** `_pendingPowerActions` (`Dictionary<string, PendingPowerAction>`) records that a `restart` or `shutdown` command was just sent. `HandleClient`'s finally block reads this within 5 minutes of disconnect and logs `"Disc: machine — restarting ✓"` instead of a plain disconnect. Distinguish restart vs shutdown via the record's `Label` field — do not collapse to a single bool.
 
 **Status bar update button:** `_availableUpdate != null` triggers a cyan "↑ Update vX.Y.Z" button in `DrawStatusBar`. The action `openrelease` opens `_availableUpdate.ReleaseUrl` via `Process.Start` with `UseShellExecute = true`.
@@ -125,8 +137,8 @@ cpumon.linux/
 - State file: `$STATE_DIRECTORY/client_auth.json` (systemd sets this to `/var/lib/cpumon`) or `~/.cpumon/client_auth.json`. Plaintext JSON, chmod 600.
 - Auth key stored as-received from server (no key derivation on the Linux side).
 - Terminal: `pty.openpty()` for a real PTY (bash/sh by default).
-- Does NOT support: RDP capture, PAW relay, server-pushed `update_push`, Windows event viewer.
-- Updates: handled by `install.sh update <release.zip>` — replaces `/opt/cpumon` and restarts the service while preserving `/etc/default/cpumon` and `/var/lib/cpumon/client_auth.json`.
+- Does NOT support: RDP capture, PAW relay, Windows event viewer.
+- Updates: `update_push` (server-initiated) and `install.sh update <release.zip>` (self-managed) are both supported.
 - Systemd unit runs as root.
 - `install.sh` handles Debian 12+ externally-managed pip by falling back to `apt install python3-psutil`.
 - Linux replies for `sysinfo`, `processlist`, and `servicelist` include `cmdId` so PAW dashboards can route the response.

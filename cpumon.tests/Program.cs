@@ -19,6 +19,10 @@ internal static class Program
             TestSendPacerWakesOnDemand();
             TestApprovedClientAliasPersists();
             TestApprovedClientForgetPersists();
+            TestClientNeedsUpdate();
+            TestServerEngineInitialState();
+            TestServerEngineRegenerateToken();
+            TestServerEnginePendingApprovalMissing();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -178,6 +182,47 @@ internal static class Program
         var reloaded = new ApprovedClientStore(path);
         Assert(!reloaded.IsOk("DESKTOP-A", "keyA"), "forgotten client should be persisted as removed");
         Assert(reloaded.IsOk("DESKTOP-B", "keyB"), "non-forgotten client should still be approved after reload");
+    }
+
+    static void TestClientNeedsUpdate()
+    {
+        Assert(!ServerEngine.ClientNeedsUpdate(""), "empty version should not flag as outdated");
+        Assert(!ServerEngine.ClientNeedsUpdate("not-a-version"), "unparseable version should not flag as outdated");
+        Assert(!ServerEngine.ClientNeedsUpdate(Proto.AppVersion), "matching server version should not flag as outdated");
+        Assert(ServerEngine.ClientNeedsUpdate("0.0.1"), "older version should flag as outdated");
+        Assert(!ServerEngine.ClientNeedsUpdate("999.0.0"), "newer version should not flag as outdated");
+    }
+
+    static void TestServerEngineInitialState()
+    {
+        using var engine = new ServerEngine(noBroadcast: true);
+        Assert(engine.BroadcastDisabled, "BroadcastDisabled flag should reflect ctor argument");
+        Assert(!string.IsNullOrEmpty(engine.Token), "engine should generate a token at construction");
+        Assert(engine.ConnectionCount == 0, "connection count should start at zero");
+        Assert(engine.Clients.IsEmpty, "clients dictionary should start empty");
+        Assert(engine.PendingApprovals.IsEmpty, "pending approvals should start empty");
+        Assert(engine.AvailableUpdate == null, "no update should be available before the checker runs");
+    }
+
+    static void TestServerEngineRegenerateToken()
+    {
+        using var engine = new ServerEngine(noBroadcast: true);
+        string original = engine.Token;
+        DateTime originalAt = engine.TokenIssuedAt;
+        Thread.Sleep(20);
+        engine.RegenerateToken();
+        Assert(engine.Token != original, "RegenerateToken should produce a different token");
+        Assert(engine.TokenIssuedAt >= originalAt, "RegenerateToken should refresh the issued-at timestamp");
+    }
+
+    static void TestServerEnginePendingApprovalMissing()
+    {
+        using var engine = new ServerEngine(noBroadcast: true);
+        Assert(!engine.ApprovePending("no-such-machine"), "approving unknown machine should return false");
+        Assert(!engine.RejectPending("no-such-machine"), "rejecting unknown machine should return false");
+        Assert(!engine.RequestRestart("no-such-machine"), "restart on unknown machine should return false");
+        Assert(!engine.RequestShutdown("no-such-machine"), "shutdown on unknown machine should return false");
+        Assert(!engine.WakeOffline("no-such-machine"), "wake on machine without MAC should return false");
     }
 
     static void Assert(bool condition, string message)
