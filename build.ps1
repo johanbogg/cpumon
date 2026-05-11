@@ -46,6 +46,19 @@ function Run-SmokeTests([string]$proj) {
     Write-Ok
 }
 
+function Copy-LinuxClient([string]$src, [string]$out, [string]$ver) {
+    if (Test-Path $out) { Remove-Item -LiteralPath $out -Recurse -Force }
+    New-Item -ItemType Directory -Path $out | Out-Null
+    Copy-Item -Path (Join-Path $src '*') -Destination $out -Recurse -Force
+
+    $py = Join-Path $out 'cpumon.py'
+    if (Test-Path $py) {
+        $content = Get-Content -LiteralPath $py -Raw
+        $content = $content -replace '(?m)^VERSION\s*=\s*"[^"]*"', "VERSION     = `"$ver-linux`""
+        Set-Content -LiteralPath $py -Value $content -NoNewline -Encoding UTF8
+    }
+}
+
 Write-Host ''
 Write-Host '  +------------------------------+' -ForegroundColor DarkCyan
 Write-Host '  |      CpuMon  Build           |' -ForegroundColor Cyan
@@ -92,7 +105,9 @@ if ($ver) {
     }
     $linuxSrc = Join-Path $PSScriptRoot 'cpumon.linux'
     if (Test-Path $linuxSrc) {
-        Compress-Archive -Path (Join-Path $linuxSrc '*') -DestinationPath (Join-Path $OutDir "cpumon-linux-$ver.zip") -Force
+        $linuxOut = Join-Path $OutDir 'linux'
+        Copy-LinuxClient $linuxSrc $linuxOut $ver
+        Compress-Archive -Path (Join-Path $linuxOut '*') -DestinationPath (Join-Path $OutDir "cpumon-linux-$ver.zip") -Force
     }
     Write-Ok
 }
