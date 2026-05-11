@@ -354,8 +354,9 @@ class Client:
         self._authenticated = False
         self._running       = True
 
-        self._terminals: dict[str, TerminalSession] = {}
-        self._uploads:   dict[str, _Upload]         = {}
+        self._terminals:  dict[str, TerminalSession] = {}
+        self._uploads:    dict[str, _Upload]         = {}
+        self._update_fh:  object                     = None  # open file handle during update_push
 
         stored_tok, stored_key, stored_sid = load_state()
         self._tok = token or stored_tok
@@ -647,6 +648,11 @@ class Client:
             except Exception as e:
                 self._res(cid, False, f"Rename error: {e}")
 
+        elif c == "update_push":
+            chunk = cmd.get("updateChunk")
+            if chunk:
+                self._handle_update_chunk(chunk)
+
     # ── Helpers for file/process ops ───────────────────────────────────────
 
     def _send_processes(self, cmd_id=None):
@@ -706,6 +712,71 @@ class Client:
             if tid in self._uploads:
                 self._uploads.pop(tid).close()
             return f"Upload error: {e}"
+
+    def _handle_update_chunk(self, chunk: dict):
+        script_path = os.path.realpath(__file__)
+        tmp_path    = script_path + ".tmp"
+        offset      = chunk.get("offset", 0)
+        data        = chunk.get("data", "")
+        last        = chunk.get("isLast", False)
+        h           = chunk.get("hash")
+        try:
+            if offset == 0:
+                if self._update_fh:
+                    self._update_fh.close()
+                    self._update_fh = None
+                self._update_fh = open(tmp_path, "wb")
+            if self._update_fh is None:
+                return
+            if self._update_fh.tell() != offset:
+                expected = self._update_fh.tell()
+                self._update_fh.close()
+                self._update_fh = None
+                try: os.unlink(tmp_path)
+                except OSError: pass
+                print(f"Update offset mismatch: expected={expected} got={offset}", flush=True)
+                return
+            if data:
+                self._update_fh.write(base64.b64decode(data))
+            if last:
+                self._update_fh.flush()
+                self._update_fh.close()
+                self._update_fh = None
+                if not h:
+                    try: os.unlink(tmp_path)
+                    except OSError: pass
+                    print("Update refused: no hash supplied", flush=True)
+                    return
+                with open(tmp_path, "rb") as f:
+                    actual = base64.b64encode(hashlib.sha256(f.read()).digest()).decode()
+                if actual != h:
+                    try: os.unlink(tmp_path)
+                    except OSError: pass
+                    print(f"Update hash mismatch: expected={h} got={actual}", flush=True)
+                    return
+                print("Update verified — applying", flush=True)
+                self._apply_update(script_path, tmp_path)
+        except Exception as e:
+            print(f"Update chunk error: {e}", flush=True)
+            if self._update_fh:
+                try: self._update_fh.close()
+                except Exception: pass
+                self._update_fh = None
+            try: os.unlink(tmp_path)
+            except OSError: pass
+
+    def _apply_update(self, script_path: str, tmp_path: str):
+        os.replace(tmp_path, script_path)
+        os.chmod(script_path, 0o755)
+        try:
+            subprocess.Popen(
+                ["systemctl", "restart", "cpumon"],
+                start_new_session=True,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+        self._running = False
 
     def _handle_auth_rejected(self, reason: str):
         print(f"{reason} - clearing stored credentials", flush=True)
@@ -792,6 +863,10 @@ class Client:
                 for t in list(self._terminals.values()):
                     t.dispose()
                 self._terminals.clear()
+                if self._update_fh:
+                    try: self._update_fh.close()
+                    except Exception: pass
+                    self._update_fh = None
 
             if not self._running:
                 break

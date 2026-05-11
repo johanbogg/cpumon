@@ -198,7 +198,7 @@ sealed class AgentContext : ApplicationContext
         lock (_pipeLock)
         {
             if (!_connected || _pipeWriter == null) return;
-            try { _pipeWriter.WriteLine(JsonSerializer.Serialize(msg)); _pipeWriter.Flush(); }
+            try { _pipeWriter.WriteLine(JsonSerializer.Serialize(msg, Proto.JsonOpts)); _pipeWriter.Flush(); }
             catch (Exception ex) { LogSink.Debug("Agent.Paw", "Failed to send paw_command to service", ex); }
         }
     }
@@ -226,7 +226,7 @@ sealed class AgentContext : ApplicationContext
                 // Send hello for protocol sync
                 lock (_pipeLock)
                 {
-                    _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "hello" }));
+                    _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "hello" }, Proto.JsonOpts));
                     _pipeWriter?.Flush();
                 }
                 _connected = true;
@@ -304,7 +304,7 @@ sealed class AgentContext : ApplicationContext
                                     catch (Exception ex)
                                     {
                                         var err = new ClientMessage { Type = "cmdresult", CmdId = msg.CmdId, Success = false, Message = $"Terminal: {ex.Message}" };
-                                        lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(err)); _pipeWriter?.Flush(); } catch (Exception writeEx) { LogSink.Warn("Agent.Pipe", "Failed to report terminal open error to service", writeEx); } }
+                                        lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(err, Proto.JsonOpts)); _pipeWriter?.Flush(); } catch (Exception writeEx) { LogSink.Warn("Agent.Pipe", "Failed to report terminal open error to service", writeEx); } }
                                     }
                                 }
                                 break;
@@ -323,7 +323,7 @@ sealed class AgentContext : ApplicationContext
                             {
                                 var shot = ScreenshotService.Capture(msg.CmdId, msg.Quality > 0 ? msg.Quality : 80, msg.Fps);
                                 var reply = new ClientMessage { Type = "screenshot", CmdId = msg.CmdId, Screenshot = shot };
-                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(reply)); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to send screenshot to service", ex); } }
+                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(reply, Proto.JsonOpts)); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to send screenshot to service", ex); } }
                                 break;
                             }
 
@@ -332,7 +332,7 @@ sealed class AgentContext : ApplicationContext
                                 ClientMessage r;
                                 try { var p = Process.Start(new ProcessStartInfo { FileName = msg.FileName ?? "", Arguments = msg.CmdInput ?? "", UseShellExecute = true }); r = new ClientMessage { Type = "cmdresult", CmdId = msg.CmdId, Success = true, Message = $"PID {p?.Id}" }; }
                                 catch (Exception ex) { r = new ClientMessage { Type = "cmdresult", CmdId = msg.CmdId, Success = false, Message = ex.Message }; }
-                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(r)); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to report process start result to service", ex); } }
+                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(r, Proto.JsonOpts)); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to report process start result to service", ex); } }
                                 break;
                             }
 
@@ -344,7 +344,7 @@ sealed class AgentContext : ApplicationContext
                                 break;
 
                             case "ping":
-                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "pong" })); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Debug("Agent.Pipe", "Failed to send pong to service", ex); } }
+                                lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "pong" }, Proto.JsonOpts)); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Debug("Agent.Pipe", "Failed to send pong to service", ex); } }
                                 break;
 
                             case "msg_popup":
@@ -370,7 +370,7 @@ sealed class AgentContext : ApplicationContext
                                          var result = dlg.ShowDialog();
                                          string reply = result == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text) ? txt.Text.Trim() : "";
                                          bool requestApproval = result == DialogResult.Retry;
-                                         lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "token_reply", Secret = reply, RequestApproval = requestApproval })); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to send auth dialog response to service", ex); } }
+                                         lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "token_reply", Secret = reply, RequestApproval = requestApproval }, Proto.JsonOpts)); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to send auth dialog response to service", ex); } }
                                     }
                                     finally { _authDialogOpen = false; }
                                 }, null);
@@ -565,8 +565,8 @@ sealed class DaemonContext : ApplicationContext
                 await EnsureConn(ep, ct);
                 bool authConfirmed; lock (_tl) { authConfirmed = _authConfirmed; }
                 if (!authConfirmed) { if (_approvalRequested) _ns = NetState.AuthPending; continue; }
-                if (_pacer.Mode == "keepalive") { var ka = new ClientMessage { Type = "keepalive", MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(ka)); _wr?.Flush(); } }
-                else { var snap = _mon.GetSnapshot(); var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu, _mon), MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m)); _wr?.Flush(); } }
+                if (_pacer.Mode == "keepalive") { var ka = new ClientMessage { Type = "keepalive", MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(ka, Proto.JsonOpts)); _wr?.Flush(); } }
+                else { var snap = _mon.GetSnapshot(); var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu, _mon), MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m, Proto.JsonOpts)); _wr?.Flush(); } }
                 _sc++; _ns = NetState.Connected;
             }
             catch (Exception ex) { LogSink.Warn("Daemon.SendLoop", "Send loop failed", ex); if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting; lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } _pacer.Wake(); CmdExec.DisposeAll(); try { await Task.Delay(1000, ct).ConfigureAwait(false); } catch { } }
@@ -691,7 +691,7 @@ sealed class DaemonContext : ApplicationContext
             throw;
         }
         var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, ApprovalRequested = _approvalRequested && string.IsNullOrEmpty(_ak), AppVersion = Proto.AppVersion };
-        lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }
+        lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth, Proto.JsonOpts)); _wr?.Flush(); }
     }
 
     void HandlePawClientList(List<string> online, List<string>? offline)
@@ -736,7 +736,7 @@ sealed class DaemonContext : ApplicationContext
         cmd.IssuedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         cmd.Nonce = Guid.NewGuid().ToString("N");
         var msg = new ClientMessage { Type = "paw_command", PawTarget = target, PawCmd = cmd };
-        lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(msg)); _wr?.Flush(); }
+        lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(msg, Proto.JsonOpts)); _wr?.Flush(); }
     }
 
     protected override void Dispose(bool d)

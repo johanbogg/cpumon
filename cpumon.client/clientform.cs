@@ -236,8 +236,8 @@ sealed class ClientForm : BorderlessForm
                 await EnsureConn(ep, ct);
                 bool authConfirmed; lock (_tl) { authConfirmed = _authConfirmed; }
                 if (!authConfirmed) { if (_approvalRequested) _ns = NetState.AuthPending; continue; }
-                if (_pacer.Mode == "keepalive") { var ka = new ClientMessage { Type = "keepalive", MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(ka)); _wr?.Flush(); } }
-                else { var snap = _mon.GetSnapshot(); var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu, _mon), MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m)); _wr?.Flush(); } }
+                if (_pacer.Mode == "keepalive") { var ka = new ClientMessage { Type = "keepalive", MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(ka, Proto.JsonOpts)); _wr?.Flush(); } }
+                else { var snap = _mon.GetSnapshot(); var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu, _mon), MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m, Proto.JsonOpts)); _wr?.Flush(); } }
                 _sc++; _ls = DateTime.Now; if (_ns != NetState.AuthFailed) _ns = NetState.Connected;
             }
             catch (Exception ex)
@@ -354,7 +354,7 @@ sealed class ClientForm : BorderlessForm
         cmd.IssuedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         cmd.Nonce = Guid.NewGuid().ToString("N");
         var msg = new ClientMessage { Type = "paw_command", PawTarget = target, PawCmd = cmd };
-        lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(msg)); _wr?.Flush(); }
+        lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(msg, Proto.JsonOpts)); _wr?.Flush(); }
     }
 
     void ShowReAuthDialog()
@@ -415,7 +415,7 @@ sealed class ClientForm : BorderlessForm
             throw;
         }
         var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, ApprovalRequested = _approvalRequested && string.IsNullOrEmpty(_ak), AppVersion = Proto.AppVersion };
-        lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }
+        lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth, Proto.JsonOpts)); _wr?.Flush(); }
         _log.Add("Auth sent", Th.Blu);
     }
 

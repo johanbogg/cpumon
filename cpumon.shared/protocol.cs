@@ -45,8 +45,9 @@ public static class Proto
     public const int RdpJpegQuality = 25;
     public const int RdpMouseMoveIntervalMs = 100;
     public const int RdpMouseMoveStaleMs = 1000;
-    public static string AppVersion =>
+    public static readonly string AppVersion =
         System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "1.0.0";
+    public static readonly JsonSerializerOptions JsonOpts = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
 }
 public static class AppState
 {
@@ -129,6 +130,9 @@ public static class LogSink
     static readonly object _lock = new();
     const long MaxBytes = 10L * 1024 * 1024;
     static string _minLevel = "";
+    static string _logPath = "";
+    static long _logBytes;
+    static readonly UTF8Encoding _utf8 = new(false);
     static readonly Dictionary<string, int> LevelRank = new(StringComparer.OrdinalIgnoreCase)
     {
         ["debug"] = 0,
@@ -161,24 +165,24 @@ public static class LogSink
         if (!Enabled(level)) return;
         try
         {
-            Directory.CreateDirectory(Dir);
-            string path = Path.Combine(Dir, $"cpumon-{DateTime.UtcNow:yyyy-MM-dd}.jsonl");
+            string dir = Dir;
+            string path = Path.Combine(dir, $"cpumon-{DateTime.UtcNow:yyyy-MM-dd}.jsonl");
             lock (_lock)
             {
-                if (File.Exists(path) && new FileInfo(path).Length > MaxBytes) return;
-                var entry = new Dictionary<string, object?>
+                if (path != _logPath)
                 {
-                    ["ts"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
-                    ["level"] = level,
-                    ["source"] = Clean(source),
-                    ["msg"] = Clean(message)
-                };
-                if (ex != null)
-                {
-                    entry["exType"] = ex.GetType().Name;
-                    entry["ex"] = Clean(ex.Message);
+                    Directory.CreateDirectory(dir);
+                    _logPath = path;
+                    _logBytes = File.Exists(path) ? new FileInfo(path).Length : 0;
                 }
-                File.AppendAllText(path, JsonSerializer.Serialize(entry) + Environment.NewLine, new UTF8Encoding(false));
+                if (_logBytes >= MaxBytes) return;
+                string ts = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+                string src = Clean(source), msg2 = Clean(message);
+                string line = ex == null
+                    ? $"{{\"ts\":\"{ts}\",\"level\":\"{level}\",\"source\":{JsonSerializer.Serialize(src)},\"msg\":{JsonSerializer.Serialize(msg2)}}}{Environment.NewLine}"
+                    : $"{{\"ts\":\"{ts}\",\"level\":\"{level}\",\"source\":{JsonSerializer.Serialize(src)},\"msg\":{JsonSerializer.Serialize(msg2)},\"exType\":{JsonSerializer.Serialize(ex.GetType().Name)},\"ex\":{JsonSerializer.Serialize(Clean(ex.Message))}}}{Environment.NewLine}";
+                File.AppendAllText(path, line, _utf8);
+                _logBytes += _utf8.GetByteCount(line);
             }
         }
         catch { }
@@ -282,6 +286,7 @@ public static class CertificateStore
 public sealed class ApprovedClientStore
 {
     readonly string _path; readonly Dictionary<string, ApprovedClient> _c = new(); readonly object _l = new();
+    static readonly JsonSerializerOptions _saveOpts = new() { WriteIndented = true };
     public ApprovedClientStore(string? path = null) { _path = path ?? AppPaths.DataFile("approved_clients.json"); Load(); }
     public bool IsOk(string n, string k) { lock (_l) { return _c.TryGetValue(n, out var c) && c.Key == k && !c.Revoked; } }
     public void Approve(string n, string k, string ip, string salt = "") { lock (_l) { _c[n] = new ApprovedClient { Name = n, Key = k, At = DateTime.UtcNow, Seen = DateTime.UtcNow, Ip = ip, Salt = salt }; Save(); } }
@@ -314,7 +319,7 @@ public sealed class ApprovedClientStore
         try
         {
             var list = _c.Values.Select(c => new ApprovedClient { Name = c.Name, Key = EncryptKey(c.Key), At = c.At, Seen = c.Seen, Ip = c.Ip, Revoked = c.Revoked, Paw = c.Paw, Mac = c.Mac, Alias = c.Alias, Salt = c.Salt }).ToList();
-            string json = JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true });
+            string json = JsonSerializer.Serialize(list, _saveOpts);
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
             string tmp = _path + ".tmp";
             File.WriteAllText(tmp, json);

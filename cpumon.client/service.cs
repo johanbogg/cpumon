@@ -214,7 +214,7 @@ sealed class CpuMonService : ServiceBase
                     {
                         await Task.Delay(10000, ct).ConfigureAwait(false);
                         if (!pipe.IsConnected) break;
-                        lock (_agentLock) { try { _agentWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "ping" })); _agentWriter?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.AgentPipe", "Failed to ping interactive agent", ex); break; } }
+                        lock (_agentLock) { try { _agentWriter?.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "ping" }, Proto.JsonOpts)); _agentWriter?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.AgentPipe", "Failed to ping interactive agent", ex); break; } }
                         await Task.Delay(15000, ct).ConfigureAwait(false);
                         if ((DateTime.UtcNow - new DateTime(Interlocked.Read(ref _agentLastPong))).TotalSeconds > 25)
                         { try { pipe.Dispose(); } catch { } break; }
@@ -395,7 +395,7 @@ sealed class CpuMonService : ServiceBase
         lock (_agentLock)
         {
             if (!_agentConnected || _agentWriter == null) return;
-            try { _agentWriter.WriteLine(JsonSerializer.Serialize(msg)); _agentWriter.Flush(); }
+            try { _agentWriter.WriteLine(JsonSerializer.Serialize(msg, Proto.JsonOpts)); _agentWriter.Flush(); }
             catch (Exception ex) { LogSink.Warn("Service.SendToAgent", "Failed to write to agent pipe", ex); }
         }
     }
@@ -426,7 +426,7 @@ sealed class CpuMonService : ServiceBase
             {
                 try
                 {
-                    _agentWriter.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "agent_exit" }));
+                    _agentWriter.WriteLine(JsonSerializer.Serialize(new AgentIpc.AgentMessage { Type = "agent_exit" }, Proto.JsonOpts));
                     _agentWriter.Flush();
                 }
                 catch (Exception ex) { LogSink.Debug("Service.AgentLaunch", "Failed to request interactive agent exit", ex); }
@@ -539,13 +539,13 @@ sealed class CpuMonService : ServiceBase
                 if (_pacer.Mode == "keepalive")
                 {
                     var ka = new ClientMessage { Type = "keepalive", MachineName = Environment.MachineName, AuthKey = _ak };
-                    lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(ka)); _wr?.Flush(); }
+                    lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(ka, Proto.JsonOpts)); _wr?.Flush(); }
                 }
                 else
                 {
                     var snap = _mon.GetSnapshot();
                     var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu, _mon), MachineName = Environment.MachineName, AuthKey = _ak };
-                    lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m)); _wr?.Flush(); }
+                    lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m, Proto.JsonOpts)); _wr?.Flush(); }
                 }
                 _sc++; _ns = NetState.Connected;
             }
@@ -623,20 +623,20 @@ sealed class CpuMonService : ServiceBase
                 else if (cmd.Cmd == "rdp_set_bandwidth" && cmd.RdpId != null && _activeRdpSessions.ContainsKey(cmd.RdpId)) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_set_bandwidth", RdpId = cmd.RdpId, Quality = cmd.RdpBandwidthKBps });
                 else if (cmd.Cmd == "terminal_open" && cmd.TermId != null)
                 {
-                    if (!_agentConnected) { var e = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = "Agent not connected" }; lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(e)); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.CmdLoop", "Failed to report unavailable agent for terminal open", ex); } } }
+                    if (!_agentConnected) { var e = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = "Agent not connected" }; lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(e, Proto.JsonOpts)); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.CmdLoop", "Failed to report unavailable agent for terminal open", ex); } } }
                     else SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_open", TermId = cmd.TermId, Shell = cmd.Shell });
                 }
                 else if (cmd.Cmd == "terminal_input" && cmd.TermId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_input", TermId = cmd.TermId, CmdInput = cmd.Input });
                 else if (cmd.Cmd == "terminal_close" && cmd.TermId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_close", TermId = cmd.TermId });
                 else if (cmd.Cmd == "start")
                 {
-                    if (!_agentConnected) { var e = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = "Agent not connected" }; lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(e)); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.CmdLoop", "Failed to report unavailable agent for process start", ex); } } }
+                    if (!_agentConnected) { var e = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = "Agent not connected" }; lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(e, Proto.JsonOpts)); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.CmdLoop", "Failed to report unavailable agent for process start", ex); } } }
                     else SendToAgent(new AgentIpc.AgentMessage { Type = "start", FileName = cmd.FileName, CmdInput = cmd.Args, CmdId = cmd.CmdId });
                 }
                 else if (cmd.Cmd == "send_message" && cmd.Message != null) SendToAgent(new AgentIpc.AgentMessage { Type = "msg_popup", Message = cmd.Message });
                 else if (cmd.Cmd == "screenshot")
                 {
-                    if (!_agentConnected) { var e = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = "Agent not connected" }; lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(e)); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.CmdLoop", "Failed to report unavailable agent for screenshot", ex); } } }
+                    if (!_agentConnected) { var e = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = "Agent not connected" }; lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(e, Proto.JsonOpts)); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.CmdLoop", "Failed to report unavailable agent for screenshot", ex); } } }
                     else SendToAgent(new AgentIpc.AgentMessage { Type = "screenshot", CmdId = cmd.CmdId, Quality = 80, Fps = cmd.RdpMonitorIndex });
                 }
                 else if (cmd.Cmd == "update_push" && cmd.UpdateChunk != null) HandleUpdateChunk(cmd.UpdateChunk);
@@ -704,7 +704,7 @@ sealed class CpuMonService : ServiceBase
             throw;
         }
         var auth = new ClientMessage { Type = "auth", MachineName = Environment.MachineName, Token = _tok, AuthKey = _ak, ApprovalRequested = _approvalRequested && string.IsNullOrEmpty(_ak), AppVersion = Proto.AppVersion };
-        lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth)); _wr?.Flush(); }
+        lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(auth, Proto.JsonOpts)); _wr?.Flush(); }
     }
 }
 
