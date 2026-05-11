@@ -14,6 +14,9 @@ sealed class ServerForm : BorderlessForm
     readonly Panel _ct;
     readonly Timer _tm;
     readonly ToolTip _toolTip = new();
+    readonly NotifyIcon _tray;
+    bool _exitRequested;
+    bool _trayBalloonShown;
     int _sy, _contentH;
     readonly List<(Rectangle R, string M, string A)> _btns = new();
     string _currentToolTip = "";
@@ -54,12 +57,38 @@ sealed class ServerForm : BorderlessForm
         _engine.ScreenshotReceived += OnEngineScreenshot;
         _engine.UpdateAvailable += OnEngineUpdateAvailable;
 
+        var appIcon = Th.MakeHexIcon(Th.Grn);
+        Icon = appIcon;
+        _tray = new NotifyIcon
+        {
+            Icon = appIcon,
+            Text = "CPU Monitor Server",
+            Visible = false
+        };
+        var trayMenu = new ContextMenuStrip();
+        trayMenu.Items.Add("Show", null, (_, _) => RestoreFromTray());
+        trayMenu.Items.Add(new ToolStripSeparator());
+        trayMenu.Items.Add("Exit", null, (_, _) => { _exitRequested = true; Close(); });
+        _tray.ContextMenuStrip = trayMenu;
+        _tray.DoubleClick += (_, _) => RestoreFromTray();
+
+        FormClosing += (_, e) =>
+        {
+            if (!_exitRequested && e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                HideToTray();
+            }
+        };
+
         Load += (_, _) => { _engine.Start(); _tm.Start(); };
 
         FormClosed += (_, _) =>
         {
             _tm.Stop(); _tm.Dispose();
             _toolTip.Dispose();
+            _tray.Visible = false;
+            _tray.Dispose();
             _engine.ProcessListReceived -= OnEngineProcessList;
             _engine.SysInfoReceived -= OnEngineSysInfo;
             _engine.ServicesReceived -= OnEngineServices;
@@ -73,6 +102,28 @@ sealed class ServerForm : BorderlessForm
         onTh = () => { if (!IsDisposed) BeginInvoke(() => { BackColor = Th.Bg; _ct.BackColor = Th.Bg; _ct.Invalidate(); }); };
         Th.ThemeChanged += onTh;
         FormClosed += (_, _) => Th.ThemeChanged -= onTh;
+    }
+
+    void HideToTray()
+    {
+        Hide();
+        ShowInTaskbar = false;
+        _tray.Visible = true;
+        if (!_trayBalloonShown)
+        {
+            _trayBalloonShown = true;
+            _tray.ShowBalloonTip(3000, "CPU Monitor Server", "Still running in the tray. Double-click to restore.", ToolTipIcon.Info);
+        }
+    }
+
+    void RestoreFromTray()
+    {
+        _tray.Visible = false;
+        Show();
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        ShowInTaskbar = true;
+        BringToFront();
+        Activate();
     }
 
     void OnEngineProcessList(RemoteClient cl)

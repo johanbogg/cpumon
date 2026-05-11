@@ -81,6 +81,67 @@ public static class Th
         return p;
     }
 
+    public static Icon MakeHexIcon(Color c)
+    {
+        int[] sizes = { 16, 32, 48 };
+        var pngs = new byte[sizes.Length][];
+        for (int i = 0; i < sizes.Length; i++)
+        {
+            using var bmp = new Bitmap(sizes[i], sizes[i], PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Color.Transparent);
+                DrawHexGlyph(g, sizes[i], c);
+            }
+            using var ms = new MemoryStream();
+            bmp.Save(ms, ImageFormat.Png);
+            pngs[i] = ms.ToArray();
+        }
+        using var ico = new MemoryStream();
+        var bw = new BinaryWriter(ico);
+        bw.Write((ushort)0);
+        bw.Write((ushort)1);
+        bw.Write((ushort)sizes.Length);
+        int offset = 6 + 16 * sizes.Length;
+        for (int i = 0; i < sizes.Length; i++)
+        {
+            bw.Write((byte)(sizes[i] >= 256 ? 0 : sizes[i]));
+            bw.Write((byte)(sizes[i] >= 256 ? 0 : sizes[i]));
+            bw.Write((byte)0);
+            bw.Write((byte)0);
+            bw.Write((ushort)1);
+            bw.Write((ushort)32);
+            bw.Write(pngs[i].Length);
+            bw.Write(offset);
+            offset += pngs[i].Length;
+        }
+        foreach (var p in pngs) bw.Write(p);
+        ico.Position = 0;
+        return new Icon(ico);
+    }
+
+    static void DrawHexGlyph(Graphics g, int size, Color c)
+    {
+        var center = new PointF(size / 2f, size / 2f);
+        float r = size * 0.42f;
+        var outer = new PointF[6];
+        var inner = new PointF[6];
+        for (int i = 0; i < 6; i++)
+        {
+            double a = Math.PI / 3 * i - Math.PI / 2;
+            outer[i] = new PointF(center.X + r * (float)Math.Cos(a), center.Y + r * (float)Math.Sin(a));
+            inner[i] = new PointF(center.X + r * 0.55f * (float)Math.Cos(a), center.Y + r * 0.55f * (float)Math.Sin(a));
+        }
+        using (var fill = new SolidBrush(Color.FromArgb(70, c)))
+            g.FillPolygon(fill, outer);
+        using (var fill2 = new SolidBrush(Color.FromArgb(180, c)))
+            g.FillPolygon(fill2, inner);
+        float penWidth = Math.Max(1f, size / 18f);
+        using var pen = new Pen(Color.FromArgb(255, c), penWidth);
+        g.DrawPolygon(pen, outer);
+    }
+
     public static (Label close, Label min) MkWB(Form f)
     {
         var close = new Label

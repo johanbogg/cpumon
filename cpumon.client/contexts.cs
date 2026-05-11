@@ -55,8 +55,6 @@ static class ForegroundMessage
 // ═══════════════════════════════════════════════════
 sealed class AgentContext : ApplicationContext
 {
-    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
-
     readonly NotifyIcon _tray;
     readonly CancellationTokenSource _cts = new();
     readonly SynchronizationContext _uiCtx;
@@ -80,7 +78,7 @@ sealed class AgentContext : ApplicationContext
 
         _tray = new NotifyIcon
         {
-            Icon = MkIco(Th.Blu),
+            Icon = Th.MakeHexIcon(Th.Blu),
             Visible = true,
             Text = "CPU Monitor Agent"
         };
@@ -105,22 +103,6 @@ sealed class AgentContext : ApplicationContext
         Task.Run(() => TrayUpdateLoop(_cts.Token));
     }
 
-    static Icon MkIco(Color c)
-    {
-        using var b = new Bitmap(16, 16);
-        using (var g = Graphics.FromImage(b))
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
-            using var br = new SolidBrush(c);
-            g.FillEllipse(br, 2, 2, 12, 12);
-        }
-        var handle = b.GetHicon();
-        var icon = (Icon)Icon.FromHandle(handle).Clone();
-        DestroyIcon(handle);
-        return icon;
-    }
-
     async Task TrayUpdateLoop(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -137,7 +119,7 @@ sealed class AgentContext : ApplicationContext
                     if (col != _lastTrayCol)
                     {
                         var old = _tray.Icon;
-                        _tray.Icon = MkIco(col);
+                        _tray.Icon = Th.MakeHexIcon(col);
                         old?.Dispose();
                         _lastTrayCol = col;
                     }
@@ -445,8 +427,6 @@ sealed class AgentContext : ApplicationContext
 // ═══════════════════════════════════════════════════
 sealed class DaemonContext : ApplicationContext
 {
-    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
-
     readonly NotifyIcon _tray; readonly HardwareMonitorService _mon; readonly CancellationTokenSource _cts = new();
     readonly SynchronizationContext _uiCtx;
     readonly string? _fip; string? _tok;
@@ -473,7 +453,7 @@ sealed class DaemonContext : ApplicationContext
         if (sk != null) _ak = sk;
         if (ssid != null) _sid = ssid;
 
-        _tray = new NotifyIcon { Icon = MkIco(Th.Grn), Visible = true, Text = "CPU Monitor (Daemon)" };
+        _tray = new NotifyIcon { Icon = Th.MakeHexIcon(Th.Grn), Visible = true, Text = "CPU Monitor (Daemon)" };
         var menu = new ContextMenuStrip();
         menu.Items.Add("Starting...");
         menu.Items.Add(new ToolStripSeparator());
@@ -493,13 +473,6 @@ sealed class DaemonContext : ApplicationContext
         Task.Run(() => TrayLoop(_cts.Token));
     }
 
-    static Icon MkIco(Color c)
-    {
-        using var b = new Bitmap(16, 16);
-        using (var g = Graphics.FromImage(b)) { g.SmoothingMode = SmoothingMode.AntiAlias; g.Clear(Color.Transparent); using var br = new SolidBrush(c); g.FillEllipse(br, 2, 2, 12, 12); }
-        var handle = b.GetHicon(); var icon = (Icon)Icon.FromHandle(handle).Clone(); DestroyIcon(handle); return icon;
-    }
-
     async Task TrayLoop(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -509,7 +482,7 @@ sealed class DaemonContext : ApplicationContext
             string st = _ns switch { NetState.Connected => $"Connected {_sa} ↑{_sc} · {_peerCount} peer{(_peerCount == 1 ? "" : "s")}{(_isPaw ? " [PAW]" : "")}", NetState.AuthFailed => "Auth failed!", NetState.Searching => "Searching...", _ => $"{_ns} {_sa}" };
             _uiCtx.Post(_ =>
             {
-                try { if (col != _lastTrayCol) { var old = _tray.Icon; _tray.Icon = MkIco(col); old?.Dispose(); _lastTrayCol = col; } _tray.Text = $"CPU Monitor — {st}"; if (_tray.ContextMenuStrip?.Items.Count > 0) _tray.ContextMenuStrip.Items[0].Text = st; if (_pawMenuItem != null) _pawMenuItem.Enabled = _isPaw; } catch { }
+                try { if (col != _lastTrayCol) { var old = _tray.Icon; _tray.Icon = Th.MakeHexIcon(col); old?.Dispose(); _lastTrayCol = col; } _tray.Text = $"CPU Monitor — {st}"; if (_tray.ContextMenuStrip?.Items.Count > 0) _tray.ContextMenuStrip.Items[0].Text = st; if (_pawMenuItem != null) _pawMenuItem.Enabled = _isPaw; } catch { }
             }, null);
         }
     }
