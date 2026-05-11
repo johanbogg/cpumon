@@ -532,16 +532,16 @@ sealed class ServerForm : BorderlessForm
         string displayName = hasAlias ? alias! : r.MachineName;
         using var nf = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
         using var nb = new SolidBrush(Th.Brt);
-        g.DrawString(displayName, nf, nb, x + 26, hasAlias ? y + 8 : y + 13);
+        g.DrawString(displayName, nf, nb, x + 28, hasAlias ? y + 8 : y + 13);
         if (hasAlias)
         {
             using var hnf = new Font("Segoe UI", 7f);
             using var hnb = new SolidBrush(Color.FromArgb(85, 85, 100));
-            g.DrawString(r.MachineName, hnf, hnb, x + 26, y + 25);
+            g.DrawString(r.MachineName, hnf, hnb, x + 28, y + 25);
         }
         var nsz = g.MeasureString(displayName, nf);
         bool outdated = ServerEngine.ClientNeedsUpdate(cl.ClientVersion);
-        int mx = x + 30 + (int)nsz.Width + 14;
+        int mx = x + 32 + (int)nsz.Width + 14;
         if (outdated)
         {
             string badge = $"⚠ v{cl.ClientVersion}";
@@ -572,7 +572,7 @@ sealed class ServerForm : BorderlessForm
         using (var chipF = new Font("Segoe UI", 6.5f, FontStyle.Bold))
         {
             var csz = g.MeasureString(chipTxt, chipF);
-            int cx = x + w - (int)csz.Width - 54, cy = y + 14;
+            int cx = HeaderChipX(x, w, (int)csz.Width), cy = y + 14;
             using (var chipBg = new SolidBrush(Color.FromArgb(35, chipC)))
             using (var chipPath = Th.RR(cx - 4, cy - 2, (int)csz.Width + 8, (int)csz.Height + 4, 4))
             { g.FillPath(chipBg, chipPath); using var chipPen = new Pen(Color.FromArgb(60, chipC), 1f); g.DrawPath(chipPen, chipPath); }
@@ -600,16 +600,16 @@ sealed class ServerForm : BorderlessForm
             g.FillRectangle(ac, x + 1, y + 8, 4, h - 16);
 
         bool selExp = _selectedMachines.Contains(r.MachineName);
-        var cbRExp = new Rectangle(x + w - 20, y + 9, 14, 14);
+        var cbRExp = new Rectangle(x + w - 20, y + 15, 12, 12);
         _btns.Add((cbRExp, r.MachineName, "select"));
         _btns.Add((new Rectangle(x, y, w, 32), r.MachineName, "toggle"));
         using (var cbBg2 = new SolidBrush(selExp ? Th.Grn : Color.FromArgb(30, Th.Brd))) g.FillRectangle(cbBg2, cbRExp);
         using (var cbPen2 = new Pen(selExp ? Th.Grn : Th.Dim, 1f)) g.DrawRectangle(cbPen2, cbRExp);
-        if (selExp) { using var ck2 = new Pen(Color.Black, 1.5f); g.DrawLine(ck2, cbRExp.X + 2, cbRExp.Y + 7, cbRExp.X + 5, cbRExp.Y + 11); g.DrawLine(ck2, cbRExp.X + 5, cbRExp.Y + 11, cbRExp.X + 11, cbRExp.Y + 4); }
+        if (selExp) { using var ck2 = new Pen(Color.Black, 1.5f); g.DrawLine(ck2, cbRExp.X + 2, cbRExp.Y + 6, cbRExp.X + 4, cbRExp.Y + 9); g.DrawLine(ck2, cbRExp.X + 4, cbRExp.Y + 9, cbRExp.X + 9, cbRExp.Y + 3); }
 
         using (var ef = new Font("Segoe UI", 10f)) using (var eb = new SolidBrush(Th.Dim))
-            g.DrawString("▴", ef, eb, x + w - 38, y + 8);
-        using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 12, 9, 9);
+            g.DrawString("▴", ef, eb, x + w - 38, y + 12);
+        using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 17, 8, 8);
         var alias2 = _engine.Store.GetAlias(r.MachineName);
         bool hasAlias2 = !string.IsNullOrEmpty(alias2);
         string displayName2 = hasAlias2 ? alias2! : r.MachineName;
@@ -640,7 +640,7 @@ sealed class ServerForm : BorderlessForm
         using (var chipF = new Font("Segoe UI", 6.5f, FontStyle.Bold))
         {
             var csz = g.MeasureString(chipTxt, chipF);
-            int cx = x + w - (int)csz.Width - 42, cy = y + 10;
+            int cx = HeaderChipX(x, w, (int)csz.Width), cy = y + 14;
             using (var chipBg = new SolidBrush(Color.FromArgb(35, chipC)))
             using (var chipPath = Th.RR(cx - 4, cy - 2, (int)csz.Width + 8, (int)csz.Height + 4, 4))
             { g.FillPath(chipBg, chipPath); using var chipPen = new Pen(Color.FromArgb(60, chipC), 1f); g.DrawPath(chipPen, chipPath); }
@@ -795,6 +795,8 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, x + w - 178, y + 7, 82, 24, "Approve", Th.Grn, pending.MachineName, "approve_pending");
         DrawDangerBtn(g, x + w - 88, y + 7, 78, 24, "Reject", Th.Red, pending.MachineName, "reject_pending");
     }
+
+    static int HeaderChipX(int x, int w, int textWidth) => x + w - textWidth - 54;
 
     static string FmtNet(double kbps) => kbps >= 1024 ? $"{kbps / 1024.0:0.0}M" : $"{kbps:0}K";
     static string FmtGb(double value, string format) => value.ToString(format, CultureInfo.InvariantCulture);

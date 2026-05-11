@@ -190,6 +190,9 @@ internal static class Program
         Assert(!ServerEngine.ClientNeedsUpdate(""), "empty version should not flag as outdated");
         Assert(!ServerEngine.ClientNeedsUpdate("not-a-version"), "unparseable version should not flag as outdated");
         Assert(!ServerEngine.ClientNeedsUpdate(Proto.AppVersion), "matching server version should not flag as outdated");
+        Assert(!ServerEngine.ClientNeedsUpdate(Proto.AppVersion + ".0"), "matching four-part version should not flag as outdated");
+        Assert(!ServerEngine.ClientNeedsUpdate("v" + Proto.AppVersion), "matching tagged version should not flag as outdated");
+        Assert(!ServerEngine.ClientNeedsUpdate(Proto.AppVersion + "-linux"), "matching suffixed version should not flag as outdated");
         Assert(ServerEngine.ClientNeedsUpdate("0.0.1"), "older version should flag as outdated");
         Assert(!ServerEngine.ClientNeedsUpdate("999.0.0"), "newer version should not flag as outdated");
     }
@@ -218,12 +221,12 @@ internal static class Program
 
     static void TestVersionComparisonAcrossMinor()
     {
-        // System.Version compares major.minor.patch numerically. UpdateChecker.IsNewer
-        // and ServerEngine.ClientNeedsUpdate both rely on this for the 1.0 -> 1.1 boundary.
-        Assert(System.Version.Parse("1.1.0") > System.Version.Parse("1.0.999"), "1.1.0 > 1.0.999");
-        Assert(System.Version.Parse("1.1.0") > System.Version.Parse("1.0.148"), "1.1.0 > 1.0.148");
-        Assert(System.Version.Parse("1.2.0") > System.Version.Parse("1.1.999"), "1.2.0 > 1.1.999");
-        Assert(System.Version.Parse("2.0.0") > System.Version.Parse("1.999.999"), "2.0.0 > 1.999.999");
+        Assert(Versioning.IsNewer("1.1.0", "1.0.999"), "1.1.0 > 1.0.999");
+        Assert(Versioning.IsNewer("1.1.0", "1.0.148"), "1.1.0 > 1.0.148");
+        Assert(Versioning.IsNewer("1.2.0", "1.1.999"), "1.2.0 > 1.1.999");
+        Assert(Versioning.IsNewer("2.0.0", "1.999.999"), "2.0.0 > 1.999.999");
+        Assert(!Versioning.IsNewer("v1.1.0.0", "1.1.0"), "1.1.0.0 should normalize to 1.1.0");
+        Assert(Versioning.TryNormalize("v1.1.2-linux", out var linuxVersion, out var linuxText) && linuxVersion.ToString(3) == "1.1.2" && linuxText == "1.1.2", "suffixed versions should normalize to three parts");
     }
 
     static void TestServerEnginePendingApprovalMissing()

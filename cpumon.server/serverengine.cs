@@ -263,10 +263,7 @@ public sealed class ServerEngine : IDisposable
 
     public static bool ClientNeedsUpdate(string clientVersion)
     {
-        if (string.IsNullOrEmpty(clientVersion)) return false;
-        if (!Version.TryParse(clientVersion, out var cv)) return false;
-        if (!Version.TryParse(Proto.AppVersion, out var sv)) return false;
-        return cv < sv;
+        return Versioning.IsOlder(clientVersion, Proto.AppVersion);
     }
 
     public void PushUpdate(RemoteClient cl, string exePath) => Task.Run(() => DoPushUpdate(cl, exePath));

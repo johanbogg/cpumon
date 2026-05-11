@@ -36,8 +36,8 @@ public sealed class UpdateChecker
         {
             var release = await _http.GetFromJsonAsync<GithubRelease>(ApiUrl, ct).ConfigureAwait(false);
             if (release?.TagName == null) return null;
-            string version = release.TagName.TrimStart('v', 'V');
-            if (!IsNewer(version, Proto.AppVersion)) return null;
+            if (!Versioning.TryNormalize(release.TagName, out _, out var version)) return null;
+            if (!Versioning.IsNewer(version, Proto.AppVersion)) return null;
 
             string assetPattern = $"cpumon-server-{version}.zip";
             string? assetUrl = null;
@@ -63,13 +63,6 @@ public sealed class UpdateChecker
             LogSink.Debug("UpdateChecker", "Latest release check failed", ex);
             return null;
         }
-    }
-
-    static bool IsNewer(string remote, string local)
-    {
-        if (!Version.TryParse(remote, out var r)) return false;
-        if (!Version.TryParse(local, out var l)) return false;
-        return r > l;
     }
 
     sealed class GithubRelease
