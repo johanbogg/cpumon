@@ -591,7 +591,8 @@ sealed class ServerForm : BorderlessForm
     {
         var r = cl.LastReport!;
         bool linux = ServerEngine.IsLinuxClient(cl);
-        int hdrH = 100, h = hdrH + 4 + 26 + 4 + 26 + 4;
+        const int BtnH = 26, BtnGap = 8;
+        int hdrH = 100, h = hdrH + 6 + BtnH + BtnGap + BtnH + 6;
         Color brd = stale ? Th.Org : Th.Grn;
 
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 8); g.FillPath(bg, p); }
@@ -672,47 +673,47 @@ sealed class ServerForm : BorderlessForm
             g.DrawLine(sep2, x + 12, y + hdrH, x + w - 12, y + hdrH);
 
         // Row 1 - session launchers
-        int by = y + hdrH + 4, bx = x + 14;
+        int by = y + hdrH + 6, bx = x + 14;
         if (linux)
         {
-            DrawBtn(g, bx, by, 78, 26, "Bash", Th.Cyan, r.MachineName, "bash"); bx += 86;
+            DrawBtn(g, bx, by, 78, BtnH, "Bash", Th.Cyan, r.MachineName, "bash"); bx += 86;
         }
         else
         {
-            DrawBtn(g, bx, by, 72, 26, "CMD", Th.Cyan, r.MachineName, "cmd"); bx += 80;
-            DrawBtn(g, bx, by, 104, 26, "PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 112;
+            DrawBtn(g, bx, by, 72, BtnH, "CMD", Th.Cyan, r.MachineName, "cmd"); bx += 80;
+            DrawBtn(g, bx, by, 104, BtnH, "PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 112;
         }
-        DrawBtn(g, bx, by, 74, 26, "Files", Th.Yel, r.MachineName, "files"); bx += 82;
-        DrawBtn(g, bx, by, 84, 26, "Services", Th.Grn, r.MachineName, "services"); bx += 92;
+        DrawBtn(g, bx, by, 74, BtnH, "Files", Th.Yel, r.MachineName, "files"); bx += 82;
+        DrawBtn(g, bx, by, 84, BtnH, "Services", Th.Grn, r.MachineName, "services"); bx += 92;
         if (!linux)
         {
-            DrawBtn(g, bx, by, 68, 26, "RDP", Th.Cyan, r.MachineName, "rdp"); bx += 76;
+            DrawBtn(g, bx, by, 68, BtnH, "RDP", Th.Cyan, r.MachineName, "rdp"); bx += 76;
         }
         if (!linux && ServerEngine.ClientNeedsUpdate(cl.ClientVersion))
-            DrawBtn(g, bx, by, 80, 26, "Update", Th.Org, r.MachineName, "update");
+            DrawBtn(g, bx, by, 80, BtnH, "Update", Th.Org, r.MachineName, "update");
 
         // Row 2 - info tools (left) + danger zone (right-aligned)
-        int by2 = by + 30, bx2 = x + 14;
-        DrawBtn(g, bx2, by2, 80, 26, "Procs", Th.Blu, r.MachineName, "processes"); bx2 += 88;
-        DrawBtn(g, bx2, by2, 60, 26, "Info", Th.Cyan, r.MachineName, "sysinfo"); bx2 += 68;
+        int by2 = by + BtnH + BtnGap, bx2 = x + 14;
+        DrawBtn(g, bx2, by2, 80, BtnH, "Procs", Th.Blu, r.MachineName, "processes"); bx2 += 88;
+        DrawBtn(g, bx2, by2, 60, BtnH, "Info", Th.Cyan, r.MachineName, "sysinfo"); bx2 += 68;
         if (!linux)
         {
-            DrawBtn(g, bx2, by2, 92, 26, "Screenshot", Th.Cyan, r.MachineName, "screenshot"); bx2 += 100;
-            DrawBtn(g, bx2, by2, 74, 26, "Events", Th.Yel, r.MachineName, "events"); bx2 += 82;
+            DrawBtn(g, bx2, by2, 92, BtnH, "Screenshot", Th.Cyan, r.MachineName, "screenshot"); bx2 += 100;
+            DrawBtn(g, bx2, by2, 74, BtnH, "Events", Th.Yel, r.MachineName, "events"); bx2 += 82;
         }
-        DrawBtn(g, bx2, by2, 68, 26, "Msg", Th.Dim, r.MachineName, "msg");
+        DrawBtn(g, bx2, by2, 68, BtnH, "Msg", Th.Dim, r.MachineName, "msg");
 
         bool isPaw = _engine.Store.IsPaw(r.MachineName);
         int dx = x + w - 14;
-        dx -= 74; DrawDangerBtn(g, dx, by2, 72, 26, "Forget", Th.Dim, r.MachineName, "forget");
-        dx -= 68; DrawDangerBtn(g, dx, by2, 66, 26, "Off", Th.Red, r.MachineName, "shutdown");
-        dx -= 82; DrawDangerBtn(g, dx, by2, 80, 26, "Restart", Th.Org, r.MachineName, "restart");
+        dx -= 74; DrawDangerBtn(g, dx, by2, 72, BtnH, "Forget", Th.Dim, r.MachineName, "forget");
+        dx -= 68; DrawDangerBtn(g, dx, by2, 66, BtnH, "Off", Th.Red, r.MachineName, "shutdown");
+        dx -= 82; DrawDangerBtn(g, dx, by2, 80, BtnH, "Restart", Th.Org, r.MachineName, "restart");
         if (!linux)
         {
             dx -= 14;
             using (var vsp = new Pen(Color.FromArgb(45, Th.Brd), 1f))
                 g.DrawLine(vsp, dx + 6, by2 + 4, dx + 6, by2 + 22);
-            dx -= 78; DrawBtn(g, dx, by2, 76, 26, isPaw ? "PAW yes" : "PAW", isPaw ? Th.Mag : Th.Dim, r.MachineName, "paw");
+            dx -= 78; DrawBtn(g, dx, by2, 76, BtnH, isPaw ? "PAW yes" : "PAW", isPaw ? Th.Mag : Th.Dim, r.MachineName, "paw");
         }
 
         return h;

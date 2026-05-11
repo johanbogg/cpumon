@@ -160,7 +160,8 @@ sealed class PawDashboardForm : Form
     int DrawExpanded(Graphics g, int x, int y, int w, PawRemoteClient cl, bool stale)
     {
         var r = cl.LastReport!;
-        int hdrH = 62, btnH = 56, h = hdrH + btnH + 4;
+        const int BtnH = 24, BtnGap = 8;
+        int hdrH = 64, btnH = BtnH * 2 + BtnGap + 10, h = hdrH + btnH + 4;
         Color brd = stale ? Th.Org : Th.Mag;
 
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 8); g.FillPath(bg, p); }
@@ -183,27 +184,27 @@ sealed class PawDashboardForm : Form
         if (r.PackagePowerW is > 0) DrawMetric(g, mx2, my, "PWR", Th.F(r.PackagePowerW, "0.0", "W"), Th.Org);
 
         // Row 1
-        int by = y + hdrH, bx = x + 12;
-        DrawBtn(g, bx, by, 72, 22, "⟳ Restart", Th.Org, r.MachineName, "restart"); bx += 80;
-        DrawBtn(g, bx, by, 78, 22, "☰ Procs", Th.Blu, r.MachineName, "processes"); bx += 86;
-        DrawBtn(g, bx, by, 68, 22, "Info", Th.Cyan, r.MachineName, "sysinfo"); bx += 76;
-        DrawBtn(g, bx, by, 76, 22, "Services", Th.Grn, r.MachineName, "services"); bx += 84;
-        DrawBtn(g, bx, by, 72, 22, "Off", Th.Red, r.MachineName, "shutdown");
+        int by = y + hdrH + 4, bx = x + 12;
+        DrawBtn(g, bx, by, 72, BtnH, "⟳ Restart", Th.Org, r.MachineName, "restart"); bx += 80;
+        DrawBtn(g, bx, by, 78, BtnH, "☰ Procs", Th.Blu, r.MachineName, "processes"); bx += 86;
+        DrawBtn(g, bx, by, 68, BtnH, "Info", Th.Cyan, r.MachineName, "sysinfo"); bx += 76;
+        DrawBtn(g, bx, by, 76, BtnH, "Services", Th.Grn, r.MachineName, "services"); bx += 84;
+        DrawBtn(g, bx, by, 72, BtnH, "Off", Th.Red, r.MachineName, "shutdown");
 
         // Row 2
-        int by2 = by + 28; bx = x + 12;
+        int by2 = by + BtnH + BtnGap; bx = x + 12;
         bool linux = IsLinuxReport(r);
         if (linux)
         {
-            DrawBtn(g, bx, by2, 100, 22, "Bash", Th.Cyan, r.MachineName, "bash"); bx += 108;
+            DrawBtn(g, bx, by2, 100, BtnH, "Bash", Th.Cyan, r.MachineName, "bash"); bx += 108;
         }
         else
         {
-            DrawBtn(g, bx, by2, 100, 22, "CMD", Th.Cyan, r.MachineName, "cmd"); bx += 108;
-            DrawBtn(g, bx, by2, 120, 22, "PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 128;
+            DrawBtn(g, bx, by2, 100, BtnH, "CMD", Th.Cyan, r.MachineName, "cmd"); bx += 108;
+            DrawBtn(g, bx, by2, 120, BtnH, "PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 128;
         }
-        DrawBtn(g, bx, by2, 100, 22, "📁 Files", Th.Yel, r.MachineName, "files"); bx += 108;
-        DrawBtn(g, bx, by2, 80, 22, "🖥 RDP", Th.Cyan, r.MachineName, "rdp");
+        DrawBtn(g, bx, by2, 100, BtnH, "📁 Files", Th.Yel, r.MachineName, "files"); bx += 108;
+        DrawBtn(g, bx, by2, 80, BtnH, "🖥 RDP", Th.Cyan, r.MachineName, "rdp");
 
         return h;
     }
