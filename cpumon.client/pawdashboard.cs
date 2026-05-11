@@ -532,7 +532,7 @@ sealed class PawFileBrowserDialogClient : Form
         _send(_target, new ServerCommand { Cmd = "file_list", Path = path, CmdId = _browserId });
     }
 
-    void NavUp() { if (string.IsNullOrEmpty(_currentPath)) return; Nav(Path.GetDirectoryName(_currentPath) ?? ""); }
+    void NavUp() { if (string.IsNullOrEmpty(_currentPath)) return; Nav(RemoteParent(_currentPath)); }
 
     void OpenSel()
     {
@@ -574,9 +574,9 @@ sealed class PawFileBrowserDialogClient : Form
             if (listing.Error != null) { _statusLabel.Text = $"Error: {listing.Error}"; _statusLabel.ForeColor = Th.Red; return; }
             _statusLabel.ForeColor = Th.Dim;
             if (listing.Drives != null) { foreach (var d in listing.Drives) { var item = new ListViewItem(d.Name, "drive"); item.SubItems.Add(d.Ready ? $"{d.FreeGB:0.0}/{d.TotalGB:0.0} GB" : ""); item.SubItems.Add(d.Label); item.SubItems.Add(d.Format); item.Tag = new FileNavInfo { Path = d.Name, IsDirectory = true, IsDrive = true }; item.ForeColor = d.Ready ? Th.Grn : Th.Dim; _fileList.Items.Add(item); } _statusLabel.Text = $"{listing.Drives.Count} drive(s)"; return; }
-            if (!string.IsNullOrEmpty(listing.Path)) { var up = new ListViewItem("..", "folder"); up.SubItems.Add(""); up.SubItems.Add(""); up.SubItems.Add("DIR"); up.Tag = new FileNavInfo { Path = Path.GetDirectoryName(listing.Path) ?? "", IsDirectory = true, IsUp = true }; up.ForeColor = Th.Dim; _fileList.Items.Add(up); }
-            foreach (var d in listing.Entries.Where(e => e.IsDirectory).OrderBy(e => e.Name)) { var item = new ListViewItem(d.Name, "folder"); item.SubItems.Add(""); item.SubItems.Add(DateTimeOffset.FromUnixTimeMilliseconds(d.ModifiedUtcMs).LocalDateTime.ToString("yyyy-MM-dd HH:mm")); item.SubItems.Add("DIR"); item.Tag = new FileNavInfo { Path = Path.Combine(listing.Path, d.Name), IsDirectory = true }; item.ForeColor = d.Hidden ? Th.Dim : Th.Yel; _fileList.Items.Add(item); }
-            foreach (var f in listing.Entries.Where(e => !e.IsDirectory).OrderBy(e => e.Name)) { var item = new ListViewItem(f.Name, "file"); item.SubItems.Add(FmtSz(f.Size)); item.SubItems.Add(DateTimeOffset.FromUnixTimeMilliseconds(f.ModifiedUtcMs).LocalDateTime.ToString("yyyy-MM-dd HH:mm")); item.SubItems.Add(Path.GetExtension(f.Name).TrimStart('.').ToUpperInvariant()); item.Tag = new FileNavInfo { Path = Path.Combine(listing.Path, f.Name), IsDirectory = false, Size = f.Size }; item.ForeColor = f.Hidden ? Th.Dim : Th.Brt; _fileList.Items.Add(item); }
+            if (!string.IsNullOrEmpty(listing.Path)) { var up = new ListViewItem("..", "folder"); up.SubItems.Add(""); up.SubItems.Add(""); up.SubItems.Add("DIR"); up.Tag = new FileNavInfo { Path = RemoteParent(listing.Path), IsDirectory = true, IsUp = true }; up.ForeColor = Th.Dim; _fileList.Items.Add(up); }
+            foreach (var d in listing.Entries.Where(e => e.IsDirectory).OrderBy(e => e.Name)) { var item = new ListViewItem(d.Name, "folder"); item.SubItems.Add(""); item.SubItems.Add(DateTimeOffset.FromUnixTimeMilliseconds(d.ModifiedUtcMs).LocalDateTime.ToString("yyyy-MM-dd HH:mm")); item.SubItems.Add("DIR"); item.Tag = new FileNavInfo { Path = RemoteCombine(listing.Path, d.Name), IsDirectory = true }; item.ForeColor = d.Hidden ? Th.Dim : Th.Yel; _fileList.Items.Add(item); }
+            foreach (var f in listing.Entries.Where(e => !e.IsDirectory).OrderBy(e => e.Name)) { var item = new ListViewItem(f.Name, "file"); item.SubItems.Add(FmtSz(f.Size)); item.SubItems.Add(DateTimeOffset.FromUnixTimeMilliseconds(f.ModifiedUtcMs).LocalDateTime.ToString("yyyy-MM-dd HH:mm")); item.SubItems.Add(Path.GetExtension(f.Name).TrimStart('.').ToUpperInvariant()); item.Tag = new FileNavInfo { Path = RemoteCombine(listing.Path, f.Name), IsDirectory = false, Size = f.Size }; item.ForeColor = f.Hidden ? Th.Dim : Th.Brt; _fileList.Items.Add(item); }
             int dc = listing.Entries.Count(e => e.IsDirectory); int fc = listing.Entries.Count(e => !e.IsDirectory);
             _statusLabel.Text = $"{dc} folder(s), {fc} file(s)";
         });
@@ -599,6 +599,9 @@ sealed class PawFileBrowserDialogClient : Form
     public void ReceiveCmdResult(bool ok, string msg) { if (IsHandleCreated) BeginInvoke(() => { _statusLabel.Text = msg; _statusLabel.ForeColor = ok ? Th.Grn : Th.Red; }); }
 
     static string FmtSz(long b) => b switch { < 1024 => $"{b} B", < 1048576 => $"{b / 1024.0:0.0} KB", < 1073741824 => $"{b / 1048576.0:0.0} MB", _ => $"{b / 1073741824.0:0.00} GB" };
+    static bool IsUnixPath(string path) => path.StartsWith("/", StringComparison.Ordinal);
+    static string RemoteCombine(string dir, string name) => IsUnixPath(dir) ? (dir == "/" ? "/" + name : dir.TrimEnd('/') + "/" + name) : Path.Combine(dir, name);
+    static string RemoteParent(string path) { if (!IsUnixPath(path)) return Path.GetDirectoryName(path) ?? ""; var trimmed = path.TrimEnd('/'); if (trimmed.Length <= 1) return ""; int slash = trimmed.LastIndexOf('/'); return slash <= 0 ? "/" : trimmed[..slash]; }
     static Bitmap MkIco(Color c, bool f) { var bmp = new Bitmap(16, 16); using var g = Graphics.FromImage(bmp); g.SmoothingMode = SmoothingMode.AntiAlias; g.Clear(Color.Transparent); using var br = new SolidBrush(c); if (f) { g.FillRectangle(br, 1, 3, 6, 2); g.FillRectangle(br, 1, 4, 14, 10); } else { g.FillRectangle(br, 3, 1, 10, 14); } return bmp; }
     static Button MkBtn(string t, Color fg) { var b = new Button { Text = t, ForeColor = fg, BackColor = Th.Card, FlatStyle = FlatStyle.Flat, Size = new Size(80, 28), Cursor = Cursors.Hand, Font = new Font("Segoe UI", 8f) }; b.FlatAppearance.BorderColor = Color.FromArgb(70, fg); return b; }
 }
