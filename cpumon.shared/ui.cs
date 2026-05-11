@@ -83,6 +83,12 @@ public static class Th
 
     public static Icon MakeHexIcon(Color c)
     {
+        using var ms = new MemoryStream(MakeHexIconBytes(c));
+        return new Icon(ms);
+    }
+
+    public static byte[] MakeHexIconBytes(Color c)
+    {
         int[] sizes = { 16, 32, 48 };
         var pngs = new byte[sizes.Length][];
         for (int i = 0; i < sizes.Length; i++)
@@ -117,8 +123,7 @@ public static class Th
             offset += pngs[i].Length;
         }
         foreach (var p in pngs) bw.Write(p);
-        ico.Position = 0;
-        return new Icon(ico);
+        return ico.ToArray();
     }
 
     static void DrawHexGlyph(Graphics g, int size, Color c)

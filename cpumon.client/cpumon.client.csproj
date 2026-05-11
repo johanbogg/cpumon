@@ -4,6 +4,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <DebugType>none</DebugType>
@@ -23,9 +24,11 @@
     </Exec>
     <PropertyGroup>
       <GitCount Condition="'$(GitCount)' == ''">0</GitCount>
-      <Version>1.0.$(GitCount.Trim())</Version>
-      <AssemblyVersion>1.0.$(GitCount.Trim()).0</AssemblyVersion>
-      <FileVersion>1.0.$(GitCount.Trim()).0</FileVersion>
+      <VersionBaseline>149</VersionBaseline>
+      <Patch>$([MSBuild]::Subtract($(GitCount.Trim()), $(VersionBaseline)))</Patch>
+      <Version>1.1.$(Patch)</Version>
+      <AssemblyVersion>1.1.$(Patch).0</AssemblyVersion>
+      <FileVersion>1.1.$(Patch).0</FileVersion>
     </PropertyGroup>
   </Target>
 
