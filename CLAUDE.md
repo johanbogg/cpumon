@@ -14,7 +14,7 @@ cpumon is a .NET 10 WinForms remote management tool: one server exe (operator ma
 
 The Linux client (`cpumon.linux/cpumon.py`) is pure Python — no build step.
 
-Version is auto-set from git commit count: `1.0.<N>` via an MSBuild target.
+Version is auto-set from git commit count via an MSBuild target. Current scheme: `1.1.<N - 149>` where 149 is the `<VersionBaseline>` set in both `cpumon.client.csproj` and `cpumon.server.csproj` at the 1.1.0 commit. To bump to a new minor (e.g. 1.2.0), update `<VersionBaseline>` in both csprojs to the count of the boundary commit and change the `1.1.` prefix to `1.2.`.
 
 ## File map
 
@@ -58,13 +58,21 @@ cpumon.server/
                      and ReleaseInfo record carrying tag, version, download URL, asset size
 
 cpumon.tests/
-  Program.cs — 12 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
+  Program.cs — 13 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
               TestReceiveChunkCompletesAndValidatesOffsets, TestReceiveChunkReplacesDuplicateTransfer,
               TestLineLengthLimitedStream, TestUpdateIntegrity,
               TestSendPacerWakesOnModeChange, TestSendPacerWakesOnDemand,
               TestApprovedClientAliasPersists, TestApprovedClientForgetPersists,
-              TestClientNeedsUpdate, TestIsLinuxClient,
-              TestServerEngineRegenerateToken, TestServerEnginePendingApprovalMissing
+              TestClientNeedsUpdate, TestServerEngineInitialState,
+              TestServerEngineRegenerateToken, TestServerEnginePendingApprovalMissing,
+              TestVersionComparisonAcrossMinor
+
+tools/
+  iconGen/    — one-shot console tool that calls Th.MakeHexIconBytes(Color)
+                and writes the result as a multi-size .ico:
+                  dotnet run --project tools/iconGen -- <out> <R> <G> <B>
+                Used to produce cpumon.{server,client}/app.ico for the
+                embedded application icon.
 
 cpumon.linux/
   cpumon.py      — Python 3.8+ client: discovery, TLS/TOFU, auth, report/keepalive,
@@ -119,6 +127,12 @@ cpumon.linux/
 
 **Server engine/form split:** `ServerEngine` owns all server-side state and protocol loops; `ServerForm` is a thin presentation layer that subscribes to engine events and forwards UI actions to engine methods. The engine has no WinForms dependency, which makes it reusable for a future headless service mode, HTTP API, or test harness. `UpdateModes` now runs on a `System.Threading.Timer` (pool thread) rather than the WinForms `Timer`; all mutations it performs are already thread-safe (`ConcurrentDictionary`, `RemoteClient.Send` under `_tl`, `CLog` internal lock).
 
+**Server close-to-tray:** `ServerForm` intercepts `FormClosing` when `CloseReason == UserClosing` and hides to the systray instead of exiting; the minimize (─) button keeps its normal taskbar behaviour. Tray context menu offers Show / Exit (Exit sets `_exitRequested` before `Close()` to bypass the intercept). Windows shutdown / Task Manager closes pass through unchanged. First-time hide fires a one-shot balloon explaining the new behaviour.
+
+**Branded icon:** both exes embed `app.ico` via `<ApplicationIcon>` in their csprojs (green for server, blue for client). The same hex glyph is generated at runtime for tray icons via `Th.MakeHexIcon(Color)` / `Th.MakeHexIconBytes(Color)` in `cpumon.shared/ui.cs` — multi-size (16/32/48) PNG-in-ICO, tinted to any colour. Tray icons in `AgentContext` and `DaemonContext` recolour live based on connection state (Grn/Mag/Org/Red/Blu).
+
+**Version comparison invariant:** `UpdateChecker.IsNewer` (server polling GitHub) and `ServerEngine.ClientNeedsUpdate` (server checking connected client version) both go through `System.Version.TryParse` + numeric `>`/`<`. Always works at minor/major boundaries: `1.1.0 > 1.0.999` regardless of patch. Strings that fail to parse (e.g. Linux client's `"1.0.111-linux"` suffix) return `false` from both — meaning Linux clients are never flagged as outdated by the server UI and are expected to update via `install.sh update` instead.
+
 **Disconnect cause tracking:** `_pendingPowerActions` (`Dictionary<string, PendingPowerAction>`) records that a `restart` or `shutdown` command was just sent. `HandleClient`'s finally block reads this within 5 minutes of disconnect and logs `"Disc: machine — restarting ✓"` instead of a plain disconnect. Distinguish restart vs shutdown via the record's `Label` field — do not collapse to a single bool.
 
 **Status bar update button:** `_availableUpdate != null` triggers a cyan "↑ Update vX.Y.Z" button in `DrawStatusBar`. The action `openrelease` opens `_availableUpdate.ReleaseUrl` via `Process.Start` with `UseShellExecute = true`.
@@ -145,7 +159,8 @@ cpumon.linux/
 
 ## Release checklist
 
-1. `.\build.ps1` — runs the 8 smoke tests and publishes; versioned zips for client/server/linux are created automatically in `dist\` (filename pattern `cpumon-{client|server|linux}-X.Y.Z.zip`).
+1. `.\build.ps1` — runs the 13 smoke tests and publishes; versioned zips for client/server/linux are created automatically in `dist\` (filename pattern `cpumon-{client|server|linux}-X.Y.Z.zip`).
 2. Commit, push, tag `vX.Y.Z` (matches the version printed by build.ps1), push tag.
 3. `gh release create vX.Y.Z dist\cpumon-client-X.Y.Z.zip dist\cpumon-server-X.Y.Z.zip dist\cpumon-linux-X.Y.Z.zip --title "vX.Y.Z - <one-line>" --notes-file <notes.md> --latest`.
 4. Existing v1.0.128+ servers will pick the new release up within 6 hours and surface the "↑ Update vX.Y.Z" button.
+5. For a minor/major bump: update `<VersionBaseline>` in both `cpumon.client.csproj` and `cpumon.server.csproj` to the current commit count, and change the version prefix in those targets (e.g. `1.1.` → `1.2.`). Verify the first build under the new scheme lands exactly on `X.Y.0` before tagging.

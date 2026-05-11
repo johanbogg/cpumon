@@ -23,6 +23,7 @@ internal static class Program
             TestServerEngineInitialState();
             TestServerEngineRegenerateToken();
             TestServerEnginePendingApprovalMissing();
+            TestVersionComparisonAcrossMinor();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -213,6 +214,16 @@ internal static class Program
         engine.RegenerateToken();
         Assert(engine.Token != original, "RegenerateToken should produce a different token");
         Assert(engine.TokenIssuedAt >= originalAt, "RegenerateToken should refresh the issued-at timestamp");
+    }
+
+    static void TestVersionComparisonAcrossMinor()
+    {
+        // System.Version compares major.minor.patch numerically. UpdateChecker.IsNewer
+        // and ServerEngine.ClientNeedsUpdate both rely on this for the 1.0 -> 1.1 boundary.
+        Assert(System.Version.Parse("1.1.0") > System.Version.Parse("1.0.999"), "1.1.0 > 1.0.999");
+        Assert(System.Version.Parse("1.1.0") > System.Version.Parse("1.0.148"), "1.1.0 > 1.0.148");
+        Assert(System.Version.Parse("1.2.0") > System.Version.Parse("1.1.999"), "1.2.0 > 1.1.999");
+        Assert(System.Version.Parse("2.0.0") > System.Version.Parse("1.999.999"), "2.0.0 > 1.999.999");
     }
 
     static void TestServerEnginePendingApprovalMissing()

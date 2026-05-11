@@ -28,6 +28,8 @@ Windows server · Windows clients · Linux clients (Python)
 - **Auto-update for clients** — server can push a new client exe; service applies it via a scheduled task. Linux clients update via `install.sh update`.
 - **GitHub update check** — server polls GitHub releases every 6 hours and surfaces a "↑ Update vX.Y.Z" button in the status bar when a newer release is available
 - **Light / dark theme** — toggle from the status bar; all custom GDI rendering refreshes immediately
+- **Close-to-tray (server)** — closing the server window hides it to the systray and keeps it running; double-click the tray icon to restore. Minimize (─) goes to the taskbar as normal. Tray right-click menu offers Show / Exit.
+- **Branded application icon** — server and client exes embed a green/blue cpumon hex glyph (multi-size, generated programmatically)
 
 ---
 
@@ -223,8 +225,12 @@ cpumon/
 │   ├── program.cs
 │   └── cpumon.client.csproj
 ├── cpumon.tests/
-│   ├── Program.cs         — 12 smoke tests run automatically by build.ps1 before publish
+│   ├── Program.cs         — 13 smoke tests run automatically by build.ps1 before publish
 │   └── cpumon.tests.csproj
+├── tools/
+│   └── iconGen/           — one-shot console tool that calls Th.MakeHexIconBytes(Color) and
+│                            writes a multi-size .ico to disk; used to regenerate the embedded
+│                            cpumon.{server,client}/app.ico files
 ├── cpumon.linux/
 │   ├── cpumon.py          — Python client (discovery, TLS/TOFU, auth, terminal, file browser, systemctl)
 │   ├── install.sh         — Debian/Ubuntu installer; supports `update` mode for in-place upgrades
