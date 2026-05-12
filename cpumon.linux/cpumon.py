@@ -344,16 +344,27 @@ class TerminalSession:
 
 class _Upload:
     def __init__(self, dest: str):
-        self._fh  = open(dest, "wb")
         self.dest = dest
+        self._tmp = dest + ".tmp"
+        self._fh  = open(self._tmp, "wb")
 
     def write(self, b64: str):
         if b64:
             self._fh.write(base64.b64decode(b64))
 
+    def position(self) -> int:
+        return self._fh.tell()
+
     def close(self):
         self._fh.flush()
         self._fh.close()
+        os.replace(self._tmp, self.dest)
+
+    def discard(self):
+        try: self._fh.close()
+        except Exception: pass
+        try: os.unlink(self._tmp)
+        except OSError: pass
 
 # ── Main client ───────────────────────────────────────────────────────────────
 
@@ -726,18 +737,23 @@ class Client:
         try:
             if offset == 0:
                 if tid in self._uploads:
-                    self._uploads[tid].close()
+                    self._uploads.pop(tid).discard()
                 os.makedirs(dest_dir, exist_ok=True)
                 self._uploads[tid] = _Upload(os.path.join(dest_dir, fname))
             if tid in self._uploads:
-                self._uploads[tid].write(data)
+                upload = self._uploads[tid]
+                expected = upload.position()
+                if expected != offset:
+                    self._uploads.pop(tid).discard()
+                    return f"Upload error: unexpected offset {offset}, expected {expected}"
+                upload.write(data)
                 if last:
                     self._uploads.pop(tid).close()
                     return f"Upload complete: {fname}"
             return ""
         except Exception as e:
             if tid in self._uploads:
-                self._uploads.pop(tid).close()
+                self._uploads.pop(tid).discard()
             return f"Upload error: {e}"
 
     def _handle_update_chunk(self, chunk: dict):
