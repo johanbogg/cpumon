@@ -59,21 +59,22 @@ internal static class Program
             IsLast = true
         };
         Assert(FileBrowserService.ReceiveChunk(bad, uploads, td.Path).StartsWith("Upload error"), "offset mismatch should fail");
-        Assert(uploads.ContainsKey("t1"), "offset mismatch should keep stream for caller cleanup/retry decision");
+        Assert(!uploads.ContainsKey("t1"), "offset mismatch should remove the stale upload");
+        Assert(!File.Exists(Path.Combine(td.Path, "sample.bin.tmp")), "offset mismatch should delete the temp file");
 
-        var last = new FileChunkData
+        var retry = new FileChunkData
         {
             TransferId = "t1",
             FileName = "sample.bin",
-            Offset = 3,
+            Offset = 0,
             TotalSize = 6,
-            Data = Convert.ToBase64String(Encoding.UTF8.GetBytes("def")),
+            Data = Convert.ToBase64String(Encoding.UTF8.GetBytes("abcdef")),
             IsLast = true
         };
-        string result = FileBrowserService.ReceiveChunk(last, uploads, td.Path);
-        Assert(result.StartsWith("Upload complete"), "last chunk should complete");
+        string result = FileBrowserService.ReceiveChunk(retry, uploads, td.Path);
+        Assert(result.StartsWith("Upload complete"), "retry from offset 0 should complete");
         Assert(!uploads.ContainsKey("t1"), "completed transfer should be removed");
-        Assert(File.ReadAllText(Path.Combine(td.Path, "sample.bin")) == "abcdef", "file content should match chunks");
+        Assert(File.ReadAllText(Path.Combine(td.Path, "sample.bin")) == "abcdef", "file content should match retried chunk");
     }
 
     static void TestReceiveChunkReplacesDuplicateTransfer()

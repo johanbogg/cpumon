@@ -404,7 +404,13 @@ public static class FileBrowserService
             if (activeUploads.TryGetValue(chunk.TransferId, out var stream))
             {
                 if (stream.Position != chunk.Offset)
-                    return $"Upload error: unexpected offset {chunk.Offset}, expected {stream.Position}";
+                {
+                    long expected = stream.Position;
+                    activeUploads.TryRemove(chunk.TransferId, out _);
+                    stream.Dispose();
+                    try { File.Delete(tmpFile); } catch { }
+                    return $"Upload error: unexpected offset {chunk.Offset}, expected {expected}";
+                }
                 if (!string.IsNullOrEmpty(chunk.Data))
                 {
                     var data = Convert.FromBase64String(chunk.Data);
