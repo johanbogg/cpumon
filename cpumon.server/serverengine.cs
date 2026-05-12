@@ -590,8 +590,14 @@ public sealed class ServerEngine : IDisposable
                     switch (msg.Type)
                     {
                         case "report" when msg.Report != null:
-                            cl.MachineName = msg.Report.MachineName; cl.LastReport = msg.Report;
-                            cl.LastSeen = DateTime.UtcNow; _cls[cl.MachineName] = cl;
+                            if (!string.IsNullOrEmpty(msg.Report.MachineName) && msg.Report.MachineName != cl.MachineName)
+                            {
+                                _log.Add($"Report rebind ignored: {cl.MachineName} sent report tagged {msg.Report.MachineName}", Th.Org);
+                                LogSink.Warn("Server.Report", $"Authenticated as {cl.MachineName} but report claims {msg.Report.MachineName}; keeping authenticated identity");
+                                msg.Report.MachineName = cl.MachineName;
+                            }
+                            cl.LastReport = msg.Report;
+                            cl.LastSeen = DateTime.UtcNow;
                             _store.Seen(cl.MachineName); rx++;
                             _alertSvc.Check(cl.MachineName, msg.Report);
                             foreach (var paw in _cls.Values.Where(c => c.IsPaw && c != cl))
