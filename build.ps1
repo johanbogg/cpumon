@@ -104,11 +104,16 @@ Write-Host "  Output  : $OutDir" -ForegroundColor DarkGray
 
 if ($ver) {
     Write-Step "Packaging zips..."
+    $producedZips = @()
     if ($builtClient) {
-        Compress-Archive -Path (Join-Path $OutDir 'client\*') -DestinationPath (Join-Path $OutDir "cpumon-client-$ver.zip") -Force
+        $z = Join-Path $OutDir "cpumon-client-$ver.zip"
+        Compress-Archive -Path (Join-Path $OutDir 'client\*') -DestinationPath $z -Force
+        $producedZips += $z
     }
     if ($builtServer) {
-        Compress-Archive -Path (Join-Path $OutDir 'server\*') -DestinationPath (Join-Path $OutDir "cpumon-server-$ver.zip") -Force
+        $z = Join-Path $OutDir "cpumon-server-$ver.zip"
+        Compress-Archive -Path (Join-Path $OutDir 'server\*') -DestinationPath $z -Force
+        $producedZips += $z
     }
     # Linux client is bundled only on a full build, since it travels with both halves.
     if ($builtClient -and $builtServer) {
@@ -116,9 +121,24 @@ if ($ver) {
         if (Test-Path $linuxSrc) {
             $linuxOut = Join-Path $OutDir 'linux'
             Copy-LinuxClient $linuxSrc $linuxOut $ver
-            Compress-Archive -Path (Join-Path $linuxOut '*') -DestinationPath (Join-Path $OutDir "cpumon-linux-$ver.zip") -Force
+            $z = Join-Path $OutDir "cpumon-linux-$ver.zip"
+            Compress-Archive -Path (Join-Path $linuxOut '*') -DestinationPath $z -Force
+            $producedZips += $z
         }
     }
     Write-Ok
+
+    if ($producedZips.Count -gt 0) {
+        Write-Step "Generating SHA256SUMS-$ver.txt..."
+        $sumsPath = Join-Path $OutDir "SHA256SUMS-$ver.txt"
+        $lines = foreach ($p in $producedZips) {
+            $h = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$h  $(Split-Path $p -Leaf)"
+        }
+        # sha256sum-compatible: lowercase hash, two spaces, filename. LF line endings, no BOM.
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes(($lines -join "`n") + "`n")
+        [System.IO.File]::WriteAllBytes($sumsPath, $bytes)
+        Write-Ok
+    }
 }
 Write-Host ''
