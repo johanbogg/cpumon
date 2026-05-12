@@ -247,6 +247,7 @@ sealed class ServerForm : BorderlessForm
                         _engine.RequestShutdown(m);
                     break;
                 case "sysinfo": _engine.RequestSysInfo(m); break;
+                case "health": BeginInvoke(() => new HealthDialog(cl, _engine.Store).Show(this)); break;
                 case "screenshot": _engine.RequestScreenshot(m); break;
                 case "forget":
                     if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
@@ -696,6 +697,7 @@ sealed class ServerForm : BorderlessForm
         int by2 = by + BtnH + BtnGap, bx2 = x + 14;
         DrawBtn(g, bx2, by2, 80, BtnH, "Procs", Th.Blu, r.MachineName, "processes"); bx2 += 88;
         DrawBtn(g, bx2, by2, 60, BtnH, "Info", Th.Cyan, r.MachineName, "sysinfo"); bx2 += 68;
+        DrawBtn(g, bx2, by2, 70, BtnH, "Health", Th.Grn, r.MachineName, "health"); bx2 += 78;
         if (!linux)
         {
             DrawBtn(g, bx2, by2, 92, BtnH, "Screenshot", Th.Cyan, r.MachineName, "screenshot"); bx2 += 100;

@@ -325,3 +325,132 @@ sealed class EventViewerDialog : Form
         Controls.Add(grid); Controls.Add(detail); Controls.Add(cp);
     }
 }
+
+sealed class HealthDialog : Form
+{
+    readonly RemoteClient _cl;
+    readonly ApprovedClientStore _store;
+    readonly RichTextBox _rtb;
+    readonly Timer _timer;
+
+    public HealthDialog(RemoteClient cl, ApprovedClientStore store)
+    {
+        _cl = cl;
+        _store = store;
+        Text = $"Health — {cl.MachineName}";
+        Size = new Size(560, 480);
+        StartPosition = FormStartPosition.CenterParent;
+        BackColor = Th.Bg; ForeColor = Th.Brt;
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MinimumSize = new Size(420, 320);
+
+        _rtb = new RichTextBox
+        {
+            Dock = DockStyle.Fill, BackColor = Th.Card, ForeColor = Th.Brt,
+            Font = new Font("Consolas", 9.5f), ReadOnly = true, BorderStyle = BorderStyle.None
+        };
+
+        var bp = new Panel { Dock = DockStyle.Bottom, Height = 38, BackColor = Th.TBg };
+        var copy = new Button
+        {
+            Text = "📋 Copy summary", BackColor = Th.Card, ForeColor = Th.Blu, FlatStyle = FlatStyle.Flat,
+            Size = new Size(140, 28), Location = new Point(8, 5), Cursor = Cursors.Hand
+        };
+        copy.FlatAppearance.BorderColor = Color.FromArgb(70, Th.Blu);
+        copy.Click += (_, _) => { try { Clipboard.SetText(_rtb.Text); } catch { } };
+
+        var refresh = new Button
+        {
+            Text = "🔄 Request sysinfo", BackColor = Th.Card, ForeColor = Th.Cyan, FlatStyle = FlatStyle.Flat,
+            Size = new Size(150, 28), Location = new Point(156, 5), Cursor = Cursors.Hand
+        };
+        refresh.FlatAppearance.BorderColor = Color.FromArgb(70, Th.Cyan);
+        refresh.Click += (_, _) =>
+        {
+            try { _cl.Send(new ServerCommand { Cmd = "sysinfo", CmdId = Guid.NewGuid().ToString("N")[..8] }); } catch { }
+        };
+
+        bp.Controls.AddRange(new Control[] { copy, refresh });
+        Controls.Add(_rtb);
+        Controls.Add(bp);
+
+        Refresh();
+        _timer = new Timer { Interval = 2000 };
+        _timer.Tick += (_, _) => Refresh();
+        _timer.Start();
+        FormClosed += (_, _) => { _timer.Stop(); _timer.Dispose(); };
+    }
+
+    new void Refresh()
+    {
+        var sb = new StringBuilder();
+        bool linux = ServerEngine.IsLinuxClient(_cl);
+        bool outdated = ServerEngine.ClientNeedsUpdate(_cl.ClientVersion);
+        var alias = _store.GetAlias(_cl.MachineName);
+        var mac = _store.GetMac(_cl.MachineName);
+        bool paw = _store.IsPaw(_cl.MachineName);
+        var now = DateTime.UtcNow;
+        var seenAgo = now - _cl.LastSeen;
+        var reportAge = _cl.LastReport != null ? (TimeSpan?)(now - _cl.LastSeen) : null;
+        bool stale = seenAgo.TotalSeconds > 70;
+
+        sb.AppendLine($"  Machine:        {_cl.MachineName}");
+        if (!string.IsNullOrEmpty(alias)) sb.AppendLine($"  Alias:          {alias}");
+        sb.AppendLine($"  Platform:       {(linux ? "Linux" : "Windows")}");
+        sb.AppendLine($"  Client version: {(string.IsNullOrEmpty(_cl.ClientVersion) ? "(unknown)" : "v" + _cl.ClientVersion)}{(outdated ? "  — OUTDATED, server is v" + Proto.AppVersion : "")}");
+        sb.AppendLine($"  Authenticated:  {(_cl.Authenticated ? "yes" : "no")}");
+        sb.AppendLine($"  Connection:     {(stale ? "STALE" : "live")}  ({FormatAge(seenAgo)} since last seen)");
+        if (reportAge.HasValue)
+            sb.AppendLine($"  Last report:    {FormatAge(reportAge.Value)}");
+        else
+            sb.AppendLine($"  Last report:    (none yet — waiting for first report)");
+        sb.AppendLine($"  Send mode:      {_cl.SendMode}");
+        sb.AppendLine($"  Card expanded:  {(_cl.Expanded ? "yes" : "no")}");
+        sb.AppendLine($"  PAW:            {(paw ? "yes" : "no")}");
+        if (!string.IsNullOrEmpty(mac)) sb.AppendLine($"  MAC:            {mac}");
+
+        if (_cl.LastReport is { } r)
+        {
+            sb.AppendLine();
+            sb.AppendLine("  --- Latest report metrics ---");
+            if (r.TotalLoadPercent.HasValue) sb.AppendLine($"  CPU load:       {r.TotalLoadPercent.Value:0}%");
+            if (r.PackageTemperatureC is > 0) sb.AppendLine($"  CPU temp:       {r.PackageTemperatureC:0.0}°C");
+            if (r.PackageFrequencyMHz is > 0) sb.AppendLine($"  CPU freq:       {Th.FF(r.PackageFrequencyMHz)}");
+            if (r.RamTotalGB > 0) sb.AppendLine($"  RAM:            {r.RamUsedGB:0.0} / {r.RamTotalGB:0.0} GB");
+            if (r.GpuLoadPercent.HasValue) sb.AppendLine($"  GPU load:       {r.GpuLoadPercent.Value:0}%");
+            sb.AppendLine($"  CPU name:       {r.CpuName}");
+            sb.AppendLine($"  OS version:     {r.OsVersion}");
+        }
+
+        if (_cl.LastSysInfo is { } si)
+        {
+            sb.AppendLine();
+            sb.AppendLine("  --- Sysinfo (last query) ---");
+            sb.AppendLine($"  Uptime:         {si.UptimeHours:0.0} h");
+            sb.AppendLine($"  User:           {si.Domain}\\{si.UserName}");
+            sb.AppendLine($"  .NET runtime:   {si.DotNetVersion}");
+            foreach (var ip in si.IpAddresses) sb.AppendLine($"  IP:             {ip}");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("  --- Diagnostics ---");
+        sb.AppendLine($"  Server version: v{Proto.AppVersion}");
+        sb.AppendLine($"  Server log:     %ProgramData%\\CpuMon\\logs\\cpumon-YYYY-MM-DD.jsonl");
+        if (linux)
+            sb.AppendLine($"  Client log:     journalctl -u cpumon  (or /var/log/cpumon if redirected)");
+        else
+            sb.AppendLine($"  Client log:     %ProgramData%\\CpuMon\\logs\\cpumon-YYYY-MM-DD.jsonl");
+        sb.AppendLine($"  Snapshot at:    {now.ToLocalTime():yyyy-MM-dd HH:mm:ss} (local)");
+
+        _rtb.Text = sb.ToString();
+    }
+
+    static string FormatAge(TimeSpan ts)
+    {
+        if (ts.TotalDays >= 1) return $"{(int)ts.TotalDays}d {ts.Hours}h ago";
+        if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}h {ts.Minutes}m ago";
+        if (ts.TotalMinutes >= 1) return $"{(int)ts.TotalMinutes}m {ts.Seconds}s ago";
+        if (ts.TotalSeconds >= 1) return $"{(int)ts.TotalSeconds}s ago";
+        return "just now";
+    }
+}
