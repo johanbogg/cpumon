@@ -714,7 +714,12 @@ public static class CmdExec
                 if (cmd.RdpId != null && RdpSessions.TryGetValue(cmd.RdpId, out var rdpBw)) rdpBw.SetBandwidthCap(cmd.RdpBandwidthKBps); break;
             case "rdp_input":
                 if (cmd.RdpId != null && cmd.RdpInput != null && RdpSessions.ContainsKey(cmd.RdpId))
+                {
+                    if (cmd.RdpInput.Type == "mouse_move" && cmd.RdpInput.SentAtUnixMs > 0
+                        && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - cmd.RdpInput.SentAtUnixMs > Proto.RdpMouseMoveStaleMs)
+                        break;
                     InputInjector.InjectInput(cmd.RdpInput);
+                }
                 break;
         }
     }
