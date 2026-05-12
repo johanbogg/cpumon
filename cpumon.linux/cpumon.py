@@ -44,6 +44,7 @@ FULL_MS     = 1.0
 MONITOR_MS  = 30.0
 LINUX_MONITOR_MS = 15.0
 KA_MS       = 60.0
+MAX_LINE_BYTES = 4 * 1024 * 1024  # mirrors Proto.MaxLineBytes on the C# side
 VERSION     = "1.0.111-linux"
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -451,11 +452,17 @@ class Client:
 
     def _recv_line(self) -> str:
         while b"\n" not in self._recv_buf:
+            if len(self._recv_buf) > MAX_LINE_BYTES:
+                self._recv_buf = b""
+                raise ConnectionError(f"Line exceeded {MAX_LINE_BYTES} bytes; dropping connection")
             chunk = self._ssl.recv(65536)
             if not chunk:
                 raise ConnectionError("Connection closed")
             self._recv_buf += chunk
         idx          = self._recv_buf.index(b"\n")
+        if idx > MAX_LINE_BYTES:
+            self._recv_buf = b""
+            raise ConnectionError(f"Line exceeded {MAX_LINE_BYTES} bytes; dropping connection")
         line         = self._recv_buf[:idx].decode()
         self._recv_buf = self._recv_buf[idx + 1:]
         return line
