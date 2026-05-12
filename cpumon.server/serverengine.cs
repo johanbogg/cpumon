@@ -38,7 +38,11 @@ public sealed class ServerEngine : IDisposable
     const int IdleTimeoutMinutes = 3;
     const int AuthTimeoutSeconds = 30;
     const int PendingApprovalTimeoutMinutes = 15;
+    const int PawClientListHeartbeatSec = 10;
     static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(6);
+
+    string _lastPawClientsSig = "";
+    DateTime _lastPawClientsSentAt = DateTime.MinValue;
 
     // Explicit allow-list for commands relayed through PAW; update_push and auth_response are never relayed
     static readonly HashSet<string> PawAllowedCmds = new(StringComparer.Ordinal)
@@ -208,6 +212,9 @@ public sealed class ServerEngine : IDisposable
         cl.IsPaw = nowPaw;
         if (nowPaw) { try { cl.Send(new ServerCommand { Cmd = "paw_granted" }); } catch { } _log.Add($"🔑 PAW: {machine}", Th.Mag); }
         else { try { cl.Send(new ServerCommand { Cmd = "paw_revoked" }); } catch { } _log.Add($"PAW revoked: {machine}", Th.Dim); }
+        // Force the next UpdateModes tick to send paw_clients so the newly promoted client
+        // gets a snapshot immediately instead of waiting up to PawClientListHeartbeatSec.
+        _lastPawClientsSentAt = DateTime.MinValue;
         return true;
     }
 
@@ -374,10 +381,16 @@ public sealed class ServerEngine : IDisposable
                 LogSink.Info("Server.Auth", $"Expired pending approval for {pending.MachineName}");
             }
 
-            var onlineNames = _cls.Keys.ToList();
+            var onlineNames = _cls.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList();
             var offlineNames = _store.All()
                 .Where(a => !a.Revoked && !_cls.ContainsKey(a.Name))
-                .Select(a => a.Name).ToList();
+                .Select(a => a.Name)
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToList();
+
+            string sig = string.Join("|", onlineNames) + "" + string.Join("|", offlineNames);
+            bool broadcastPaw = sig != _lastPawClientsSig
+                || (DateTime.UtcNow - _lastPawClientsSentAt).TotalSeconds >= PawClientListHeartbeatSec;
 
             var idleCutoff = DateTime.UtcNow.AddMinutes(-IdleTimeoutMinutes);
             foreach (var kv in _cls)
@@ -393,8 +406,14 @@ public sealed class ServerEngine : IDisposable
                     cl.SendMode = desired;
                     try { cl.Send(new ServerCommand { Cmd = "mode", Mode = desired }); } catch { }
                 }
-                if (cl.IsPaw)
+                if (cl.IsPaw && broadcastPaw)
                     try { cl.Send(new ServerCommand { Cmd = "paw_clients", PawClientList = onlineNames, PawOfflineClients = offlineNames }); } catch { }
+            }
+
+            if (broadcastPaw)
+            {
+                _lastPawClientsSig = sig;
+                _lastPawClientsSentAt = DateTime.UtcNow;
             }
         }
         catch { }
