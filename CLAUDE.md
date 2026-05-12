@@ -55,7 +55,10 @@ cpumon.server/
   email.cs         — EmailSecurity, AlertConfig, AlertConfigStore, AlertService,
                      AlertConfigDialog (SMTP/STARTTLS/SMTPS via MailKit)
   updatechecker.cs — UpdateChecker (polls api.github.com/repos/{Repo}/releases/latest)
-                     and ReleaseInfo record carrying tag, version, download URL, asset size
+                     and ReleaseInfo record carrying tag, version, all asset URLs and
+                     the SHA256SUMS URL.
+  releasestager.cs — ReleaseStager.StageAsync downloads + SHA256-verifies + extracts a
+                     ReleaseInfo's zips into %ProgramData%\CpuMon\releases\vX.Y.Z\
 
 cpumon.tests/
   Program.cs — 13 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
@@ -122,6 +125,8 @@ cpumon.linux/
 **`ServerCommand.IssuedAtMs`:** set by the PAW client on `paw_command` messages. The server rejects commands more than 60 s old. The nonce prevents replay within the window.
 
 **`UpdateChecker`:** server-only background task. Polls `https://api.github.com/repos/johanbogg/cpumon/releases/latest` 30 s after startup, then every 6 h. Failures log at debug and are silent in the UI. `_availableUpdate` only updates the UI on a *version change* — re-detecting the same version does not re-notify. The `ReleaseInfo` record carries the asset download URL and a (currently always null) SHA256 slot to make Tier 2 self-update straightforward.
+
+**`ReleaseStager`:** when `UpdateCheckLoop` detects a new version, it kicks off a background `ReleaseStager.StageAsync` task that downloads the client/server/linux zips and `SHA256SUMS-X.Y.Z.txt` to `%ProgramData%\CpuMon\releases\vX.Y.Z\`, verifies each zip's SHA256 against the SUMS file, extracts each into a `client/`/`server/`/`linux/` subfolder, writes `release-notes.md`, and drops a `stage.ok` marker so subsequent runs short-circuit. If SHA256SUMS is unavailable on the release (pre-SUG-022 tags), staging proceeds without hash verification and logs a warning. Old staged folders are pruned to `KeepRecentReleases` (currently 2). `_stagedReleaseDir` is exposed on the engine; the status bar shows `↑ Update v…` while downloading and switches to `📁 v… ready` once staged, at which point a click opens the staged folder in Explorer (a small `Notes` button keeps the GitHub release page one click away).
 
 **Server-side approval flow:** when a client sends `auth` with `ApprovalRequested = true` (no token, no stored key), the server inserts it into `_pendingApprovals` (`ConcurrentDictionary<string, PendingClientApproval>`) and renders an "AWAITING APPROVAL" card. `ApprovePending` mints a 32-byte key, persists via `_store.Approve`, and sends `auth_response`. Pending approvals expire after `PendingApprovalTimeoutMinutes` (15) so abandoned requests don't pile up.
 

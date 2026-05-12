@@ -13,7 +13,10 @@ public sealed record ReleaseInfo(
     string? ServerAssetSha256,
     long ServerAssetSize,
     DateTime PublishedAt,
-    string? Notes
+    string? Notes,
+    string? ClientAssetUrl = null,
+    string? LinuxAssetUrl = null,
+    string? ChecksumsUrl = null
 );
 
 public sealed class UpdateChecker
@@ -39,24 +42,30 @@ public sealed class UpdateChecker
             if (!Versioning.TryNormalize(release.TagName, out _, out var version)) return null;
             if (!Versioning.IsNewer(version, Proto.AppVersion)) return null;
 
-            string assetPattern = $"cpumon-server-{version}.zip";
-            string? assetUrl = null;
-            long assetSize = 0;
+            string? serverUrl = null, clientUrl = null, linuxUrl = null, sumsUrl = null;
+            long serverSize = 0;
+            string serverName = $"cpumon-server-{version}.zip";
+            string clientName = $"cpumon-client-{version}.zip";
+            string linuxName  = $"cpumon-linux-{version}.zip";
+            string sumsName   = $"SHA256SUMS-{version}.txt";
             if (release.Assets != null)
             {
                 foreach (var a in release.Assets)
                 {
-                    if (a.Name != null && string.Equals(a.Name, assetPattern, StringComparison.OrdinalIgnoreCase))
-                    {
-                        assetUrl = a.BrowserDownloadUrl;
-                        assetSize = a.Size;
-                        break;
-                    }
+                    if (a.Name == null) continue;
+                    if      (string.Equals(a.Name, serverName, StringComparison.OrdinalIgnoreCase)) { serverUrl = a.BrowserDownloadUrl; serverSize = a.Size; }
+                    else if (string.Equals(a.Name, clientName, StringComparison.OrdinalIgnoreCase)) { clientUrl = a.BrowserDownloadUrl; }
+                    else if (string.Equals(a.Name, linuxName,  StringComparison.OrdinalIgnoreCase)) { linuxUrl  = a.BrowserDownloadUrl; }
+                    else if (string.Equals(a.Name, sumsName,   StringComparison.OrdinalIgnoreCase)) { sumsUrl   = a.BrowserDownloadUrl; }
                 }
             }
 
             string releaseUrl = release.HtmlUrl ?? $"https://github.com/{Repo}/releases/tag/{release.TagName}";
-            return new ReleaseInfo(release.TagName, version, releaseUrl, assetUrl, null, assetSize, release.PublishedAt, release.Body);
+            return new ReleaseInfo(
+                release.TagName, version, releaseUrl,
+                serverUrl, null, serverSize,
+                release.PublishedAt, release.Body,
+                clientUrl, linuxUrl, sumsUrl);
         }
         catch (Exception ex)
         {

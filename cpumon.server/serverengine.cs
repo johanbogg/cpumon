@@ -29,6 +29,7 @@ public sealed class ServerEngine : IDisposable
     readonly AlertService _alertSvc;
     readonly UpdateChecker _updater = new();
     volatile ReleaseInfo? _availableUpdate;
+    volatile string? _stagedReleaseDir;
     string _tok;
     DateTime _tokAt;
     volatile int _cc;
@@ -74,6 +75,7 @@ public sealed class ServerEngine : IDisposable
     public AlertService Alerts => _alertSvc;
     public CLog Log => _log;
     public ReleaseInfo? AvailableUpdate => _availableUpdate;
+    public string? StagedReleaseDir => _stagedReleaseDir;
 
     public event Action<RemoteClient>? ProcessListReceived;
     public event Action<RemoteClient>? SysInfoReceived;
@@ -81,6 +83,7 @@ public sealed class ServerEngine : IDisposable
     public event Action<RemoteClient>? EventsReceived;
     public event Action<RemoteClient, ScreenshotData>? ScreenshotReceived;
     public event Action? UpdateAvailable;
+    public event Action? ReleaseStaged;
 
     public void Start()
     {
@@ -473,10 +476,29 @@ public sealed class ServerEngine : IDisposable
             if (info != null && _availableUpdate?.Version != info.Version)
             {
                 _availableUpdate = info;
+                _stagedReleaseDir = ReleaseStager.IsStaged(info.TagName) ? ReleaseStager.StagedDirFor(info.TagName) : null;
                 _log.Add($"↑ Update available: v{info.Version}", Th.Cyan);
                 try { UpdateAvailable?.Invoke(); } catch { }
+                _ = Task.Run(() => StageReleaseAsync(info, ct), ct);
             }
             try { await Task.Delay(UpdateCheckInterval, ct).ConfigureAwait(false); } catch { return; }
+        }
+    }
+
+    async Task StageReleaseAsync(ReleaseInfo info, CancellationToken ct)
+    {
+        if (_stagedReleaseDir != null) return;
+        _log.Add($"Staging {info.TagName}…", Th.Dim);
+        var dir = await ReleaseStager.StageAsync(info, ct).ConfigureAwait(false);
+        if (dir != null)
+        {
+            _stagedReleaseDir = dir;
+            _log.Add($"↑ {info.TagName} staged: {dir}", Th.Cyan);
+            try { ReleaseStaged?.Invoke(); } catch { }
+        }
+        else
+        {
+            _log.Add($"Stage failed for {info.TagName}", Th.Org);
         }
     }
 

@@ -56,6 +56,7 @@ sealed class ServerForm : BorderlessForm
         _engine.EventsReceived += OnEngineEvents;
         _engine.ScreenshotReceived += OnEngineScreenshot;
         _engine.UpdateAvailable += OnEngineUpdateAvailable;
+        _engine.ReleaseStaged += OnEngineReleaseStaged;
 
         var appIcon = Th.MakeHexIcon(Th.Grn);
         Icon = appIcon;
@@ -95,6 +96,7 @@ sealed class ServerForm : BorderlessForm
             _engine.EventsReceived -= OnEngineEvents;
             _engine.ScreenshotReceived -= OnEngineScreenshot;
             _engine.UpdateAvailable -= OnEngineUpdateAvailable;
+            _engine.ReleaseStaged -= OnEngineReleaseStaged;
             _engine.Dispose();
         };
 
@@ -166,6 +168,12 @@ sealed class ServerForm : BorderlessForm
         BeginInvoke(() => _ct.Invalidate());
     }
 
+    void OnEngineReleaseStaged()
+    {
+        if (IsDisposed) return;
+        BeginInvoke(() => _ct.Invalidate());
+    }
+
     void OpenProcessDialog(string machine)
     {
         if (!_engine.Clients.TryGetValue(machine, out var cl)) return;
@@ -198,6 +206,15 @@ sealed class ServerForm : BorderlessForm
             if (a == "theme") { Th.Toggle(); break; }
             if (a == "alerts") { BeginInvoke(() => { using var d = new AlertConfigDialog(_engine.Alerts); if (d.ShowDialog(this) == DialogResult.OK) _ct.Invalidate(); }); break; }
             if (a == "openrelease")
+            {
+                // Prefer the locally staged folder when the release has been downloaded;
+                // fall back to the GitHub release page otherwise.
+                var staged = _engine.StagedReleaseDir;
+                string? target = staged != null && System.IO.Directory.Exists(staged) ? staged : _engine.AvailableUpdate?.ReleaseUrl;
+                if (target != null) { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true }); } catch (Exception ex) { LogSink.Warn("Server.UI", $"Failed to open update target {target}", ex); } }
+                break;
+            }
+            if (a == "openreleasenotes")
             {
                 var url = _engine.AvailableUpdate?.ReleaseUrl;
                 if (url != null) { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); } catch (Exception ex) { LogSink.Warn("Server.UI", $"Failed to open release URL {url}", ex); } }
@@ -314,7 +331,8 @@ sealed class ServerForm : BorderlessForm
 
     static string TooltipForAction(string action) => action switch
     {
-        "openrelease" => "Open the GitHub release page in your browser",
+        "openrelease" => "Open the staged folder in Explorer (or the GitHub release page if not yet staged)",
+        "openreleasenotes" => "Open the GitHub release page in your browser",
         _ => ""
     };
 
@@ -468,7 +486,13 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, bx, y + 23, 80, 24, "🔔 Alerts", _engine.Alerts.ThresholdsConfigured ? Th.Org : Th.Dim, "", "alerts"); bx += 88;
         var update = _engine.AvailableUpdate;
         if (update != null)
-            DrawBtn(g, bx, y + 23, 110, 24, $"↑ Update v{update.Version}", Th.Cyan, "", "openrelease");
+        {
+            bool staged = _engine.StagedReleaseDir != null;
+            string label = staged ? $"📁 v{update.Version} ready" : $"↑ Update v{update.Version}";
+            DrawBtn(g, bx, y + 23, 120, 24, label, Th.Cyan, "", "openrelease"); bx += 124;
+            if (staged)
+                DrawBtn(g, bx, y + 23, 56, 24, "Notes", Th.Dim, "", "openreleasenotes");
+        }
 
         using (var cf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var ccb = new SolidBrush(_engine.ConnectionCount > 0 ? Th.Grn : Th.Dim))
