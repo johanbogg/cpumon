@@ -19,6 +19,7 @@ internal static class Program
             TestSendPacerWakesOnDemand();
             TestApprovedClientAliasPersists();
             TestApprovedClientForgetPersists();
+            TestApprovedClientApprovePreservesMetadata();
             TestClientNeedsUpdate();
             TestServerEngineInitialState();
             TestServerEngineRegenerateToken();
@@ -184,6 +185,33 @@ internal static class Program
         var reloaded = new ApprovedClientStore(path);
         Assert(!reloaded.IsOk("DESKTOP-A", "keyA"), "forgotten client should be persisted as removed");
         Assert(reloaded.IsOk("DESKTOP-B", "keyB"), "non-forgotten client should still be approved after reload");
+    }
+
+    static void TestApprovedClientApprovePreservesMetadata()
+    {
+        using var td = new TempDir();
+        string path = Path.Combine(td.Path, "approved_clients.json");
+        var store = new ApprovedClientStore(path);
+
+        store.Approve("DESKTOP-X", "key1", "10.0.0.1", "salt1");
+        store.SetAlias("DESKTOP-X", "Kitchen PC");
+        store.SetMac("DESKTOP-X", "AA:BB:CC:DD:EE:FF");
+        store.SetPaw("DESKTOP-X", true);
+        store.Revoke("DESKTOP-X");
+        Assert(!store.IsOk("DESKTOP-X", "key1"), "client should be revoked");
+
+        store.Approve("DESKTOP-X", "key2", "10.0.0.2", "salt2");
+        Assert(store.IsOk("DESKTOP-X", "key2"), "re-approval should reactivate with new key");
+        Assert(!store.IsOk("DESKTOP-X", "key1"), "old key should no longer authenticate");
+        Assert(store.GetAlias("DESKTOP-X") == "Kitchen PC", "alias should survive re-approval");
+        Assert(store.GetMac("DESKTOP-X") == "AA:BB:CC:DD:EE:FF", "MAC should survive re-approval");
+        Assert(store.IsPaw("DESKTOP-X"), "PAW flag should survive re-approval");
+
+        var reloaded = new ApprovedClientStore(path);
+        Assert(reloaded.IsOk("DESKTOP-X", "key2"), "re-approved entry should reload with the new key");
+        Assert(reloaded.GetAlias("DESKTOP-X") == "Kitchen PC", "alias should reload after re-approval");
+        Assert(reloaded.GetMac("DESKTOP-X") == "AA:BB:CC:DD:EE:FF", "MAC should reload after re-approval");
+        Assert(reloaded.IsPaw("DESKTOP-X"), "PAW flag should reload after re-approval");
     }
 
     static void TestClientNeedsUpdate()

@@ -289,7 +289,27 @@ public sealed class ApprovedClientStore
     static readonly JsonSerializerOptions _saveOpts = new() { WriteIndented = true };
     public ApprovedClientStore(string? path = null) { _path = path ?? AppPaths.DataFile("approved_clients.json"); Load(); }
     public bool IsOk(string n, string k) { lock (_l) { return _c.TryGetValue(n, out var c) && c.Key == k && !c.Revoked; } }
-    public void Approve(string n, string k, string ip, string salt = "") { lock (_l) { _c[n] = new ApprovedClient { Name = n, Key = k, At = DateTime.UtcNow, Seen = DateTime.UtcNow, Ip = ip, Salt = salt }; Save(); } }
+    public void Approve(string n, string k, string ip, string salt = "")
+    {
+        lock (_l)
+        {
+            if (_c.TryGetValue(n, out var existing))
+            {
+                existing.Key = k;
+                existing.Ip = ip;
+                existing.Salt = salt;
+                existing.At = DateTime.UtcNow;
+                existing.Seen = DateTime.UtcNow;
+                existing.Revoked = false;
+                // Preserve user-set metadata: Alias, Mac, Paw
+            }
+            else
+            {
+                _c[n] = new ApprovedClient { Name = n, Key = k, At = DateTime.UtcNow, Seen = DateTime.UtcNow, Ip = ip, Salt = salt };
+            }
+            Save();
+        }
+    }
     public void Seen(string n) { lock (_l) { if (_c.TryGetValue(n, out var c)) { var now = DateTime.UtcNow; bool stale = (now - c.Seen) > TimeSpan.FromMinutes(5); c.Seen = now; if (stale) Save(); } } }
     public void Forget(string n) { lock (_l) { _c.Remove(n); Save(); } }
     public void Revoke(string n) { lock (_l) { if (_c.TryGetValue(n, out var c)) { c.Revoked = true; Save(); } } }
