@@ -190,18 +190,44 @@ sealed class CpuMonService : ServiceBase
                 catch (Exception ex) { LogSink.Warn("Service.AgentPipe", "Agent process authorization failed", ex); }
                 if (!authorized) { pipe.Dispose(); continue; }
 
+                // Read hello before publishing reader/writer under _agentLock; a peer that
+                // never sends hello must not stall every other path that takes the lock.
+                var localReader = new StreamReader(pipe, Encoding.UTF8);
+                var localWriter = new StreamWriter(pipe, Encoding.UTF8) { AutoFlush = false };
+
+                string? helloLine = null;
+                try
+                {
+                    var helloTask = Task.Run(localReader.ReadLine);
+                    var winner = await Task.WhenAny(helloTask, Task.Delay(TimeSpan.FromSeconds(5), ct)).ConfigureAwait(false);
+                    if (winner == helloTask)
+                    {
+                        helloLine = await helloTask.ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        LogSink.Warn("Service.AgentPipe", $"Agent pid {connectedAgentPid} did not send hello within 5s, dropping pipe");
+                        try { pipe.Dispose(); } catch { }
+                        try { await helloTask.ConfigureAwait(false); } catch { /* expected: pipe disposed */ }
+                    }
+                }
+                catch (Exception ex) { LogSink.Debug("Service.AgentPipe", "Hello read failed", ex); }
+
+                if (helloLine == null)
+                {
+                    try { localReader.Dispose(); } catch { }
+                    try { localWriter.Dispose(); } catch { }
+                    try { pipe.Dispose(); } catch { }
+                    continue;
+                }
+
                 lock (_agentLock)
                 {
                     _agentPipe = pipe;
-                    _agentReader = new StreamReader(pipe, Encoding.UTF8);
-                    _agentWriter = new StreamWriter(pipe, Encoding.UTF8) { AutoFlush = false };
+                    _agentReader = localReader;
+                    _agentWriter = localWriter;
                     _agentProcessId = connectedAgentPid;
                 }
-
-                // Consume the hello line sent by the agent for protocol sync
-                string? helloLine;
-                lock (_agentLock) { helloLine = _agentReader?.ReadLine(); }
-                if (helloLine == null) { pipe.Dispose(); continue; }
 
                 _agentConnected = true;
                 Interlocked.Exchange(ref _agentLastPong, DateTime.UtcNow.Ticks);
