@@ -194,9 +194,10 @@ The systemd service is named `cpumon` — `systemctl status cpumon`, `journalctl
 
 ---
 
-Windows clients can also request server-side approval instead of typing the invite token locally:
+Both Windows and Linux clients can also request server-side approval instead of typing the invite token locally:
 
-1. On the client prompt, choose **Approve on Server**.
+1. On a Windows client, click **Approve on Server** at the prompt.
+   On Linux, leave the token blank during `install.sh` (or set `CPUMON_APPROVAL_REQUEST=1` in `/etc/default/cpumon`, or pass `--approval-request` to `cpumon.py`).
 2. The server shows the machine under **AWAITING APPROVAL**.
 3. Click **Approve** on the server to issue and save a client key, or **Reject** to close the pending request.
 

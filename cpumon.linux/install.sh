@@ -35,9 +35,11 @@ require_payload() {
 read_existing_config() {
     existing_ip=""
     existing_token=""
+    existing_approval=""
     if [[ -f "$DEFAULTS_FILE" ]]; then
         existing_ip=$(grep -Po '(?<=^CPUMON_SERVER_IP=).*' "$DEFAULTS_FILE" || true)
         existing_token=$(grep -Po '(?<=^CPUMON_TOKEN=).*' "$DEFAULTS_FILE" || true)
+        existing_approval=$(grep -Po '(?<=^CPUMON_APPROVAL_REQUEST=).*' "$DEFAULTS_FILE" || true)
         blue "Existing config found in $DEFAULTS_FILE"
     fi
 }
@@ -95,6 +97,7 @@ source /etc/default/cpumon
 ARGS=()
 [[ -n "${CPUMON_SERVER_IP:-}" ]] && ARGS+=(--server-ip "$CPUMON_SERVER_IP")
 [[ -n "${CPUMON_TOKEN:-}"     ]] && ARGS+=(--token     "$CPUMON_TOKEN")
+[[ "${CPUMON_APPROVAL_REQUEST:-0}" == "1" ]] && ARGS+=(--approval-request)
 exec python3 /opt/cpumon/cpumon.py "${ARGS[@]}"
 WRAPPER
     chmod 755 "$INSTALL_DIR/start.sh"
@@ -103,6 +106,7 @@ WRAPPER
 write_defaults_file() {
     local server_ip="$1"
     local token="$2"
+    local approval="${3:-0}"
 
     cat > "$DEFAULTS_FILE" <<EOF
 # cpumon client configuration
@@ -111,6 +115,9 @@ write_defaults_file() {
 
 CPUMON_SERVER_IP=${server_ip}
 CPUMON_TOKEN=${token}
+# Set to 1 to request approval on the server instead of using a token.
+# The server admin clicks Approve in the Awaiting Approval list to issue a key.
+CPUMON_APPROVAL_REQUEST=${approval}
 EOF
     chmod 600 "$DEFAULTS_FILE"
 }
@@ -179,13 +186,24 @@ install() {
     read -rp "Server IP [${existing_ip:-auto-discover}]: " input_ip
     SERVER_IP="${input_ip:-$existing_ip}"
 
-    read -rp "Invite token [${existing_token:-prompt on first connect}]: " input_token
+    read -rp "Invite token [${existing_token:-leave blank to use server-side approval}]: " input_token
     TOKEN="${input_token:-$existing_token}"
+
+    APPROVAL="0"
+    if [[ -z "$TOKEN" ]]; then
+        local default_choice="Y"
+        [[ "$existing_approval" == "1" ]] && default_choice="Y"
+        read -rp "Use server-side approval instead of a token? [Y/n]: " input_approval
+        case "${input_approval:-$default_choice}" in
+            [Nn]*) APPROVAL="0" ;;
+            *)     APPROVAL="1" ;;
+        esac
+    fi
 
     echo
     install_dependencies yes
     write_program_files
-    write_defaults_file "$SERVER_IP" "$TOKEN"
+    write_defaults_file "$SERVER_IP" "$TOKEN" "$APPROVAL"
     write_service_file
     restart_service
 
@@ -193,11 +211,16 @@ install() {
     green "cpumon installed and started."
     print_useful_commands
 
-    if [[ -z "$TOKEN" ]]; then
+    if [[ -z "$TOKEN" && "$APPROVAL" != "1" ]]; then
         echo
         bold "No token set - on first connect the service will fail auth."
-        echo "Set CPUMON_TOKEN in $DEFAULTS_FILE and restart:"
+        echo "Set CPUMON_TOKEN or CPUMON_APPROVAL_REQUEST=1 in $DEFAULTS_FILE and restart:"
         echo "  systemctl restart cpumon"
+    elif [[ "$APPROVAL" == "1" ]]; then
+        echo
+        bold "Approve this client on the server."
+        echo "It will appear under 'Awaiting Approval' in the server window."
+        echo "Click Approve there; the service will then save its auth key automatically."
     fi
 }
 

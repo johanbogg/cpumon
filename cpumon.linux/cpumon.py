@@ -3,7 +3,7 @@
 cpumon Linux client  —  connects to a cpumon server.
 
 Usage:
-    cpumon.py [--server-ip IP] [--token TOKEN]
+    cpumon.py [--server-ip IP] [--token TOKEN | --approval-request]
 
 Requires: Python 3.8+
 Optional: pip install psutil   (enables CPU/RAM/disk metrics)
@@ -370,8 +370,11 @@ class _Upload:
 # ── Main client ───────────────────────────────────────────────────────────────
 
 class Client:
-    def __init__(self, server_ip=None, token=None):
+    def __init__(self, server_ip=None, token=None, approval_request=False):
         self._machine  = socket.gethostname()
+        self._approval_request = approval_request
+        self._approval_pending = False
+        self._approval_announced = False
         self._cpu_name = _cpu_name()
         self._mode     = "full"
 
@@ -485,9 +488,18 @@ class Client:
             msg["authKey"] = self._ak
         if self._tok:
             msg["token"] = self._tok
+        if self._approval_request and not self._ak and not self._tok:
+            msg["approvalRequested"] = True
+            self._approval_pending = True
+            if not self._approval_announced:
+                print(f"→ Requesting server-side approval as '{self._machine}'", flush=True)
+                self._approval_announced = True
         self._send(msg)
 
     def _prompt_token(self):
+        if self._approval_request:
+            # Approval-on-server mode: no token needed; we wait for an operator to click Approve.
+            return
         if sys.stdin.isatty():
             try:
                 t = input("Enter invite token from server: ").strip()
@@ -496,7 +508,7 @@ class Client:
                     return
             except (EOFError, KeyboardInterrupt):
                 pass
-        print("No token available — set --token or enter interactively.", file=sys.stderr)
+        print("No token available — set --token, --approval-request, or enter interactively.", file=sys.stderr)
         raise SystemExit(1)
 
     # ── Command dispatch ───────────────────────────────────────────────────
@@ -522,14 +534,18 @@ class Client:
                 self._ak  = cmd.get("authKey") or self._ak
                 if sid:
                     self._sid = sid
-                if self._tok:
-                    save_state(self._tok, self._ak, self._sid)
+                if self._tok or self._approval_pending:
+                    save_state(self._tok or "", self._ak, self._sid)
+                self._approval_pending = False
                 self._authenticated = True
                 self._wake.set()
                 print("✓ Authenticated", flush=True)
             else:
                 print("✗ Auth failed — clearing stored credentials", flush=True)
                 self._handle_auth_rejected("Auth failed")
+
+        elif c == "auth_pending":
+            print(f"… {cmd.get('message') or 'Awaiting approval on server'}", flush=True)
 
         elif c == "mode":
             self._mode = cmd.get("mode") or "full"
@@ -885,7 +901,7 @@ class Client:
                 except SystemExit:
                     break
 
-            if not self._tok and not self._ak:
+            if not self._tok and not self._ak and not self._approval_request:
                 self._prompt_token()
 
             try:
@@ -922,7 +938,7 @@ class Client:
                 break
 
             # If auth failed, prompt for a new token before retrying
-            if not self._tok and not self._ak:
+            if not self._tok and not self._ak and not self._approval_request:
                 self._prompt_token()
             time.sleep(3)
 
@@ -933,6 +949,8 @@ def main():
     ap = argparse.ArgumentParser(description="cpumon Linux client")
     ap.add_argument("--server-ip", "-ip",  metavar="IP",    help="Skip discovery, connect directly")
     ap.add_argument("--token",     "-t",   metavar="TOKEN", help="Invite token (first-time auth)")
+    ap.add_argument("--approval-request", "-a", action="store_true",
+                    help="Request server-side approval instead of using an invite token")
     args = ap.parse_args()
 
     if not _PSUTIL:
@@ -940,7 +958,8 @@ def main():
               file=sys.stderr)
 
     lock_fh = acquire_single_instance_lock()
-    client = Client(server_ip=args.server_ip, token=args.token)
+    client = Client(server_ip=args.server_ip, token=args.token,
+                    approval_request=args.approval_request)
 
     def _sig(signum, frame):
         client._running = False
