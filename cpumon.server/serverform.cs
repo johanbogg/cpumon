@@ -3,6 +3,8 @@ using System.Globalization;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -303,8 +305,24 @@ sealed class ServerForm : BorderlessForm
                 case "update":
                     BeginInvoke(() =>
                     {
-                        using var ofd = new OpenFileDialog { Title = "Select new client exe to push", Filter = "Executable|*.exe" };
+                        bool linux = ServerEngine.IsLinuxClient(cl);
+                        using var ofd = new OpenFileDialog
+                        {
+                            Title = linux ? "Select Linux cpumon.py or cpumon-linux release zip" : "Select new client exe to push",
+                            Filter = linux ? "Linux update|*.py;*.zip|Python script|*.py|Release zip|*.zip" : "Executable|*.exe"
+                        };
                         if (ofd.ShowDialog(this) != DialogResult.OK) return;
+                        if (linux)
+                        {
+                            if (!TryReadLinuxUpdatePayload(ofd.FileName, out var fileName, out var bytes, out var error))
+                            {
+                                _engine.Log.Add($"Linux update failed: {error}", Th.Red);
+                                return;
+                            }
+                            _engine.Log.Add($"Pushing Linux update -> {m}...", Th.Org);
+                            _engine.PushUpdatePayload(cl, fileName, bytes);
+                            return;
+                        }
                         _engine.Log.Add($"Pushing update → {m}…", Th.Org);
                         _engine.PushUpdate(cl, ofd.FileName);
                     });
@@ -370,20 +388,82 @@ sealed class ServerForm : BorderlessForm
         BeginInvoke(() =>
         {
             string filter = winClients.Count > 0 && linuxClients.Count > 0
-                ? "Client files|*.exe;*.py|Executables|*.exe|Python scripts|*.py"
-                : winClients.Count > 0 ? "Executable|*.exe" : "Python script|*.py";
+                ? "Client files|*.exe;*.py;*.zip|Executables|*.exe|Linux update|*.py;*.zip"
+                : winClients.Count > 0 ? "Executable|*.exe" : "Linux update|*.py;*.zip|Python script|*.py|Release zip|*.zip";
             using var ofd = new OpenFileDialog { Title = $"Select file to push to {_selectedMachines.Count} client(s)", Filter = filter };
             if (ofd.ShowDialog(this) != DialogResult.OK) return;
             string path = ofd.FileName;
-            bool isPy = path.EndsWith(".py", StringComparison.OrdinalIgnoreCase);
-            var targets = isPy ? linuxClients : winClients;
+            bool isLinuxPayload = path.EndsWith(".py", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+            var targets = isLinuxPayload ? linuxClients : winClients;
             if (targets.Count == 0) { _engine.Log.Add("No matching clients for selected file type", Th.Org); return; }
+            if (isLinuxPayload)
+            {
+                if (!TryReadLinuxUpdatePayload(path, out var fileName, out var bytes, out var error))
+                {
+                    _engine.Log.Add($"Linux update failed: {error}", Th.Red);
+                    return;
+                }
+                _engine.Log.Add($"Pushing Linux update -> {targets.Count} client(s)...", Th.Org);
+                _engine.PushUpdateMultiPayload(targets, fileName, bytes);
+                return;
+            }
             _engine.Log.Add($"Pushing update → {targets.Count} client(s)…", Th.Org);
             _engine.PushUpdateMulti(targets, path);
         });
     }
 
     // ── Painting ──
+
+    static bool TryReadLinuxUpdatePayload(string path, out string fileName, out byte[] bytes, out string error)
+    {
+        fileName = "cpumon.py";
+        bytes = Array.Empty<byte>();
+        error = "";
+        try
+        {
+            if (path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                using var zip = ZipFile.OpenRead(path);
+                var entry = zip.Entries.FirstOrDefault(e =>
+                    !string.IsNullOrEmpty(e.Name) &&
+                    string.Equals(e.Name, "cpumon.py", StringComparison.OrdinalIgnoreCase));
+                if (entry == null)
+                {
+                    error = "release zip did not contain cpumon.py";
+                    return false;
+                }
+                using var s = entry.Open();
+                using var ms = new MemoryStream();
+                s.CopyTo(ms);
+                bytes = ms.ToArray();
+            }
+            else
+            {
+                bytes = File.ReadAllBytes(path);
+            }
+
+            if (bytes.Length == 0)
+            {
+                error = "selected Linux update file is empty";
+                return false;
+            }
+
+            var head = System.Text.Encoding.UTF8.GetString(bytes, 0, Math.Min(bytes.Length, 4096));
+            if (!head.Contains("VERSION", StringComparison.Ordinal) ||
+                !head.Contains("cpumon", StringComparison.OrdinalIgnoreCase))
+            {
+                error = "selected file does not look like cpumon.py";
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
 
     void PaintContent(object? sender, PaintEventArgs e)
     {
@@ -714,7 +794,7 @@ sealed class ServerForm : BorderlessForm
         {
             DrawBtn(g, bx, by, 68, BtnH, "RDP", Th.Cyan, r.MachineName, "rdp"); bx += 76;
         }
-        if (!linux && ServerEngine.ClientNeedsUpdate(cl.ClientVersion))
+        if (ServerEngine.ClientNeedsUpdate(cl.ClientVersion))
             DrawBtn(g, bx, by, 80, BtnH, "Update", Th.Org, r.MachineName, "update");
 
         // Row 2 - info tools (left) + danger zone (right-aligned)

@@ -136,7 +136,7 @@ cpumon.linux/
 
 **Branded icon:** both exes embed `app.ico` via `<ApplicationIcon>` in their csprojs (green for server, blue for client). The same hex glyph is generated at runtime for tray icons via `Th.MakeHexIcon(Color)` / `Th.MakeHexIconBytes(Color)` in `cpumon.shared/ui.cs` — multi-size (16/32/48) PNG-in-ICO, tinted to any colour. Tray icons in `AgentContext` and `DaemonContext` recolour live based on connection state (Grn/Mag/Org/Red/Blu).
 
-**Version comparison invariant:** `UpdateChecker.IsNewer` (server polling GitHub) and `ServerEngine.ClientNeedsUpdate` (server checking connected client version) both go through `System.Version.TryParse` + numeric `>`/`<`. Always works at minor/major boundaries: `1.1.0 > 1.0.999` regardless of patch. Strings that fail to parse (e.g. Linux client's `"1.0.111-linux"` suffix) return `false` from both — meaning Linux clients are never flagged as outdated by the server UI and are expected to update via `install.sh update` instead.
+**Version comparison invariant:** `UpdateChecker.IsNewer` (server polling GitHub) and `ServerEngine.ClientNeedsUpdate` (server checking connected client version) both use `Versioning.TryNormalize`, which strips a leading `v`, keeps the numeric prefix, and normalizes to three parts. This handles minor/major boundaries (`1.1.0 > 1.0.999`) and Linux suffixes such as `1.1.19-linux`.
 
 **Disconnect cause tracking:** `_pendingPowerActions` (`Dictionary<string, PendingPowerAction>`) records that a `restart` or `shutdown` command was just sent. `HandleClient`'s finally block reads this within 5 minutes of disconnect and logs `"Disc: machine — restarting ✓"` instead of a plain disconnect. Distinguish restart vs shutdown via the record's `Label` field — do not collapse to a single bool.
 

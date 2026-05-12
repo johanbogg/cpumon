@@ -278,6 +278,13 @@ public sealed class ServerEngine : IDisposable
 
     public void PushUpdate(RemoteClient cl, string exePath) => Task.Run(() => DoPushUpdate(cl, exePath));
 
+    public void PushUpdatePayload(RemoteClient cl, string fileName, byte[] fileBytes) =>
+        Task.Run(() =>
+        {
+            string fileHash = Convert.ToBase64String(SHA256.HashData(fileBytes));
+            PushUpdateFromBytes(cl, fileName, fileBytes, fileHash);
+        });
+
     void DoPushUpdate(RemoteClient cl, string exePath)
     {
         try
@@ -315,6 +322,17 @@ public sealed class ServerEngine : IDisposable
     }
 
     public void PushUpdateMulti(IReadOnlyList<RemoteClient> clients, string exePath) => Task.Run(() => DoPushUpdateMulti(clients, exePath));
+
+    public void PushUpdateMultiPayload(IReadOnlyList<RemoteClient> clients, string fileName, byte[] fileBytes) =>
+        Task.Run(() =>
+        {
+            string fileHash = Convert.ToBase64String(SHA256.HashData(fileBytes));
+            foreach (var cl in clients)
+            {
+                var capture = cl;
+                Task.Run(() => PushUpdateFromBytes(capture, fileName, fileBytes, fileHash));
+            }
+        });
 
     void DoPushUpdateMulti(IReadOnlyList<RemoteClient> clients, string exePath)
     {

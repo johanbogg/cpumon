@@ -25,7 +25,7 @@ Windows server · Windows clients · Linux clients (Python)
 - **PAW mode** — designate a client as a Privileged Access Workstation; it gets a full dashboard mirroring the server UI and can relay commands to other clients through the server
 - **Auto-discovery** — clients find the server automatically via UDP beacon; direct IP override available
 - **Per-client mode control** — server switches Windows clients between 1-second live reporting and idle keepalive pings based on whether the card is expanded; Linux clients use monitor mode while collapsed to avoid stale UI flicker
-- **Auto-update for clients** — server can push a new client exe; service applies it via a scheduled task. Linux clients update via `install.sh update`.
+- **Auto-update for clients** — server can push a new Windows client exe; service applies it via a scheduled task. Linux clients can update via `install.sh update` from a release zip or by pushing `cpumon.py` / `cpumon-linux-*.zip` from the server.
 - **GitHub update check** — server polls GitHub releases every 6 hours and surfaces a "↑ Update vX.Y.Z" button in the status bar when a newer release is available
 - **Light / dark theme** — toggle from the status bar; all custom GDI rendering refreshes immediately
 - **Close-to-tray (server)** — closing the server window hides it to the systray and keeps it running; double-click the tray icon to restore. Minimize (─) goes to the taskbar as normal. Tray right-click menu offers Show / Exit.
@@ -75,7 +75,7 @@ The service launches an agent process in the interactive user session automatica
 
 ### Linux client
 
-`cpumon.linux/cpumon.py` implements the same protocol as the Windows clients. It supports: reports, keepalives, process list, sysinfo, terminal (full PTY via `pty.openpty()`), file browser, and `systemctl` service management. Updates are applied via `sudo bash install.sh update` from a downloaded release zip. RDP, PAW relay, server-pushed `update_push`, and the Windows event viewer are not implemented on Linux.
+`cpumon.linux/cpumon.py` implements the same protocol as the Windows clients. It supports: reports, keepalives, process list, sysinfo, terminal (full PTY via `pty.openpty()`), file browser, `systemctl` service management, and server-pushed script updates. Updates can be applied via `sudo bash install.sh update` from a downloaded release zip, or by selecting a Linux client in the server and pushing either `cpumon.py` or a `cpumon-linux-*.zip` release asset. RDP, PAW relay, and the Windows event viewer are not implemented on Linux.
 
 ### PAW relay
 
