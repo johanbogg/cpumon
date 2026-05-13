@@ -61,14 +61,15 @@ cpumon.server/
                      ReleaseInfo's zips into %ProgramData%\CpuMon\releases\vX.Y.Z\
 
 cpumon.tests/
-  Program.cs — 13 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
+  Program.cs — 15 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
               TestReceiveChunkCompletesAndValidatesOffsets, TestReceiveChunkReplacesDuplicateTransfer,
               TestLineLengthLimitedStream, TestUpdateIntegrity,
               TestSendPacerWakesOnModeChange, TestSendPacerWakesOnDemand,
               TestApprovedClientAliasPersists, TestApprovedClientForgetPersists,
+              TestApprovedClientApprovePreservesMetadata,
               TestClientNeedsUpdate, TestServerEngineInitialState,
               TestServerEngineRegenerateToken, TestServerEnginePendingApprovalMissing,
-              TestVersionComparisonAcrossMinor
+              TestVersionComparisonAcrossMinor, TestLinuxUpdatePayload
 
 tools/
   iconGen/    — one-shot console tool that calls Th.MakeHexIconBytes(Color)

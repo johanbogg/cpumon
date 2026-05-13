@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.IO.Compression;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,6 +26,7 @@ internal static class Program
             TestServerEngineRegenerateToken();
             TestServerEnginePendingApprovalMissing();
             TestVersionComparisonAcrossMinor();
+            TestLinuxUpdatePayload();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -258,6 +260,53 @@ internal static class Program
         Assert(Versioning.IsOlder("1.0.111-linux", "1.1.2"), "Linux suffix should still compare numerically");
         Assert(!Versioning.IsNewer("v1.1.0.0", "1.1.0"), "1.1.0.0 should normalize to 1.1.0");
         Assert(Versioning.TryNormalize("v1.1.2-linux", out var linuxVersion, out var linuxText) && linuxVersion.ToString(3) == "1.1.2" && linuxText == "1.1.2", "suffixed versions should normalize to three parts");
+    }
+
+    static void TestLinuxUpdatePayload()
+    {
+        using var td = new TempDir();
+        const string realScript = "#!/usr/bin/env python3\n# cpumon Linux client\nVERSION = \"1.2.3-linux\"\n";
+
+        string py = Path.Combine(td.Path, "cpumon.py");
+        File.WriteAllText(py, realScript);
+        Assert(LinuxUpdatePayload.TryRead(py, out var name1, out var bytes1, out var err1), "valid cpumon.py should pass: " + err1);
+        Assert(name1 == "cpumon.py", "fileName should be cpumon.py for a .py input");
+        Assert(Encoding.UTF8.GetString(bytes1) == realScript, "bytes should match the script");
+
+        string empty = Path.Combine(td.Path, "empty.py");
+        File.WriteAllBytes(empty, Array.Empty<byte>());
+        Assert(!LinuxUpdatePayload.TryRead(empty, out _, out _, out var err2), "empty file should fail");
+        Assert(err2.Contains("empty", StringComparison.OrdinalIgnoreCase), "error should mention empty");
+
+        string bogus = Path.Combine(td.Path, "bogus.py");
+        File.WriteAllText(bogus, "print('hello world')\n");
+        Assert(!LinuxUpdatePayload.TryRead(bogus, out _, out _, out var err3), "non-cpumon python should fail validation");
+        Assert(err3.Contains("does not look like cpumon.py", StringComparison.Ordinal), "error should mention header check");
+
+        string zipPath = Path.Combine(td.Path, "cpumon-linux-1.2.3.zip");
+        using (var fs = File.Create(zipPath))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+        {
+            var entry = zip.CreateEntry("cpumon-linux-1.2.3/cpumon.py");
+            using var es = entry.Open();
+            byte[] payload = Encoding.UTF8.GetBytes(realScript);
+            es.Write(payload, 0, payload.Length);
+        }
+        Assert(LinuxUpdatePayload.TryRead(zipPath, out var name4, out var bytes4, out var err4), "release zip with cpumon.py should pass: " + err4);
+        Assert(name4 == "cpumon.py", "fileName should be cpumon.py for a zip input");
+        Assert(Encoding.UTF8.GetString(bytes4) == realScript, "extracted bytes should match script");
+
+        string emptyZip = Path.Combine(td.Path, "no-py.zip");
+        using (var fs = File.Create(emptyZip))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+        {
+            var entry = zip.CreateEntry("README.txt");
+            using var es = entry.Open();
+            byte[] payload = Encoding.UTF8.GetBytes("nothing to see");
+            es.Write(payload, 0, payload.Length);
+        }
+        Assert(!LinuxUpdatePayload.TryRead(emptyZip, out _, out _, out var err5), "zip without cpumon.py should fail");
+        Assert(err5.Contains("did not contain cpumon.py", StringComparison.Ordinal), "error should mention missing cpumon.py");
     }
 
     static void TestServerEnginePendingApprovalMissing()
