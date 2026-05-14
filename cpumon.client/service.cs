@@ -814,6 +814,10 @@ static class ServiceManager
     public static void Install(string? forceIp, string? token)
     {
         if (!IsAdmin()) { Console.Error.WriteLine("ERROR: --install requires administrator privileges."); return; }
+        if (!IsValidServiceInstallArg(forceIp, allowEmpty: true, requireIp: true))
+            throw new ArgumentException("Invalid --server-ip. Use a literal IPv4 or IPv6 address.");
+        if (!IsValidServiceInstallArg(token, allowEmpty: true, requireIp: false))
+            throw new ArgumentException("Invalid --token. Tokens must be alphanumeric.");
 
         string src  = Environment.ProcessPath ?? throw new InvalidOperationException("Cannot determine exe path.");
         string dest = Path.Combine(InstallDir, Path.GetFileName(src));
@@ -823,8 +827,8 @@ static class ServiceManager
         if (!string.Equals(Path.GetFullPath(src), Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase))
             File.Copy(src, dest, overwrite: true);
 
-        // Build service binary path (C:\ProgramData\CpuMon has no spaces — no inner quoting needed)
-        string binPath = $"{dest} --service";
+        // Quote the executable inside the SCM ImagePath so Program Files paths remain unambiguous.
+        string binPath = $"{QuoteServiceArg(dest)} --service";
         if (forceIp != null) binPath += $" --server-ip {forceIp}";
         if (token   != null) binPath += $" --token {token}";
 
@@ -848,6 +852,23 @@ static class ServiceManager
         Console.WriteLine($"  Exe:     {dest}");
         Console.WriteLine($"  Service: {SvcName}  (auto-start, LocalSystem)");
         Console.WriteLine($"  Agent:   {AgentTask}  (on user logon, highest privilege)");
+    }
+
+    static bool IsValidServiceInstallArg(string? value, bool allowEmpty, bool requireIp)
+    {
+        if (string.IsNullOrEmpty(value)) return allowEmpty;
+        if (value.IndexOfAny(new[] { '"', '\r', '\n', '\\' }) >= 0) return false;
+        if (requireIp) return IPAddress.TryParse(value, out _);
+        foreach (char ch in value)
+            if (!char.IsAsciiLetterOrDigit(ch))
+                return false;
+        return true;
+    }
+
+    static string QuoteServiceArg(string value)
+    {
+        if (value.Contains('"')) throw new ArgumentException("Path cannot contain quotes.", nameof(value));
+        return "\"" + value + "\"";
     }
 
     public static void Uninstall()

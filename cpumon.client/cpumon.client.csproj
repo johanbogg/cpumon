@@ -15,7 +15,7 @@
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\CpuMon.Shared\CpuMon.Shared.csproj" />
+    <ProjectReference Include="..\cpumon.shared\cpumon.shared.csproj" />
   </ItemGroup>
 
   <Target Name="GitVersion" BeforeTargets="CoreCompile;GetAssemblyVersion">
@@ -23,9 +23,10 @@
       <Output TaskParameter="ConsoleOutput" PropertyName="GitCount" />
     </Exec>
     <PropertyGroup>
-      <GitCount Condition="'$(GitCount)' == ''">0</GitCount>
+      <GitCount Condition="'$(GitCount)' == ''">149</GitCount>
       <VersionBaseline>149</VersionBaseline>
       <Patch>$([MSBuild]::Subtract($(GitCount.Trim()), $(VersionBaseline)))</Patch>
+      <Patch Condition="$(Patch) &lt; 0">0</Patch>
       <Version>1.1.$(Patch)</Version>
       <AssemblyVersion>1.1.$(Patch).0</AssemblyVersion>
       <FileVersion>1.1.$(Patch).0</FileVersion>

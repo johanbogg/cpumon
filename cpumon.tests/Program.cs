@@ -15,6 +15,7 @@ internal static class Program
             TestReceiveChunkCompletesAndValidatesOffsets();
             TestReceiveChunkReplacesDuplicateTransfer();
             TestLineLengthLimitedStream();
+            TestSecurityTokenFormat();
             TestUpdateIntegrity();
             TestSendPacerWakesOnModeChange();
             TestSendPacerWakesOnDemand();
@@ -119,6 +120,14 @@ internal static class Program
         Array.Fill<byte>(longBytes, (byte)'a');
         using var tooLong = new LineLengthLimitedStream(new MemoryStream(longBytes));
         AssertThrows<IOException>(() => tooLong.Read(new byte[longBytes.Length], 0, longBytes.Length), "long line should throw");
+    }
+
+    static void TestSecurityTokenFormat()
+    {
+        string token = Security.GenToken();
+        Assert(token.Length == 24, "invite token should be 24 hex characters");
+        foreach (char ch in token)
+            Assert(Uri.IsHexDigit(ch), "invite token should contain only hex characters");
     }
 
     static void TestUpdateIntegrity()

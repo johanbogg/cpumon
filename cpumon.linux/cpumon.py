@@ -47,6 +47,7 @@ MONITOR_MS  = 30.0
 LINUX_MONITOR_MS = 15.0
 KA_MS       = 60.0
 MAX_LINE_BYTES = 4 * 1024 * 1024  # mirrors Proto.MaxLineBytes on the C# side
+MAX_UPDATE_BYTES = 50 * 1024 * 1024
 VERSION     = "0.0.0-linux"
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -393,6 +394,8 @@ class Client:
         self._terminals:  dict[str, TerminalSession] = {}
         self._uploads:    dict[str, _Upload]         = {}
         self._update_fh:  object                     = None  # open file handle during update_push
+        self._update_tid: str | None                 = None
+        self._update_tmp: str | None                 = None
 
         stored_tok, stored_key, stored_sid = load_state()
         self._tok = token or stored_tok
@@ -523,6 +526,13 @@ class Client:
         c      = cmd.get("cmd", "")
         cid    = cmd.get("cmdId")
 
+        if c == "auth_pending":
+            print(f"Awaiting approval: {cmd.get('message') or 'Awaiting approval on server'}", flush=True)
+            return
+
+        if c != "auth_response" and not self._authenticated:
+            return
+
         if c == "auth_response":
             if self._authenticated:
                 return  # Only accept auth_response once per connection
@@ -545,9 +555,6 @@ class Client:
             else:
                 print("✗ Auth failed — clearing stored credentials", flush=True)
                 self._handle_auth_rejected("Auth failed")
-
-        elif c == "auth_pending":
-            print(f"… {cmd.get('message') or 'Awaiting approval on server'}", flush=True)
 
         elif c == "mode":
             self._mode = cmd.get("mode") or "full"
@@ -784,39 +791,56 @@ class Client:
     def _handle_update_chunk(self, chunk: dict):
         script_path = os.path.realpath(__file__)
         tmp_path    = script_path + ".tmp"
+        tid         = chunk.get("transferId") or "__update__"
         offset      = chunk.get("offset", 0)
         data        = chunk.get("data", "")
         last        = chunk.get("isLast", False)
         h           = chunk.get("hash")
         try:
+            total = int(chunk.get("totalSize") or 0)
+            if total > MAX_UPDATE_BYTES or offset > MAX_UPDATE_BYTES:
+                self._discard_update()
+                print(f"Update refused: payload too large ({total} bytes)", flush=True)
+                return
             if offset == 0:
-                if self._update_fh:
-                    self._update_fh.close()
-                    self._update_fh = None
+                self._discard_update()
                 self._update_fh = open(tmp_path, "wb")
-            if self._update_fh is None:
+                self._update_tid = tid
+                self._update_tmp = tmp_path
+            if self._update_fh is None or self._update_tid != tid:
+                print("Update refused: transfer id mismatch", flush=True)
                 return
             if self._update_fh.tell() != offset:
                 expected = self._update_fh.tell()
-                self._update_fh.close()
-                self._update_fh = None
-                try: os.unlink(tmp_path)
-                except OSError: pass
+                self._discard_update()
                 print(f"Update offset mismatch: expected={expected} got={offset}", flush=True)
                 return
             if data:
-                self._update_fh.write(base64.b64decode(data))
+                decoded = base64.b64decode(data)
+                if offset + len(decoded) > MAX_UPDATE_BYTES:
+                    self._discard_update()
+                    print("Update refused: payload too large", flush=True)
+                    return
+                self._update_fh.write(decoded)
             if last:
                 self._update_fh.flush()
                 self._update_fh.close()
                 self._update_fh = None
+                self._update_tid = None
+                self._update_tmp = None
                 if not h:
                     try: os.unlink(tmp_path)
                     except OSError: pass
                     print("Update refused: no hash supplied", flush=True)
                     return
+                digest = hashlib.sha256()
                 with open(tmp_path, "rb") as f:
-                    actual = base64.b64encode(hashlib.sha256(f.read()).digest()).decode()
+                    while True:
+                        block = f.read(1 << 20)
+                        if not block:
+                            break
+                        digest.update(block)
+                actual = base64.b64encode(digest.digest()).decode()
                 if actual != h:
                     try: os.unlink(tmp_path)
                     except OSError: pass
@@ -826,11 +850,18 @@ class Client:
                 self._apply_update(script_path, tmp_path)
         except Exception as e:
             print(f"Update chunk error: {e}", flush=True)
-            if self._update_fh:
-                try: self._update_fh.close()
-                except Exception: pass
-                self._update_fh = None
-            try: os.unlink(tmp_path)
+            self._discard_update()
+
+    def _discard_update(self):
+        tmp = self._update_tmp
+        if self._update_fh:
+            try: self._update_fh.close()
+            except Exception: pass
+        self._update_fh = None
+        self._update_tid = None
+        self._update_tmp = None
+        if tmp:
+            try: os.unlink(tmp)
             except OSError: pass
 
     def _apply_update(self, script_path: str, tmp_path: str):
@@ -931,10 +962,7 @@ class Client:
                 for t in list(self._terminals.values()):
                     t.dispose()
                 self._terminals.clear()
-                if self._update_fh:
-                    try: self._update_fh.close()
-                    except Exception: pass
-                    self._update_fh = None
+                self._discard_update()
 
             if not self._running:
                 break

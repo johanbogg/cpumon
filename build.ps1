@@ -56,7 +56,8 @@ function Copy-LinuxClient([string]$src, [string]$out, [string]$ver) {
     if (Test-Path $py) {
         $content = Get-Content -LiteralPath $py -Raw
         $content = $content -replace '(?m)^VERSION\s*=\s*"[^"]*"', "VERSION     = `"$ver-linux`""
-        Set-Content -LiteralPath $py -Value $content -NoNewline -Encoding UTF8
+        $content = $content -replace "`r`n", "`n"
+        [System.IO.File]::WriteAllText($py, $content, [System.Text.UTF8Encoding]::new($false))
     }
 }
 

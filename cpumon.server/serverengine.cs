@@ -125,7 +125,7 @@ public sealed class ServerEngine : IDisposable
         cl.MachineName = pending.MachineName;
         cl.ClientVersion = pending.ClientVersion;
         cl.LastSeen = DateTime.UtcNow;
-        cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = key, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
+        TrySendAuthResponse(cl, new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = key, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
         cl.Send(new ServerCommand { Cmd = "mode", Mode = "full" });
         if (_cls.TryGetValue(pending.MachineName, out var prev) && !ReferenceEquals(prev, cl))
             AdoptPreviousClientState(prev, cl, disposePrevious: true);
@@ -138,7 +138,7 @@ public sealed class ServerEngine : IDisposable
     public bool RejectPending(string machine)
     {
         if (!_pendingApprovals.TryRemove(machine, out var pending)) return false;
-        try { pending.Client.Send(new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Rejected" }); } catch { }
+        try { TrySendAuthResponse(pending.Client, new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Rejected" }); } catch { }
         pending.Client.Dispose();
         _log.Add($"Rejected pending client: {pending.MachineName}", Th.Red);
         return true;
@@ -396,7 +396,7 @@ public sealed class ServerEngine : IDisposable
             foreach (var kv in _pendingApprovals.Where(kv => kv.Value.RequestedAt < pendingCutoff).ToList())
             {
                 if (!_pendingApprovals.TryRemove(kv.Key, out var pending)) continue;
-                try { pending.Client.Send(new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Approval request expired" }); } catch { }
+                try { TrySendAuthResponse(pending.Client, new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Approval request expired" }); } catch { }
                 pending.Client.Dispose();
                 _log.Add($"Expired pending approval: {pending.MachineName}", Th.Org);
                 LogSink.Info("Server.Auth", $"Expired pending approval for {pending.MachineName}");
@@ -593,6 +593,7 @@ public sealed class ServerEngine : IDisposable
 
                     if (msg.Type == "auth")
                     {
+                        if (cl.AuthResponseSent) continue;
                         string mn = msg.MachineName ?? "?";
                         name = mn;
 
@@ -601,7 +602,7 @@ public sealed class ServerEngine : IDisposable
                             cl.Authenticated = true; cl.AuthKey = msg.AuthKey; cl.MachineName = mn;
                             cl.ClientVersion = msg.AppVersion ?? "";
                             _store.Seen(mn);
-                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = msg.AuthKey, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
+                            TrySendAuthResponse(cl, new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = msg.AuthKey, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
                             cl.Send(new ServerCommand { Cmd = "mode", Mode = "full" });
                             _log.Add($"✓ {mn} re-auth", Th.Grn);
                             if (_cls.TryGetValue(mn, out var prev1) && !ReferenceEquals(prev1, cl))
@@ -618,7 +619,7 @@ public sealed class ServerEngine : IDisposable
                             _store.Approve(mn, ak, ip, salt);
                             cl.Authenticated = true; cl.AuthKey = ak; cl.MachineName = mn;
                             cl.ClientVersion = msg.AppVersion ?? "";
-                            cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = ak, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
+                            TrySendAuthResponse(cl, new ServerCommand { Cmd = "auth_response", AuthOk = true, AuthKey = ak, ServerId = CertificateStore.ServerCert().Thumbprint, PeerCount = _cls.Count });
                             cl.Send(new ServerCommand { Cmd = "mode", Mode = "full" });
                             _log.Add($"✓ {mn} approved", Th.Grn);
                             if (_cls.TryGetValue(mn, out var prev2) && !ReferenceEquals(prev2, cl))
@@ -639,7 +640,7 @@ public sealed class ServerEngine : IDisposable
                             continue;
                         }
 
-                        cl.Send(new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Invalid" });
+                        TrySendAuthResponse(cl, new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Invalid" });
                         _log.Add($"✕ Rejected {mn}", Th.Red);
                         break;
                     }
@@ -860,11 +861,19 @@ public sealed class ServerEngine : IDisposable
         {
             if (!ReferenceEquals(old.Client, pending.Client))
             {
-                try { old.Client.Send(new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Superseded by a newer approval request" }); } catch { }
+                try { TrySendAuthResponse(old.Client, new ServerCommand { Cmd = "auth_response", AuthOk = false, Message = "Superseded by a newer approval request" }); } catch { }
                 old.Client.Dispose();
             }
             return pending;
         });
+    }
+
+    static bool TrySendAuthResponse(RemoteClient cl, ServerCommand response)
+    {
+        if (cl.AuthResponseSent) return false;
+        cl.AuthResponseSent = true;
+        cl.Send(response);
+        return true;
     }
 
     static void AdoptPreviousClientState(RemoteClient previous, RemoteClient current, bool disposePrevious = false)

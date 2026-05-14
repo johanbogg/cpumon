@@ -518,6 +518,7 @@ public sealed class RemoteClient : IDisposable
     public List<EventLogEntry>? LastEvents { get; set; }
     public bool Expanded { get; set; }
     public bool Authenticated { get; set; }
+    public bool AuthResponseSent { get; set; }
     public string ClientVersion { get; set; } = "";
     public string AuthKey { get; set; } = "";
     public string SendMode { get; set; } = "full";

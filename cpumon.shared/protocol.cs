@@ -238,7 +238,7 @@ public sealed class SendPacer
 
 public static class Security
 {
-    public static string GenToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(18)).Replace('+', 'A').Replace('/', 'B')[..24];
+    public static string GenToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(12));
     public static string GenSalt() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
     // salt is a random per-enrollment value stored server-side; client never needs to derive this
     public static string DeriveKey(string tok, string machine, string salt = "") =>
