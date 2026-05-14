@@ -273,25 +273,30 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ## NIT / doc drift
 
 ### QA-038 — README "13 smoke tests" stale
+- **Status:** fixed in 9d38af7
 - **File:** `README.md:229`
 - **Fix:** Update to "15 smoke tests".
 
 ### QA-039 — CLAUDE.md mentions "single-instance mutex" that doesn't exist
+- **Status:** fixed in 9d38af7 (claim dropped from CLAUDE.md)
 - **File:** `CLAUDE.md` file-map entry for `cpumon.server/program.cs`
 - **Defect:** `program.cs` has no mutex. Multiple servers collide on TCP:47201 anyway.
 - **Fix:** Either implement the mutex, or drop the claim from CLAUDE.md.
 
 ### QA-040 — `cpumon.py` source VERSION drift
+- **Status:** fixed in 9d38af7
 - **File:** `cpumon.linux/cpumon.py:48`
 - **Defect:** Source says `1.0.111-linux`; `dist/linux/cpumon.py` says `1.1.19-linux`. Expected because `build.ps1` stamps the dist copy, but the stale source value confuses grep.
 - **Fix:** Set source to `0.0.0-linux` so the drift is intentional/obvious.
 
 ### QA-041 — `cpumon.py` uses PEP 585 syntax but claims 3.8+ support
+- **Status:** fixed in 9d38af7 (`from __future__ import annotations` added)
 - **File:** `cpumon.linux/cpumon.py:391-393`
 - **Defect:** `dict[str, ...]` requires Python 3.9+. Module docstring says 3.8+.
 - **Fix:** Either add `from __future__ import annotations` and document 3.8+, or bump the documented minimum to 3.9.
 
 ### QA-042 — `CmdExec.DisposeAll` cleans wrong directory
+- **Status:** fixed in 9d38af7
 - **File:** `cpumon.shared/services.cs:740`
 - **Defect:** Deletes `cpumon_update.exe.tmp` from `AppContext.BaseDirectory`, but `update_push` writes under `AppPaths.DataDir/updates/`.
 - **Fix:** Point the cleanup at the correct directory.
