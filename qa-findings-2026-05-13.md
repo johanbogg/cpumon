@@ -26,10 +26,11 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-001 — Update directory ACL not hardened (local SYSTEM LPE)
 
 - **Severity:** CRITICAL
+- **Status:** fixed (pending commit on this branch)
 - **File:** `cpumon.client/service.cs:354-381`
 - **Defect:** The service writes `cpumon_update.bat` under `%ProgramData%\CpuMon\updates\` and invokes `schtasks /run` to execute it as SYSTEM. `%ProgramData%` inherits `CREATOR OWNER` write permission, so a local non-admin user with write access to the directory can race-replace the batch between write and run.
 - **Impact:** Local privilege escalation to SYSTEM on any client machine.
-- **Fix:** At install time, set the updates directory ACL to `SYSTEM:F` + `BUILTIN\Administrators:F` only. Before running the batch, verify the file's owner and ACL via `GetSecurityInfo` and abort if untrusted principals have write access.
+- **Fix applied:** Added `EnsureHardenedDirectory(path)` that sets the directory ACL to SYSTEM + Administrators Full Control with inheritance disabled (so the parent's `CREATOR OWNER` / `Users` rights don't propagate). Called from both `HandleUpdateChunk` and `ApplyUpdate`. On a fresh transfer (`chunk.Offset == 0`) any pre-existing batch / log / exe / tmp in the dir is deleted, so files written next inherit the hardened parent ACL. Added `HasOnlyTrustedWriters(path)` that walks the file's ACL and refuses to schedule the task if any non-SYSTEM/Administrators principal holds write/modify/delete/change-perms — TOCTOU defense between writing the batch and `schtasks /run`.
 
 ---
 

@@ -304,11 +304,16 @@ sealed class CpuMonService : ServiceBase
         string updateTmp = updatePath + ".tmp";
         try
         {
-            Directory.CreateDirectory(updateDir);
-            if (chunk.Offset == 0 && _updateStream != null)
+            EnsureHardenedDirectory(updateDir);
+            if (chunk.Offset == 0)
             {
-                _updateStream.Dispose();
-                _updateStream = null;
+                if (_updateStream != null)
+                {
+                    _updateStream.Dispose();
+                    _updateStream = null;
+                }
+                foreach (string stale in new[] { updateTmp, updatePath, Path.Combine(updateDir, "cpumon_update.bat"), Path.Combine(updateDir, "cpumon_update.log") })
+                    try { if (File.Exists(stale)) File.Delete(stale); } catch (Exception ex) { LogSink.Debug("Service.Update", $"Failed to wipe stale {stale}", ex); }
             }
             if (_updateStream == null)
                 _updateStream = new FileStream(updateTmp, FileMode.Create, FileAccess.Write);
@@ -349,8 +354,10 @@ sealed class CpuMonService : ServiceBase
     {
         string exePath = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "cpumon.client.exe");
         string updateDir = Path.GetDirectoryName(updatePath) ?? AppPaths.DataDir;
+        EnsureHardenedDirectory(updateDir);
         string batPath = Path.Combine(updateDir, "cpumon_update.bat");
         string logPath = Path.Combine(updateDir, "cpumon_update.log");
+        try { if (File.Exists(batPath)) File.Delete(batPath); } catch (Exception ex) { LogSink.Debug("Service.Update", "Failed to remove stale batch", ex); }
         File.WriteAllText(batPath,
             "@echo off\r\n" +
             "setlocal\r\n" +
@@ -369,6 +376,12 @@ sealed class CpuMonService : ServiceBase
             "schtasks /delete /tn \"CpuMonUpdate\" /f > nul 2>&1\r\n" +
             "del \"%~f0\"\r\n");
         LogSink.Info("Service.Update", $"Staged update batch: {batPath}");
+        if (!HasOnlyTrustedWriters(batPath))
+        {
+            LogSink.Error("Service.Update", $"Refusing to run update: batch file ACL grants write to untrusted principals: {batPath}");
+            try { File.Delete(batPath); } catch { }
+            return;
+        }
         bool scheduled = RunUpdateProcess("schtasks.exe",
             $"/create /tn \"CpuMonUpdate\" /tr \"\\\"{batPath}\\\"\" /sc once /st 23:59 /f /ru SYSTEM /rl highest",
             logPath, "create task");
@@ -377,6 +390,56 @@ sealed class CpuMonService : ServiceBase
         {
             LogSink.Warn("Service.Update", "Scheduled update task did not start; falling back to detached batch launch");
             RunUpdateProcess("cmd.exe", $"/c start \"\" \"{batPath}\"", logPath, "fallback start");
+        }
+    }
+
+    static readonly SecurityIdentifier _systemSid = new(WellKnownSidType.LocalSystemSid, null);
+    static readonly SecurityIdentifier _adminsSid = new(WellKnownSidType.BuiltinAdministratorsSid, null);
+
+    static void EnsureHardenedDirectory(string path)
+    {
+        Directory.CreateDirectory(path);
+        var sec = new DirectorySecurity();
+        sec.SetOwner(_adminsSid);
+        sec.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        sec.AddAccessRule(new FileSystemAccessRule(_systemSid, FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None, AccessControlType.Allow));
+        sec.AddAccessRule(new FileSystemAccessRule(_adminsSid, FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(path).SetAccessControl(sec);
+    }
+
+    static bool HasOnlyTrustedWriters(string path)
+    {
+        const FileSystemRights writeMask =
+            FileSystemRights.WriteData |
+            FileSystemRights.AppendData |
+            FileSystemRights.WriteExtendedAttributes |
+            FileSystemRights.WriteAttributes |
+            FileSystemRights.Delete |
+            FileSystemRights.DeleteSubdirectoriesAndFiles |
+            FileSystemRights.ChangePermissions |
+            FileSystemRights.TakeOwnership |
+            FileSystemRights.FullControl |
+            FileSystemRights.Modify;
+        try
+        {
+            var rules = new FileInfo(path).GetAccessControl().GetAccessRules(true, true, typeof(SecurityIdentifier));
+            foreach (FileSystemAccessRule rule in rules)
+            {
+                if (rule.AccessControlType != AccessControlType.Allow) continue;
+                if ((rule.FileSystemRights & writeMask) == 0) continue;
+                var sid = (SecurityIdentifier)rule.IdentityReference;
+                if (!sid.Equals(_systemSid) && !sid.Equals(_adminsSid)) return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogSink.Error("Service.Update", $"Failed to read ACL of {path}", ex);
+            return false;
         }
     }
 
