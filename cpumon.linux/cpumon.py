@@ -9,6 +9,8 @@ Requires: Python 3.8+
 Optional: pip install psutil   (enables CPU/RAM/disk metrics)
 """
 
+from __future__ import annotations
+
 import argparse
 import base64
 import fcntl
@@ -45,7 +47,7 @@ MONITOR_MS  = 30.0
 LINUX_MONITOR_MS = 15.0
 KA_MS       = 60.0
 MAX_LINE_BYTES = 4 * 1024 * 1024  # mirrors Proto.MaxLineBytes on the C# side
-VERSION     = "1.0.111-linux"
+VERSION     = "0.0.0-linux"
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 

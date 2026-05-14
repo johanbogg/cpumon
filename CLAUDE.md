@@ -39,7 +39,7 @@ cpumon.client/
                     PawProcDialog, PawSysInfoDialog, PawServicesDialog
 
 cpumon.server/
-  program.cs       — entry point, single-instance mutex, launches ServerForm
+  program.cs       — entry point, launches ServerForm
   serverengine.cs  — ServerEngine (state + protocol loops): _cls, _pendingApprovals,
                      _store, _alertSvc, _updater, ListenLoop, HandleClient, BeaconLoop,
                      UpdateCheckLoop, UpdateModes, PAW relay, Approve/RejectPending,

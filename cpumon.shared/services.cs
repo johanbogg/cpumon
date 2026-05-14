@@ -735,7 +735,7 @@ public static class CmdExec
         foreach (var s in Sessions.Values) s.Dispose(); Sessions.Clear();
         foreach (var u in ActiveUploads.Values) u.Dispose(); ActiveUploads.Clear();
         foreach (var r in RdpSessions.Values) r.Dispose(); RdpSessions.Clear();
-        try { string t = Path.Combine(AppContext.BaseDirectory, "cpumon_update.exe.tmp"); if (File.Exists(t)) File.Delete(t); } catch { }
+        try { string t = Path.Combine(AppPaths.DataDir, "updates", "cpumon_update.exe.tmp"); if (File.Exists(t)) File.Delete(t); } catch { }
     }
 }
 
