@@ -26,7 +26,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-001 — Update directory ACL not hardened (local SYSTEM LPE)
 
 - **Severity:** CRITICAL
-- **Status:** fixed (pending commit on this branch)
+- **Status:** fixed in 709b406
 - **File:** `cpumon.client/service.cs:354-381`
 - **Defect:** The service writes `cpumon_update.bat` under `%ProgramData%\CpuMon\updates\` and invokes `schtasks /run` to execute it as SYSTEM. `%ProgramData%` inherits `CREATOR OWNER` write permission, so a local non-admin user with write access to the directory can race-replace the batch between write and run.
 - **Impact:** Local privilege escalation to SYSTEM on any client machine.
