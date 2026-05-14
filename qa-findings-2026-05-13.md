@@ -39,6 +39,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-002 — sc.exe binPath built from unvalidated install args
 
 - **Severity:** HIGH
+- **Status:** fixed in 4d2fe0b
 - **File:** `cpumon.client/service.cs:764-766`
 - **Defect:** `--server-ip` and `--token` are concatenated into the SCM `binPath` without escaping. A user passing `--token 'a" --do-bad x'` smuggles arguments into the service command line.
 - **Impact:** Argument smuggling at service install; would let an unprivileged installer trick an admin into running with attacker-chosen flags.
@@ -47,6 +48,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-003 — `Security.GenToken` collapses base64 alphabet
 
 - **Severity:** HIGH (cleanliness; entropy still safe in absolute terms)
+- **Status:** fixed in 4d2fe0b
 - **File:** `cpumon.shared/protocol.cs:241`
 - **Defect:** After generating 18 random bytes and base64-encoding, the code substitutes `+`→`A` and `/`→`B`. This collides genuine `A`/`B` outputs with substituted ones. Realistic entropy loss is ~6-10 bits.
 - **Impact:** ~130 bits of entropy remain (out of 144); not exploitable, but the construction is wrong and reviewers will flag it indefinitely.
@@ -55,6 +57,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-004 — Server-side "auth_response once per connection" invariant not enforced
 
 - **Severity:** HIGH
+- **Status:** fixed in 4d2fe0b
 - **File:** `cpumon.server/serverengine.cs:128, 601, 619`
 - **Defect:** CLAUDE.md documents that `auth_response` is accepted only once per connection. The Linux and Windows clients enforce this via `_authConfirmed`. The server does not — repeated `auth` messages on a single connection will trigger fresh `auth_response`s.
 - **Impact:** Bounded (malicious client is already authenticated), but the documented invariant is one-sided.
@@ -63,6 +66,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-005 — `paw_clients` signature collision
 
 - **Severity:** HIGH
+- **Status:** fixed in 595d4d5
 - **File:** `cpumon.server/serverengine.cs:412-413`
 - **Defect:** `string.Join("|", onlineNames) + "" + string.Join("|", offlineNames)` joins both lists with no separator. `["a"] online + ["b"] offline` hashes identically to `["a","b"] online + [] offline`, so PAW peers miss the transition until the 10 s heartbeat.
 - **Impact:** PAW dashboards show stale online/offline state for up to 10 s after a flip.
@@ -71,6 +75,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-006 — Linux client does not gate command dispatch on `_authenticated`
 
 - **Severity:** HIGH (downgraded from agent's CRITICAL — TLS+TOFU on connect already gates network attackers)
+- **Status:** fixed in 4d2fe0b
 - **File:** `cpumon.linux/cpumon.py:520-715`
 - **Defect:** `_handle` only checks `_authenticated` for the `auth_response` branch. `update_push`, `restart`, `start`, `file_*`, `kill` etc. are dispatched for any framed JSON on the TLS stream.
 - **Impact:** A legitimate-but-malicious server (which can also issue these post-auth anyway) gains a slightly earlier window. Network attackers cannot reach this code because of the TLS+TOFU pin in `_connect`.
@@ -79,6 +84,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-007 — Linux update hashing loads entire payload into memory
 
 - **Severity:** HIGH
+- **Status:** fixed in 4d2fe0b
 - **File:** `cpumon.linux/cpumon.py:817`
 - **Defect:** `hashlib.sha256(f.read())` reads the whole tmp file at once. No total-transfer cap on the receive side either.
 - **Impact:** A malicious authed server can stream multi-gigabyte updates and force OOM. Doubles memory footprint vs streaming hashing.
@@ -87,6 +93,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-008 — Linux update state shared across concurrent transfers
 
 - **Severity:** HIGH
+- **Status:** fixed in 4d2fe0b
 - **File:** `cpumon.linux/cpumon.py:782-824`
 - **Defect:** `_update_fh` is a singleton and `tmp_path` is always `<script>.tmp`. Two concurrent `update_push` transfers will interleave writes into the same file. The `offset==0` reset doesn't key on `transferId`.
 - **Impact:** Concurrent transfers corrupt each other; hash check fails on one or both; intermediate state may leak between transfers.
@@ -103,6 +110,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-010 — `build.ps1` regex rewrite may convert LF→CRLF in cpumon.py
 
 - **Severity:** HIGH
+- **Status:** fixed in 4d2fe0b
 - **File:** `build.ps1:50-61` (`Copy-LinuxClient`)
 - **Defect:** `Get-Content -Raw` followed by `Set-Content -Encoding UTF8` round-trips line endings using the system default. On Windows that's CRLF. The output ships into a Linux release zip; CRLF on the shebang line breaks `#!/usr/bin/env python3` on some systems.
 - **Impact:** Shipped Linux release zip may fail to execute the script on the target system.
@@ -111,6 +119,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-011 — `<GitCount>` can resolve to 0 → negative Patch
 
 - **Severity:** HIGH
+- **Status:** fixed in 4d2fe0b
 - **File:** `cpumon.client/cpumon.client.csproj:21-33`, `cpumon.server/cpumon.server.csproj:24-36`
 - **Defect:** The MSBuild target runs `git rev-list --count HEAD` with `IgnoreExitCode="true"`, then `<GitCount Condition="...''">0</GitCount>` defaults to 0 on failure. On a shallow clone or source-zip extraction (no git history), `Patch = 0 - 149 = -149` → `<Version>1.1.-149</Version>` — invalid SemVer.
 - **Impact:** CI builds on shallow clones produce invalid versions; source-zip builds fail at the NuGet pack step or downstream.
@@ -119,6 +128,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-012 — csproj ProjectReference casing mismatch
 
 - **Severity:** HIGH (portability)
+- **Status:** fixed in 4d2fe0b
 - **File:** `cpumon.client/cpumon.client.csproj:18`, `cpumon.server/cpumon.server.csproj:18`
 - **Defect:** References `..\CpuMon.Shared\CpuMon.Shared.csproj` (PascalCase). Actual folder is `cpumon.shared` (lowercase, matching `cpumon.tests` and `tools/iconGen` references).
 - **Impact:** Works on Windows (case-insensitive NTFS), breaks on any case-sensitive filesystem (Linux CI, source-archive extraction onto Linux).
