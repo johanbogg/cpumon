@@ -750,16 +750,23 @@ sealed class ServerForm : BorderlessForm
         bool isPaw = _engine.Store.IsPaw(r.MachineName);
         int rightStart = x + w - 14 - 74 - 68 - 82;
         if (!linux) rightStart -= 14 + 78;
-        DrawBtn(g, bx2, by2, 80, BtnH, "Procs", Th.Blu, r.MachineName, "processes"); bx2 += 88;
-        DrawBtn(g, bx2, by2, 60, BtnH, "Info", Th.Cyan, r.MachineName, "sysinfo"); bx2 += 68;
-        DrawBtn(g, bx2, by2, 70, BtnH, "Health", Th.Grn, r.MachineName, "health"); bx2 += 78;
+        bool TryDrawLeftBtn(int width, int step, string text, Color color, string action)
+        {
+            if (bx2 + width > rightStart - 8) return false;
+            DrawBtn(g, bx2, by2, width, BtnH, text, color, r.MachineName, action);
+            bx2 += step;
+            return true;
+        }
+
+        TryDrawLeftBtn(80, 88, "Procs", Th.Blu, "processes");
+        TryDrawLeftBtn(60, 68, "Info", Th.Cyan, "sysinfo");
+        TryDrawLeftBtn(70, 78, "Health", Th.Grn, "health");
         if (!linux)
         {
-            DrawBtn(g, bx2, by2, 92, BtnH, "Screenshot", Th.Cyan, r.MachineName, "screenshot"); bx2 += 100;
-            DrawBtn(g, bx2, by2, 74, BtnH, "Events", Th.Yel, r.MachineName, "events"); bx2 += 82;
+            TryDrawLeftBtn(92, 100, "Screenshot", Th.Cyan, "screenshot");
+            TryDrawLeftBtn(74, 82, "Events", Th.Yel, "events");
         }
-        if (bx2 + 68 <= rightStart - 8)
-            DrawBtn(g, bx2, by2, 68, BtnH, "Msg", Th.Dim, r.MachineName, "msg");
+        if (TryDrawLeftBtn(68, 76, "Msg", Th.Dim, "msg")) { }
         else if (row1NextX + 68 <= x + w - 14)
             DrawBtn(g, row1NextX, by, 68, BtnH, "Msg", Th.Dim, r.MachineName, "msg");
 
