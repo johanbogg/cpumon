@@ -31,7 +31,7 @@ sealed class ServerForm : BorderlessForm
         StartPosition = FormStartPosition.Manual;
         Location = new Point(50, 50);
         ClientSize = new Size(820, 640);
-        MinimumSize = new Size(560, 400);
+        MinimumSize = new Size(420, 400);
         BackColor = Th.Bg; ForeColor = Th.Brt;
         Font = new Font("Segoe UI", 9f);
         DoubleBuffered = true; ShowInTaskbar = true;
@@ -726,24 +726,33 @@ sealed class ServerForm : BorderlessForm
 
         // Row 1 - session launchers
         int by = y + hdrH + 6, bx = x + 14;
+        int rowLimit = x + w - 14;
+        bool TryDrawTopBtn(int width, int step, string text, Color color, string action)
+        {
+            if (bx + width > rowLimit) return false;
+            DrawBtn(g, bx, by, width, BtnH, text, color, r.MachineName, action);
+            bx += step;
+            return true;
+        }
+
         if (linux)
         {
-            DrawBtn(g, bx, by, 78, BtnH, "Bash", Th.Cyan, r.MachineName, "bash"); bx += 86;
+            TryDrawTopBtn(78, 86, "Bash", Th.Cyan, "bash");
         }
         else
         {
-            DrawBtn(g, bx, by, 72, BtnH, "CMD", Th.Cyan, r.MachineName, "cmd"); bx += 80;
-            DrawBtn(g, bx, by, 104, BtnH, "PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 112;
+            TryDrawTopBtn(72, 80, "CMD", Th.Cyan, "cmd");
+            TryDrawTopBtn(104, 112, "PowerShell", Th.Blu, "powershell");
         }
-        DrawBtn(g, bx, by, 74, BtnH, "Files", Th.Yel, r.MachineName, "files"); bx += 82;
-        DrawBtn(g, bx, by, 84, BtnH, "Services", Th.Grn, r.MachineName, "services"); bx += 92;
+        TryDrawTopBtn(74, 82, "Files", Th.Yel, "files");
+        TryDrawTopBtn(84, 92, "Services", Th.Grn, "services");
         if (!linux)
         {
-            DrawBtn(g, bx, by, 68, BtnH, "RDP", Th.Cyan, r.MachineName, "rdp"); bx += 76;
+            TryDrawTopBtn(68, 76, "RDP", Th.Cyan, "rdp");
         }
         if (ServerEngine.ClientNeedsUpdate(cl.ClientVersion))
-            DrawBtn(g, bx, by, 80, BtnH, "Update", Th.Org, r.MachineName, "update");
-        int row1NextX = bx + (ServerEngine.ClientNeedsUpdate(cl.ClientVersion) ? 88 : 0);
+            TryDrawTopBtn(80, 88, "Update", Th.Org, "update");
+        int row1NextX = bx;
 
         // Row 2 - info tools (left) + danger zone (right-aligned)
         int by2 = by + BtnH + BtnGap, bx2 = x + 14;
