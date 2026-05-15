@@ -155,6 +155,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-015 — `RdpCaptureSession.Dispose` closes dialogs from non-UI thread
 
 - **Severity:** MEDIUM
+- **Status:** superseded by refactor — `RdpCaptureSession.Dispose` (`cpumon.shared/services.cs:209-214`) now only sets `_disposed = true` and cancels `_cts`; it no longer touches Forms. Verified at HEAD on 2026-05-15.
 - **File:** `cpumon.shared/services.cs:~548`
 - **Defect:** `Form.Close()` from a worker thread throws `InvalidOperationException`. The empty `catch {}` swallows it and the dialog leaks.
 - **Fix:** Capture the `SynchronizationContext` at session start; marshal close via `BeginInvoke`.
@@ -317,6 +318,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 - **Fix:** Remove when fixing QA-005.
 
 ### QA-044 — `serverdialogs.cs:384` shadows `Form.Refresh()`
+- **Status:** fixed in 343098d
 - **File:** `cpumon.server/serverdialogs.cs:384`
 - **Defect:** `new void Refresh()` shadows the inherited method; works but confusing.
 - **Fix:** Rename to `RefreshData()` or `Reload()`.
