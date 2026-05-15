@@ -374,14 +374,14 @@ sealed class HealthDialog : Form
         Controls.Add(_rtb);
         Controls.Add(bp);
 
-        Refresh();
+        RefreshData();
         _timer = new Timer { Interval = 2000 };
-        _timer.Tick += (_, _) => Refresh();
+        _timer.Tick += (_, _) => RefreshData();
         _timer.Start();
         FormClosed += (_, _) => { _timer.Stop(); _timer.Dispose(); };
     }
 
-    new void Refresh()
+    void RefreshData()
     {
         var sb = new StringBuilder();
         bool linux = ServerEngine.IsLinuxClient(_cl);
