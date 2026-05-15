@@ -743,9 +743,13 @@ sealed class ServerForm : BorderlessForm
         }
         if (ServerEngine.ClientNeedsUpdate(cl.ClientVersion))
             DrawBtn(g, bx, by, 80, BtnH, "Update", Th.Org, r.MachineName, "update");
+        int row1NextX = bx + (ServerEngine.ClientNeedsUpdate(cl.ClientVersion) ? 88 : 0);
 
         // Row 2 - info tools (left) + danger zone (right-aligned)
         int by2 = by + BtnH + BtnGap, bx2 = x + 14;
+        bool isPaw = _engine.Store.IsPaw(r.MachineName);
+        int rightStart = x + w - 14 - 74 - 68 - 82;
+        if (!linux) rightStart -= 14 + 78;
         DrawBtn(g, bx2, by2, 80, BtnH, "Procs", Th.Blu, r.MachineName, "processes"); bx2 += 88;
         DrawBtn(g, bx2, by2, 60, BtnH, "Info", Th.Cyan, r.MachineName, "sysinfo"); bx2 += 68;
         DrawBtn(g, bx2, by2, 70, BtnH, "Health", Th.Grn, r.MachineName, "health"); bx2 += 78;
@@ -754,9 +758,11 @@ sealed class ServerForm : BorderlessForm
             DrawBtn(g, bx2, by2, 92, BtnH, "Screenshot", Th.Cyan, r.MachineName, "screenshot"); bx2 += 100;
             DrawBtn(g, bx2, by2, 74, BtnH, "Events", Th.Yel, r.MachineName, "events"); bx2 += 82;
         }
-        DrawBtn(g, bx2, by2, 68, BtnH, "Msg", Th.Dim, r.MachineName, "msg");
+        if (bx2 + 68 <= rightStart - 8)
+            DrawBtn(g, bx2, by2, 68, BtnH, "Msg", Th.Dim, r.MachineName, "msg");
+        else if (row1NextX + 68 <= x + w - 14)
+            DrawBtn(g, row1NextX, by, 68, BtnH, "Msg", Th.Dim, r.MachineName, "msg");
 
-        bool isPaw = _engine.Store.IsPaw(r.MachineName);
         int dx = x + w - 14;
         dx -= 74; DrawDangerBtn(g, dx, by2, 72, BtnH, "Forget", Th.Dim, r.MachineName, "forget");
         dx -= 68; DrawDangerBtn(g, dx, by2, 66, BtnH, "Off", Th.Red, r.MachineName, "shutdown");
