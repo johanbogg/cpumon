@@ -684,7 +684,7 @@ sealed class PawProcDialog : Form
             ? _all
             : _all.Where(p => p.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToList();
 
-        int? selPid = _grid.SelectedRows.Count > 0 ? _grid.SelectedRows[0].Cells["PID"].Value as int? : null;
+        int? selPid = _grid.SelectedRows.Count > 0 && _grid.SelectedRows[0].Cells["PID"].Value is int pid ? pid : null;
         _grid.SuspendLayout();
         _grid.Rows.Clear();
         foreach (var p in filtered.OrderByDescending(p => p.CpuPercent))

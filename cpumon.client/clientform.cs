@@ -86,7 +86,8 @@ sealed class ClientForm : BorderlessForm
                     ServiceManager.Install(null, null);
                     BeginInvoke(() =>
                     {
-                        _svcInstalled = true; _svcRunning = true; _cts.Cancel();
+                        _svcInstalled = true; _svcRunning = true; ShutdownConnection();
+                        _cts.Cancel();
                         UpdateServiceButtons();
                         _netP.Invalidate();
                         MessageBox.Show(this, "Service installed and started.\n\nYou can close this window — the service will keep running.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -111,6 +112,7 @@ sealed class ClientForm : BorderlessForm
                     BeginInvoke(() =>
                     {
                         _svcInstalled = false; _svcRunning = false;
+                        ShutdownConnection();
                         UpdateServiceButtons();
                         _netP.Invalidate();
                         MessageBox.Show(this, "Service uninstalled.\n\nRestart this window to connect directly.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -151,7 +153,7 @@ sealed class ClientForm : BorderlessForm
             {
                 var dlg = new Form { Text = "Invite Token", Size = new Size(400, 150), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt };
                 var lbl = new Label { Text = "Enter the invite token from the server:", Location = new Point(12, 12), AutoSize = true };
-                var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle };
+                var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle, UseSystemPasswordChar = true };
                 var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Location = new Point(12, 72), Size = new Size(100, 32), BackColor = Color.FromArgb(30, 50, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat }; ok.FlatAppearance.BorderColor = Th.Grn;
                 var approve = new Button { Text = "Approve on Server", DialogResult = DialogResult.Retry, Location = new Point(120, 72), Size = new Size(140, 32), BackColor = Color.FromArgb(34, 42, 56), ForeColor = Th.Cyan, FlatStyle = FlatStyle.Flat };
                 var skip = new Button { Text = "Skip", DialogResult = DialogResult.Cancel, Location = new Point(268, 72), Size = new Size(80, 32), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
@@ -172,7 +174,7 @@ sealed class ClientForm : BorderlessForm
         FormClosed += (_, _) =>
         {
             _tm.Stop(); _tm.Dispose(); _cts.Cancel();
-            lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); }
+            ShutdownConnection();
             _mon.Dispose(); CmdExec.DisposeAll();
             _pawForm?.Close();
         };
@@ -184,6 +186,15 @@ sealed class ClientForm : BorderlessForm
     }
 
     // ── Network loops ──
+
+    void ShutdownConnection()
+    {
+        lock (_tl)
+        {
+            _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose();
+            _wr = null; _rd = null; _ssl = null; _tcp = null;
+        }
+    }
 
     async Task DiscoverLoop(CancellationToken ct)
     {
@@ -365,7 +376,7 @@ sealed class ClientForm : BorderlessForm
         {
             var dlg = new Form { Text = "Re-Authorize", Size = new Size(400, 150), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt };
             var lbl = new Label { Text = "Authorization failed. Enter a new invite token:", Location = new Point(12, 12), AutoSize = true };
-            var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle };
+            var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle, UseSystemPasswordChar = true };
             var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Location = new Point(12, 72), Size = new Size(100, 32), BackColor = Color.FromArgb(30, 50, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat };
             ok.FlatAppearance.BorderColor = Th.Grn;
             var approve = new Button { Text = "Approve on Server", DialogResult = DialogResult.Retry, Location = new Point(120, 72), Size = new Size(140, 32), BackColor = Color.FromArgb(34, 42, 56), ForeColor = Th.Cyan, FlatStyle = FlatStyle.Flat };

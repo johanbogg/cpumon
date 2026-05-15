@@ -392,8 +392,10 @@ public static class FileBrowserService
         {
             string baseFull = System.IO.Path.GetFullPath(basePath);
             string safeName = System.IO.Path.GetFileName(chunk.FileName);
-            if (string.IsNullOrEmpty(safeName)) return "Upload error: invalid filename";
+            if (!IsSafeFileName(safeName)) return "Upload error: invalid filename";
             string destFile = System.IO.Path.Combine(baseFull, safeName);
+            string destFull = System.IO.Path.GetFullPath(destFile);
+            if (!IsPathUnder(destFull, baseFull)) return "Upload error: invalid destination";
             tmpFile = destFile + ".tmp";
             if (chunk.Offset == 0)
             {
@@ -436,7 +438,21 @@ public static class FileBrowserService
     }
     public static string DeletePath(string path, bool recursive) { try { if (Directory.Exists(path)) { Directory.Delete(path, recursive); return $"Deleted directory: {path}"; } else if (File.Exists(path)) { File.Delete(path); return $"Deleted file: {path}"; } else return $"Not found: {path}"; } catch (Exception ex) { return $"Delete error: {ex.Message}"; } }
     public static string CreateDirectory(string path) { try { Directory.CreateDirectory(path); return $"Created: {path}"; } catch (Exception ex) { return $"Error: {ex.Message}"; } }
-    public static string RenamePath(string path, string newName) { try { string? dir = System.IO.Path.GetDirectoryName(path); if (dir == null) return "Invalid path"; string dest = System.IO.Path.Combine(dir, newName); if (Directory.Exists(path)) Directory.Move(path, dest); else if (File.Exists(path)) File.Move(path, dest); else return $"Not found: {path}"; return $"Renamed to {newName}"; } catch (Exception ex) { return $"Rename error: {ex.Message}"; } }
+    public static string RenamePath(string path, string newName) { try { if (!IsSafeFileName(newName)) return "Rename error: invalid filename"; string? dir = System.IO.Path.GetDirectoryName(path); if (dir == null) return "Invalid path"; string dirFull = System.IO.Path.GetFullPath(dir); string dest = System.IO.Path.Combine(dirFull, newName); string destFull = System.IO.Path.GetFullPath(dest); if (!IsPathUnder(destFull, dirFull)) return "Rename error: invalid destination"; if (Directory.Exists(path)) Directory.Move(path, destFull); else if (File.Exists(path)) File.Move(path, destFull); else return $"Not found: {path}"; return $"Renamed to {newName}"; } catch (Exception ex) { return $"Rename error: {ex.Message}"; } }
+
+    static bool IsSafeFileName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        if (!string.Equals(name, System.IO.Path.GetFileName(name), StringComparison.Ordinal)) return false;
+        if (name is "." or "..") return false;
+        return name.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) < 0;
+    }
+
+    static bool IsPathUnder(string fullPath, string baseFull)
+    {
+        string root = baseFull.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 // ═══════════════════════════════════════════════════

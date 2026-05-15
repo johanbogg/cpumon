@@ -21,8 +21,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) {
+    throw 'installer.ps1 is interactive. Run it from an elevated PowerShell window, or use cpumon.client.exe --install for unattended service installation.'
+}
+
 # ── Constants ─────────────────────────────────────────────────────────────────
-$InstallRoot    = 'C:\Program Files\CpuMon'
+$InstallRoot    = Join-Path $env:ProgramFiles 'CpuMon'
 $ClientDir      = "$InstallRoot\Client"
 $ServerDir      = "$InstallRoot\Server"
 $ServiceName    = 'CpuMonClient'
@@ -173,10 +177,10 @@ function Install-Client([string]$mode) {
         Write-Ok 'Start Menu shortcut created.'
 
         if (Confirm-Action 'Start automatically at Windows logon?') {
-            $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+            $runKey = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
             Set-ItemProperty $runKey -Name 'CpuMonClient' `
                 -Value "`"$ClientDir\cpumon.client.exe`" $daemonArgs"
-            Write-Ok 'Added to user startup (HKCU Run).'
+            Write-Ok 'Added to machine startup (HKLM Run).'
         }
 
         Write-Ok "Client standalone installed to $ClientDir"
@@ -274,11 +278,12 @@ function Uninstall-Client {
 
     # Remove startup Run key if present
     try {
-        $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-        if (Get-ItemProperty $runKey -Name 'CpuMonClient' -ErrorAction SilentlyContinue) {
-            Remove-ItemProperty $runKey -Name 'CpuMonClient'
-            Write-Ok 'Removed startup entry.'
+        foreach ($runKey in @('HKLM:\Software\Microsoft\Windows\CurrentVersion\Run', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run')) {
+            if (Get-ItemProperty $runKey -Name 'CpuMonClient' -ErrorAction SilentlyContinue) {
+                Remove-ItemProperty $runKey -Name 'CpuMonClient'
+            }
         }
+            Write-Ok 'Removed startup entry.'
     } catch { }
 
     if (Test-Path $ClientDir) {

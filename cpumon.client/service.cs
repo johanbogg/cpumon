@@ -663,12 +663,7 @@ sealed class CpuMonService : ServiceBase
                 string? line = await r.ReadLineAsync(ct);
                 if (line == null)
                 {
-                    bool awaitingAuth; lock (_tl) { awaitingAuth = !_authConfirmed && _wr != null; }
-                    if (awaitingAuth && !string.IsNullOrEmpty(_ak))
-                    {
-                        HandleAuthRejected("Connection closed before saved auth was accepted");
-                        continue;
-                    }
+                    LogSink.Info("Service.CmdLoop", "Connection closed; reconnecting");
                     if (_ns != NetState.AuthFailed) _ns = NetState.Reconnecting;
                     StopAgentRdpSessions();
                     lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }

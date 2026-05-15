@@ -24,6 +24,11 @@ function Write-Step([string]$msg) { Write-Host "  $msg" -ForegroundColor Cyan -N
 function Write-Ok                 { Write-Host ' OK'    -ForegroundColor Green }
 function Write-Fail               { Write-Host ' FAIL'  -ForegroundColor Red }
 
+if (Test-Path $OutDir) {
+    Remove-Item -Path (Join-Path $OutDir '*.zip') -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path (Join-Path $OutDir 'SHA256SUMS-*.txt') -Force -ErrorAction SilentlyContinue
+}
+
 function Publish-Project([string]$proj, [string]$out) {
     Write-Step "Publishing $(Split-Path $proj -Leaf)..."
     if (Test-Path $out) { Remove-Item -LiteralPath $out -Recurse -Force }

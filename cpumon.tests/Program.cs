@@ -14,6 +14,8 @@ internal static class Program
         {
             TestReceiveChunkCompletesAndValidatesOffsets();
             TestReceiveChunkReplacesDuplicateTransfer();
+            TestReceiveChunkRejectsUnsafeNames();
+            TestRenameRejectsTraversal();
             TestLineLengthLimitedStream();
             TestSecurityTokenFormat();
             TestUpdateIntegrity();
@@ -105,6 +107,34 @@ internal static class Program
             IsLast = true
         }, uploads, td.Path);
         Assert(File.ReadAllText(Path.Combine(td.Path, "two.txt")) == "two", "duplicate transfer should restart cleanly");
+    }
+
+    static void TestReceiveChunkRejectsUnsafeNames()
+    {
+        using var td = new TempDir();
+        var uploads = new ConcurrentDictionary<string, FileStream>();
+        var chunk = new FileChunkData
+        {
+            TransferId = "unsafe",
+            FileName = "bad:name.txt",
+            Offset = 0,
+            TotalSize = 1,
+            Data = Convert.ToBase64String(Encoding.UTF8.GetBytes("x")),
+            IsLast = true
+        };
+        string result = FileBrowserService.ReceiveChunk(chunk, uploads, td.Path);
+        Assert(result.StartsWith("Upload error"), "unsafe upload filename should fail");
+        Assert(!uploads.ContainsKey("unsafe"), "unsafe upload should not keep stream state");
+    }
+
+    static void TestRenameRejectsTraversal()
+    {
+        using var td = new TempDir();
+        string original = Path.Combine(td.Path, "old.txt");
+        File.WriteAllText(original, "x");
+        string result = FileBrowserService.RenamePath(original, "..\\outside.txt");
+        Assert(result.StartsWith("Rename error"), "rename traversal should fail");
+        Assert(File.Exists(original), "failed rename should leave original in place");
     }
 
     static void TestLineLengthLimitedStream()

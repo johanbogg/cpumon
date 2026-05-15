@@ -340,15 +340,18 @@ sealed class AgentContext : ApplicationContext
                                     _authDialogOpen = true;
                                     try
                                     {
-                                        var dlg = new Form { Text = "Re-Authorize", Size = new Size(400, 150), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt };
                                         var lbl = new Label { Text = "Authorization failed. Enter a new invite token:", Location = new Point(12, 12), AutoSize = true };
-                                        var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle };
-                                         var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Location = new Point(12, 72), Size = new Size(100, 32), BackColor = Color.FromArgb(30, 50, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat };
+                                        using var dlg = new Form { Text = "Re-Authorize", Size = new Size(400, 150), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt };
+                                        var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle, UseSystemPasswordChar = true };
+                                        var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Location = new Point(12, 72), Size = new Size(100, 32), BackColor = Color.FromArgb(30, 50, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat };
                                          ok.FlatAppearance.BorderColor = Th.Grn;
                                          var approve = new Button { Text = "Approve on Server", DialogResult = DialogResult.Retry, Location = new Point(120, 72), Size = new Size(140, 32), BackColor = Color.FromArgb(34, 42, 56), ForeColor = Th.Cyan, FlatStyle = FlatStyle.Flat };
                                          var skip = new Button { Text = "Skip", DialogResult = DialogResult.Cancel, Location = new Point(268, 72), Size = new Size(80, 32), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
                                          dlg.Controls.AddRange(new Control[] { lbl, txt, ok, approve, skip });
                                          dlg.AcceptButton = ok;
+                                         using var timeout = new System.Windows.Forms.Timer { Interval = 5 * 60 * 1000 };
+                                         timeout.Tick += (_, _) => { timeout.Stop(); if (!dlg.IsDisposed) dlg.DialogResult = DialogResult.Cancel; };
+                                         timeout.Start();
                                          var result = dlg.ShowDialog();
                                          string reply = result == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text) ? txt.Text.Trim() : "";
                                          bool requestApproval = result == DialogResult.Retry;
@@ -616,7 +619,7 @@ sealed class DaemonContext : ApplicationContext
         {
             var dlg = new Form { Text = "Re-Authorize", Size = new Size(400, 150), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt };
             var lbl = new Label { Text = "Authorization failed. Enter a new invite token:", Location = new Point(12, 12), AutoSize = true };
-            var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle };
+            var txt = new TextBox { Location = new Point(12, 36), Size = new Size(360, 28), BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 11f), BorderStyle = BorderStyle.FixedSingle, UseSystemPasswordChar = true };
             var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Location = new Point(12, 72), Size = new Size(100, 32), BackColor = Color.FromArgb(30, 50, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat };
             ok.FlatAppearance.BorderColor = Th.Grn;
             var approve = new Button { Text = "Approve on Server", DialogResult = DialogResult.Retry, Location = new Point(120, 72), Size = new Size(140, 32), BackColor = Color.FromArgb(34, 42, 56), ForeColor = Th.Cyan, FlatStyle = FlatStyle.Flat };
