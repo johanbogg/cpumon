@@ -141,6 +141,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-013 — `FileBrowserService.RenamePath` allows path traversal
 
 - **Severity:** MEDIUM (bounded by trust model; defense-in-depth)
+- **Status:** fixed in 79bd635
 - **File:** `cpumon.shared/services.cs:~439`
 - **Defect:** `newName` is concatenated via `Path.Combine(dir, newName)`. If `newName` contains `..\` or an absolute path, `Path.Combine` silently jumps out of `dir`.
 - **Fix:** Assert `Path.GetFileName(newName) == newName` before combining; reject otherwise.
@@ -148,6 +149,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-014 — `FileBrowserService.ReceiveChunk` filename insufficiently sanitised
 
 - **Severity:** MEDIUM (bounded by trust model; defense-in-depth)
+- **Status:** fixed in 79bd635
 - **File:** `cpumon.shared/services.cs:394-402`
 - **Defect:** `Path.GetFileName` strips path separators but does not reject `:` (alternate data streams on NTFS), drive letters in long-path inputs, or NUL bytes.
 - **Fix:** Reject any non-`[A-Za-z0-9._-]` character in the filename, OR assert `Path.GetFullPath(destFile).StartsWith(baseFull + Path.DirectorySeparatorChar)` post-resolution.
@@ -163,6 +165,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-016 — ProcDialog PID restore uses `as int?` on boxed int
 
 - **Severity:** MEDIUM (UX bug)
+- **Status:** fixed in 79bd635
 - **File:** `cpumon.server/serverdialogs.cs:200`
 - **Defect:** `object as int?` against a boxed `int` returns `null`. The PID restoration after filter-text change silently fails — selection is lost on every refresh.
 - **Fix:** Replace with `cell.Value is int pid ? pid : (int?)null`, or compare via raw `object`.
@@ -178,6 +181,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-018 — `auth_request` modal can hang forever
 
 - **Severity:** MEDIUM
+- **Status:** fixed in 79bd635
 - **File:** `cpumon.client/contexts.cs:336-359`
 - **Defect:** When the server asks for approval, the agent shows a modal `ShowDialog()`. If no user is logged in, or the workstation is locked, the modal blocks the UI message pump and `_authRequestPending` stays true indefinitely.
 - **Fix:** Wrap with a timeout (suggest 5 min). On timeout, send back `RequestApproval=false` with an empty secret and close the dialog.
@@ -185,6 +189,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-019 — ClientForm install/uninstall doesn't tear down active connection
 
 - **Severity:** MEDIUM
+- **Status:** fixed in 79bd635
 - **File:** `cpumon.client/clientform.cs:81-99`
 - **Defect:** After successful install, `_cts.Cancel()` is called but `_wr/_rd/_ssl/_tcp` are not disposed. The freshly installed service starts and opens a parallel TLS connection to the server. The old streams linger until GC finalization.
 - **Fix:** Inside `_tl`, dispose `_wr`, `_rd`, `_ssl`, `_tcp` in order, set to null, then exit the form.
@@ -192,6 +197,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-020 — `HandleAuthRejected` nukes stored key on graceful close
 
 - **Severity:** MEDIUM
+- **Status:** fixed in 79bd635
 - **File:** `cpumon.client/service.cs:603-608`
 - **Defect:** When the server gracefully closes the connection mid-handshake (overloaded, restarting), the client treats it as `Connection closed before saved auth was accepted` and clears `TokenStore`. Operator must re-pair.
 - **Fix:** Only clear `TokenStore` on explicit `auth_response { authOk: false }`. A null/empty read in the auth window should trigger a reconnect retry, not a credential wipe.
@@ -199,6 +205,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-021 — `installer.ps1` hardcoded path and wrong HKCU scope
 
 - **Severity:** MEDIUM
+- **Status:** fixed in 79bd635
 - **File:** `installer.ps1:25, 166-179`
 - **Defect (1):** `$InstallRoot = 'C:\Program Files\CpuMon'` ignores `$env:ProgramFiles`.
 - **Defect (2):** Standalone client mode writes autostart entry to the *installing admin's* `HKCU\...\Run`, not the end-user's. On multi-user machines, only the admin gets the client at logon.
@@ -207,6 +214,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-022 — `dist/` not cleaned between builds
 
 - **Severity:** MEDIUM
+- **Status:** fixed in 79bd635
 - **File:** `build.ps1`
 - **Defect:** 20+ stale zips back to `1.0.19` accumulate in `dist\`. A careless `gh release create dist\*.zip` would attach everything.
 - **Fix:** At the start of `build.ps1`, `Remove-Item dist\*.zip, dist\SHA256SUMS-*.txt -ErrorAction SilentlyContinue`. The release-checklist commands enumerate by version anyway, so this is purely housekeeping.
@@ -214,6 +222,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 ### QA-023 — `installer.ps1` is interactive-only but undocumented
 
 - **Severity:** MEDIUM
+- **Status:** fixed in 79bd635
 - **File:** `installer.ps1:55, 68, 73`
 - **Defect:** `Read-Host` calls hang under `pwsh -NonInteractive` with no warning.
 - **Fix:** Add an early-exit check at top: `if ([Environment]::UserInteractive -eq $false -or -not [Console]::IsInputRedirected) { ... }`, or document the script as interactive-only in README.
@@ -245,6 +254,7 @@ This file is an AI-readable task backlog produced by an exhaustive multi-agent Q
 
 ### QA-029 — Invite token shown in plaintext TextBox
 - **File:** `cpumon.client/clientform.cs:151-161`, `cpumon.client/contexts.cs:343-355`
+- **Status:** fixed in 79bd635
 - **Fix:** Set `UseSystemPasswordChar = true` on the token field.
 
 ### QA-030 — `program.cs:84` re-quotes args via `string.Join(' ', args)`
