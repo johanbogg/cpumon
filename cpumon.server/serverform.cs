@@ -11,6 +11,7 @@ using Timer = System.Windows.Forms.Timer;
 sealed class ServerForm : BorderlessForm
 {
     readonly ServerEngine _engine;
+    readonly ServerDashboardStateBuilder _dashboardStateBuilder;
     readonly Panel _ct;
     readonly Timer _tm;
     readonly ToolTip _toolTip = new();
@@ -33,6 +34,7 @@ sealed class ServerForm : BorderlessForm
     public ServerForm(bool noBroadcast)
     {
         _engine = new ServerEngine(noBroadcast);
+        _dashboardStateBuilder = new ServerDashboardStateBuilder(_engine);
 
         Text = $"CPU Monitor — Server  v{Proto.AppVersion}";
         StartPosition = FormStartPosition.Manual;
@@ -573,43 +575,43 @@ sealed class ServerForm : BorderlessForm
         _sy = Math.Clamp(_sy, 0, ScrollMax());
         y = _scrollTop - _sy;
 
-        var visibleClients = VisibleClients();
-        bool anyOutdated = visibleClients.Any(cl => ServerEngine.ClientNeedsUpdate(cl.ClientVersion));
+        var state = _dashboardStateBuilder.Build(_selectedMachines, _osFilter, _sortMode);
+        bool anyOutdated = state.Clients.Any(cl => cl.IsOutdated);
         if (_selectedMachines.Count > 0 || anyOutdated) { DrawSelectionBar(g, x, y, w, anyOutdated); y += 42; }
 
-        var pendingClients = _engine.PendingApprovals.Values.OrderBy(p => p.MachineName).ToList();
-        if (_engine.Clients.IsEmpty && pendingClients.Count == 0)
+        if (state.AuthenticatedClientCount == 0 && state.PendingApprovals.Count == 0)
         {
             using var f = new Font("Segoe UI", 10f);
             using var b = new SolidBrush(Th.Dim);
             using var sf = new StringFormat { Alignment = StringAlignment.Center };
-            g.DrawString($"No clients.\nShare token: {_engine.Token}", f, b, new RectangleF(x, y + 20, w, 80), sf);
+            g.DrawString($"No clients.\nShare token: {state.Token}", f, b, new RectangleF(x, y + 20, w, 80), sf);
             y += 80;
         }
-        if (pendingClients.Count > 0)
+        if (state.PendingApprovals.Count > 0)
         {
             using (var hf = new Font("Segoe UI", 7f)) using (var hb = new SolidBrush(Th.Yel))
                 g.DrawString("AWAITING APPROVAL", hf, hb, x + 4, y + 4);
             y += 18;
-            foreach (var pending in pendingClients)
+            foreach (var pending in state.PendingApprovals)
             { DrawPendingApproval(g, x, y, w, pending); y += 44; }
         }
 
-        if (!_engine.Clients.IsEmpty)
+        if (state.AuthenticatedClientCount > 0)
         {
-            foreach (var cl in visibleClients)
+            foreach (var clientState in state.Clients)
             {
+                // TODO Phase 4: draw cards entirely from ClientCardState.
+                if (!_engine.Clients.TryGetValue(clientState.MachineName, out var cl)) continue;
                 if (cl.LastReport == null)
                 {
                     DrawConnectedWithoutReport(g, x, y, w, cl);
                     y += 44;
                     continue;
                 }
-                bool stale = (DateTime.UtcNow - cl.LastSeen).TotalSeconds > 70;
-                int ch = cl.Expanded ? DrawExpanded(g, x, y, w, cl, stale) : DrawCollapsed(g, x, y, w, cl, stale);
+                int ch = clientState.IsExpanded ? DrawExpanded(g, x, y, w, cl, clientState.IsStale) : DrawCollapsed(g, x, y, w, cl, clientState.IsStale);
                 y += ch + 6;
             }
-            if (visibleClients.Count == 0)
+            if (state.Clients.Count == 0)
             {
                 using var f = new Font("Segoe UI", 9f);
                 using var b = new SolidBrush(Th.Dim);
@@ -618,22 +620,19 @@ sealed class ServerForm : BorderlessForm
             }
         }
 
-        var offlineClients = _osFilter == "all"
-            ? _engine.Store.All().Where(a => !a.Revoked && !_engine.Clients.ContainsKey(a.Name)).OrderBy(a => a.Name).ToList()
-            : new List<ApprovedClient>();
-        if (offlineClients.Count > 0)
+        if (state.OfflineClients.Count > 0)
         {
             using (var hf = new Font("Segoe UI", 7f)) using (var hb = new SolidBrush(Th.Dim))
                 g.DrawString("OFFLINE", hf, hb, x + 4, y + 4);
             y += 18;
-            foreach (var ac in offlineClients)
+            foreach (var ac in state.OfflineClients)
             { DrawOffline(g, x, y, w, ac); y += 52; }
         }
 
         _contentH = y + _sy - _scrollTop + 12;
         int logY = Math.Max(6, _ct.Height - logH - 4);
-        DrawLog(g, 10, logY, w, Math.Min(logH, _ct.Height - logY - 4));
-        DrawStatusBar(g, x, 6, w);
+        DrawLog(g, 10, logY, w, Math.Min(logH, _ct.Height - logY - 4), state);
+        DrawStatusBar(g, x, 6, w, state);
         DrawScrollbar(g);
     }
 
@@ -662,26 +661,26 @@ sealed class ServerForm : BorderlessForm
         g.FillPath(thumb, pThumb);
     }
 
-    void DrawStatusBar(Graphics g, int x, int y, int w)
+    void DrawStatusBar(Graphics g, int x, int y, int w, ServerDashboardState state)
     {
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, 73, 8); g.FillPath(bg, p); }
-        Color accentClr = _engine.BroadcastDisabled ? Th.Org : Th.Grn;
+        Color accentClr = state.BroadcastDisabled ? Th.Org : Th.Grn;
         using (var ac = new SolidBrush(Color.FromArgb(180, accentClr)))
             g.FillRectangle(ac, x + 1, y + 8, 4, 54);
 
         using (var d = new SolidBrush(accentClr)) g.FillEllipse(d, x + 14, y + 11, 9, 9);
         using (var sf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var sb = new SolidBrush(Th.Brt))
-            g.DrawString(_engine.BroadcastDisabled ? "DIRECT ONLY" : "BROADCASTING", sf, sb, x + 30, y + 9);
+            g.DrawString(state.BroadcastDisabled ? "DIRECT ONLY" : "BROADCASTING", sf, sb, x + 30, y + 9);
         using (var df = new Font("Segoe UI", 7.5f))
         using (var db = new SolidBrush(Th.Dim))
-            g.DrawString($"TCP :{Proto.DataPort}" + (_engine.BroadcastDisabled ? "" : $" | UDP :{Proto.DiscPort}"), df, db, x + 155, y + 11);
+            g.DrawString($"TCP :{Proto.DataPort}" + (state.BroadcastDisabled ? "" : $" | UDP :{Proto.DiscPort}"), df, db, x + 155, y + 11);
 
-        bool tokExpired = (DateTime.UtcNow - _engine.TokenIssuedAt).TotalMinutes >= 10;
-        int minsLeft = Math.Max(0, 10 - (int)(DateTime.UtcNow - _engine.TokenIssuedAt).TotalMinutes);
+        bool tokExpired = (DateTime.UtcNow - state.TokenIssuedAt).TotalMinutes >= 10;
+        int minsLeft = Math.Max(0, 10 - (int)(DateTime.UtcNow - state.TokenIssuedAt).TotalMinutes);
         using (var tf = new Font("Consolas", 8.5f, FontStyle.Bold))
         using (var tb = new SolidBrush(tokExpired ? Th.Red : Th.Yel))
-            g.DrawString($"Token: {_engine.Token}", tf, tb, x + 14, y + 32);
+            g.DrawString($"Token: {state.Token}", tf, tb, x + 14, y + 32);
         using (var xf = new Font("Segoe UI", 6.5f))
         using (var xb = new SolidBrush(tokExpired ? Th.Red : Th.Dim))
             g.DrawString(tokExpired ? "⚠ EXPIRED — click New" : $"expires in {minsLeft}m", xf, xb, x + 14, y + 50);
@@ -691,11 +690,11 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, bx, y + 23, 70, 24, "🔄 New", Th.Org, "", "newtoken"); bx += 78;
         DrawBtn(g, bx, y + 23, 84, 24, "👥 Clients", Th.Cyan, "", "showapproved"); bx += 92;
         DrawBtn(g, bx, y + 23, 68, 24, Th.IsDark ? "☀ Light" : "🌙 Dark", Th.Dim, "", "theme"); bx += 76;
-        DrawBtn(g, bx, y + 23, 80, 24, "🔔 Alerts", _engine.Alerts.ThresholdsConfigured ? Th.Org : Th.Dim, "", "alerts"); bx += 88;
-        var update = _engine.AvailableUpdate;
+        DrawBtn(g, bx, y + 23, 80, 24, "🔔 Alerts", state.AlertsConfigured ? Th.Org : Th.Dim, "", "alerts"); bx += 88;
+        var update = state.AvailableUpdate;
         if (update != null)
         {
-            bool staged = _engine.StagedReleaseDir != null;
+            bool staged = state.StagedReleaseDir != null;
             string label = staged ? $"📁 v{update.Version} ready" : $"↑ Update v{update.Version}";
             DrawBtn(g, bx, y + 23, 120, 24, label, Th.Cyan, "", "openrelease"); bx += 124;
             if (staged)
@@ -707,9 +706,9 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, x + w - 96, y + 51, 84, 18, _sortMode == "os" ? "Sort: OS" : "Sort: Name", Th.Dim, "", "sort_mode");
 
         using (var cf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
-        using (var ccb = new SolidBrush(_engine.ConnectionCount > 0 ? Th.Grn : Th.Dim))
+        using (var ccb = new SolidBrush(state.ConnectionCount > 0 ? Th.Grn : Th.Dim))
         {
-            string ct = $"{_engine.ConnectionCount} conn · {_engine.Clients.Count} auth";
+            string ct = $"{state.ConnectionCount} conn · {state.AuthenticatedClientCount} auth";
             var sz = g.MeasureString(ct, cf);
             g.DrawString(ct, cf, ccb, x + w - sz.Width - 12, y + 9);
         }
@@ -1020,7 +1019,7 @@ sealed class ServerForm : BorderlessForm
         g.DrawString(text, f, b, x + (w - sz.Width) / 2, y + (h - sz.Height) / 2);
     }
 
-    void DrawOffline(Graphics g, int x, int y, int w, ApprovedClient ac)
+    void DrawOffline(Graphics g, int x, int y, int w, OfflineClientState ac)
     {
         int h = 48;
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
@@ -1028,26 +1027,25 @@ sealed class ServerForm : BorderlessForm
         using (var ac2 = new SolidBrush(Color.FromArgb(80, Th.Dim)))
             g.FillRectangle(ac2, x + 1, y + 6, 4, h - 12);
         using (var dot = new SolidBrush(Th.Dim)) g.FillEllipse(dot, x + 12, y + 12, 7, 7);
-        string offDisplay = string.IsNullOrEmpty(ac.Alias) ? ac.Name : ac.Alias;
         using (var nf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold)) using (var nb = new SolidBrush(Th.Dim))
-            g.DrawString(offDisplay, nf, nb, x + 24, y + 6);
+            g.DrawString(ac.DisplayName, nf, nb, x + 24, y + 6);
         if (!string.IsNullOrEmpty(ac.Alias))
         {
             using var hnf2 = new Font("Segoe UI", 7f);
             using var hnb = new SolidBrush(Th.Dim);
-            g.DrawString(ac.Name, hnf2, hnb, x + 26, y + 25);
+            g.DrawString(ac.MachineName, hnf2, hnb, x + 26, y + 25);
         }
         var ago = DateTime.UtcNow - ac.Seen;
         string agoStr = ago.TotalDays >= 1 ? $"{(int)ago.TotalDays}d ago" : ago.TotalHours >= 1 ? $"{(int)ago.TotalHours}h ago" : ago.TotalMinutes >= 1 ? $"{(int)ago.TotalMinutes}m ago" : "just now";
         using (var sf2 = new Font("Segoe UI", 7.5f)) using (var sb2 = new SolidBrush(Th.Dim))
             g.DrawString($"Offline · {agoStr}", sf2, sb2, x + 150, y + 11);
         if (!string.IsNullOrEmpty(ac.Ip)) { using var if2 = new Font("Segoe UI", 7f); using var ib = new SolidBrush(Th.Dim); g.DrawString(ac.Ip, if2, ib, x + 290, y + 11); }
-        if (!string.IsNullOrEmpty(ac.Mac)) DrawBtn(g, x + w - 162, y + 5, 72, 24, "⚡ Wake", Th.Yel, ac.Name, "wake_offline");
-        else DrawBtn(g, x + w - 162, y + 5, 72, 24, "Set MAC", Th.Dim, ac.Name, "set_mac_offline");
-        DrawBtn(g, x + w - 82, y + 5, 72, 24, "🗑 Forget", Th.Dim, ac.Name, "forget_offline");
+        if (!string.IsNullOrEmpty(ac.Mac)) DrawBtn(g, x + w - 162, y + 5, 72, 24, "⚡ Wake", Th.Yel, ac.MachineName, "wake_offline");
+        else DrawBtn(g, x + w - 162, y + 5, 72, 24, "Set MAC", Th.Dim, ac.MachineName, "set_mac_offline");
+        DrawBtn(g, x + w - 82, y + 5, 72, 24, "🗑 Forget", Th.Dim, ac.MachineName, "forget_offline");
     }
 
-    void DrawPendingApproval(Graphics g, int x, int y, int w, PendingClientApproval pending)
+    void DrawPendingApproval(Graphics g, int x, int y, int w, PendingApprovalState pending)
     {
         int h = 38;
         using (var bg = new SolidBrush(Color.FromArgb(32, 30, 22))) { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
@@ -1094,7 +1092,7 @@ sealed class ServerForm : BorderlessForm
         g.DrawString(v, vf, vb, x, y);
     }
 
-    void DrawLog(Graphics g, int x, int y, int w, int h)
+    void DrawLog(Graphics g, int x, int y, int w, int h, ServerDashboardState state)
     {
         if (h < 24) return;
         using (var bg = new SolidBrush(Th.Card))
@@ -1105,16 +1103,16 @@ sealed class ServerForm : BorderlessForm
             g.DrawString("LOG", hf, hb, x + 8, y + 3);
 
         int lh = 13, ml = Math.Max(1, (h - 18) / lh);
-        var entries = _engine.Log.Recent(ml);
+        var entries = state.LogEntries.TakeLast(ml).ToList();
         using var ef = new Font("Consolas", 7f);
         int ey = y + 18;
-        foreach (var (t, m, c) in entries)
+        foreach (var entry in entries)
         {
             if (ey + lh > y + h) break;
             using var tb = new SolidBrush(Th.Dim);
-            g.DrawString(t.ToString("HH:mm:ss"), ef, tb, x + 6, ey);
-            using var mb = new SolidBrush(c);
-            g.DrawString(m, ef, mb, x + 68, ey);
+            g.DrawString(entry.Time.ToString("HH:mm:ss"), ef, tb, x + 6, ey);
+            using var mb = new SolidBrush(Color.FromArgb(entry.ColorArgb));
+            g.DrawString(entry.Message, ef, mb, x + 68, ey);
             ey += lh;
         }
     }

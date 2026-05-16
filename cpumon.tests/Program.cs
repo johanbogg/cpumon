@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Compression;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -31,6 +32,10 @@ internal static class Program
             TestVersionComparisonAcrossMinor();
             TestLinuxUpdatePayload();
             TestCpuReportKeepsCoresOnDemand();
+            TestDashboardStateInitialState();
+            TestDashboardStatePendingApprovalsSorted();
+            TestDashboardStateWaitingClientsStayVisibleUnderOsFilters();
+            TestDashboardStateClientProjectionFlags();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -375,6 +380,95 @@ internal static class Program
         Assert(!engine.RequestRestart("no-such-machine"), "restart on unknown machine should return false");
         Assert(!engine.RequestShutdown("no-such-machine"), "shutdown on unknown machine should return false");
         Assert(!engine.WakeOffline("no-such-machine"), "wake on machine without MAC should return false");
+    }
+
+    static void TestDashboardStateInitialState()
+    {
+        using var engine = new ServerEngine(noBroadcast: true);
+        var builder = new ServerDashboardStateBuilder(engine);
+        var state = builder.Build(Array.Empty<string>(), "all", "name");
+
+        Assert(state.BroadcastDisabled, "dashboard state should include broadcast mode");
+        Assert(state.Token == engine.Token, "dashboard state should include the current token");
+        Assert(state.ConnectionCount == 0, "initial dashboard state should have no connections");
+        Assert(state.AuthenticatedClientCount == 0, "initial dashboard state should have no authenticated clients");
+        Assert(state.Clients.Count == 0, "initial dashboard state should have no client cards");
+        Assert(state.PendingApprovals.Count == 0, "initial dashboard state should have no pending approvals");
+        var filteredState = builder.Build(Array.Empty<string>(), "windows", "name");
+        Assert(filteredState.OfflineClients.Count == 0, "offline clients should be hidden outside the all filter");
+    }
+
+    static void TestDashboardStatePendingApprovalsSorted()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        engine.PendingApprovals["zeta"] = new PendingClientApproval
+        {
+            MachineName = "zeta",
+            Ip = "10.0.0.3",
+            Remote = "10.0.0.3:1234",
+            Client = FakeRemoteClient(),
+            ClientVersion = "1.0.1"
+        };
+        engine.PendingApprovals["alpha"] = new PendingClientApproval
+        {
+            MachineName = "alpha",
+            Ip = "10.0.0.2",
+            Remote = "10.0.0.2:1234",
+            Client = FakeRemoteClient(),
+            ClientVersion = "1.0.2"
+        };
+
+        var state = new ServerDashboardStateBuilder(engine).Build(Array.Empty<string>(), "all", "name");
+        Assert(state.PendingApprovals.Count == 2, "dashboard state should include pending approvals");
+        Assert(state.PendingApprovals[0].MachineName == "alpha", "pending approvals should sort by machine name");
+        Assert(state.PendingApprovals[1].MachineName == "zeta", "pending approvals should sort by machine name");
+        Assert(state.PendingApprovals[0].ClientVersion == "1.0.2", "pending approval projection should keep client version");
+    }
+
+    static void TestDashboardStateWaitingClientsStayVisibleUnderOsFilters()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        var waiting = FakeRemoteClient();
+        waiting.MachineName = "waiting-client";
+        waiting.ClientVersion = Proto.AppVersion;
+        waiting.LastReport = null;
+        engine.Clients[waiting.MachineName] = waiting;
+
+        var builder = new ServerDashboardStateBuilder(engine);
+        Assert(builder.Build(Array.Empty<string>(), "windows", "name").Clients.Count == 1, "waiting client should remain visible in Windows filter");
+        Assert(builder.Build(Array.Empty<string>(), "linux", "name").Clients.Count == 1, "waiting client should remain visible in Linux filter");
+    }
+
+    static void TestDashboardStateClientProjectionFlags()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        var linux = FakeRemoteClient();
+        linux.MachineName = "linux-box";
+        linux.ClientVersion = "0.0.1-linux";
+        linux.LastSeen = DateTime.UtcNow.AddSeconds(-90);
+        linux.LastReport = new MachineReport { MachineName = "linux-box", OsVersion = "Linux Debian", RamTotalGB = 8, RamUsedGB = 2 };
+        engine.Clients[linux.MachineName] = linux;
+
+        var selected = new[] { "linux-box" };
+        var state = new ServerDashboardStateBuilder(engine).Build(selected, "linux", "name");
+        Assert(state.SelectedMachineNames.Contains("linux-box"), "dashboard state should copy selected machine names");
+        Assert(state.Clients.Count == 1, "linux client should be visible under linux filter");
+        var card = state.Clients[0];
+        Assert(card.IsLinux, "linux client should be marked linux");
+        Assert(card.IsOutdated, "older linux client should be marked outdated");
+        Assert(card.IsStale, "stale client should be marked stale");
+        Assert(!card.CanRdp, "linux client should not expose RDP capability");
+        Assert(card.CanTerminal, "linux client should expose terminal capability");
+        Assert(!ReferenceEquals(card.Report, linux.LastReport), "dashboard state should not expose the live report instance");
+    }
+
+    static RemoteClient FakeRemoteClient()
+    {
+        var client = (RemoteClient)RuntimeHelpers.GetUninitializedObject(typeof(RemoteClient));
+        client.LastSeen = DateTime.UtcNow;
+        client.ClientVersion = Proto.AppVersion;
+        client.SendMode = "full";
+        return client;
     }
 
     static void Assert(bool condition, string message)
