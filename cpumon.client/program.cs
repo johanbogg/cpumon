@@ -1,6 +1,8 @@
 // CpuMon.Client/Program.cs
 using System;
 using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.ServiceProcess;
 using System.Windows.Forms;
@@ -14,6 +16,20 @@ internal static class Program
     }
 
     internal static readonly bool Admin = IsAdmin();
+
+    const int AttachParentProcess = -1;
+    [DllImport("kernel32.dll")] static extern bool AttachConsole(int dwProcessId);
+
+    static void AttachParentConsole()
+    {
+        try
+        {
+            AttachConsole(AttachParentProcess);
+            Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
+            Console.SetError(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+        }
+        catch { }
+    }
 
     [STAThread]
     static void Main(string[] args)
@@ -45,16 +61,20 @@ internal static class Program
         }
 
         // Non-GUI paths — no WinForms pump needed
+        bool cliMode = resetAuth || install || uninstall;
+        if (cliMode) AttachParentConsole();
+
         if (resetAuth)
         {
             bool ok = TokenStore.Clear();
             Console.WriteLine(ok
                 ? $"Cleared saved auth pairing: {TokenStore.AuthPath}"
                 : $"Failed to clear saved auth pairing: {TokenStore.AuthPath}");
+            Environment.ExitCode = ok ? 0 : 1;
             return;
         }
-        if (install)   { ServiceManager.Install(forceIp, token); return; }
-        if (uninstall) { ServiceManager.Uninstall(); return; }
+        if (install)   { RunCliAction(() => ServiceManager.Install(forceIp, token)); return; }
+        if (uninstall) { RunCliAction(ServiceManager.Uninstall); return; }
 
         // SCM starts the service and blocks here until the service stops
         if (serviceMode)
@@ -94,5 +114,19 @@ internal static class Program
             Application.Run(new DaemonContext(forceIp, token));
         else
             Application.Run(new ClientForm(forceIp, token));
+    }
+
+    static void RunCliAction(Action action)
+    {
+        try
+        {
+            action();
+            Environment.ExitCode = 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("ERROR: " + ex.Message);
+            Environment.ExitCode = 1;
+        }
     }
 }

@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
+using System.Linq;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -825,7 +826,7 @@ static class ServiceManager
 
     public static void Install(string? forceIp, string? token)
     {
-        if (!IsAdmin()) { Console.Error.WriteLine("ERROR: --install requires administrator privileges."); return; }
+        if (!IsAdmin()) throw new UnauthorizedAccessException("--install requires administrator privileges.");
         if (!IsValidServiceInstallArg(forceIp, allowEmpty: true, requireIp: true))
             throw new ArgumentException("Invalid --server-ip. Use a literal IPv4 or IPv6 address.");
         if (!IsValidServiceInstallArg(token, allowEmpty: true, requireIp: false))
@@ -844,21 +845,19 @@ static class ServiceManager
         if (forceIp != null) binPath += $" --server-ip {forceIp}";
         if (token   != null) binPath += $" --token {token}";
 
-        // Remove previous registration gracefully
-        ScExe($"stop {SvcName}");
-        Thread.Sleep(1500);
-        ScExe($"delete {SvcName}");
-        Thread.Sleep(500);
+        // Remove previous registration gracefully. SCM can keep a service marked for
+        // deletion briefly after stop/delete, so wait before recreating it.
+        DeleteServiceIfPresent();
 
         // Create and configure service
-        ScExeOrThrow($@"create {SvcName} binPath= ""{binPath}"" start= auto obj= LocalSystem DisplayName= ""{SvcDisplay}""", "Service create");
-        ScExe($"description {SvcName} \"{SvcDesc}\"");
+        ScExeOrThrow("Service create", "create", SvcName, "binPath=", binPath, "start=", "auto", "obj=", "LocalSystem", "DisplayName=", SvcDisplay);
+        ScExe("description", SvcName, SvcDesc);
         // Restart on failure: 3 attempts, 60s delay, reset counter after 24h
-        ScExe($"failure {SvcName} reset= 86400 actions= restart/60000/restart/60000/restart/60000");
+        ScExe("failure", SvcName, "reset=", "86400", "actions=", "restart/60000/restart/60000/restart/60000");
 
         RegisterAgentTask(dest);
 
-        ScExeOrThrow($"start {SvcName}", "Service start");
+        ScExeOrThrow("Service start", "start", SvcName);
 
         Console.WriteLine($"Installed: {SvcDisplay}");
         Console.WriteLine($"  Exe:     {dest}");
@@ -885,12 +884,10 @@ static class ServiceManager
 
     public static void Uninstall()
     {
-        if (!IsAdmin()) { Console.Error.WriteLine("ERROR: --uninstall requires administrator privileges."); return; }
+        if (!IsAdmin()) throw new UnauthorizedAccessException("--uninstall requires administrator privileges.");
 
-        ScExe($"stop {SvcName}");
-        Thread.Sleep(1500);
-        ScExe($"delete {SvcName}");
-        Run("schtasks.exe", $"/delete /tn \"{AgentTask}\" /f");
+        DeleteServiceIfPresent();
+        Run("schtasks.exe", "/delete", "/tn", AgentTask, "/f");
 
         Console.WriteLine($"Uninstalled: {SvcDisplay}");
         Console.WriteLine($"Files remain at {InstallDir} — delete manually if desired.");
@@ -898,28 +895,65 @@ static class ServiceManager
 
     static void RegisterAgentTask(string exePath)
     {
-        Run("schtasks.exe", $"/delete /tn \"{AgentTask}\" /f");
-        Run("schtasks.exe",
-            $"/create /tn \"{AgentTask}\" /tr \"\\\"{exePath}\\\" --agent\" " +
-            "/sc onlogon /rl highest /delay 0000:05 /f");
+        Run("schtasks.exe", "/delete", "/tn", AgentTask, "/f");
+        Run("schtasks.exe", "/create", "/tn", AgentTask, "/tr", $"{QuoteServiceArg(exePath)} --agent",
+            "/sc", "onlogon", "/rl", "highest", "/delay", "0000:05", "/f");
     }
 
-    static void ScExe(string args) => Run("sc.exe", args);
-
-    static void ScExeOrThrow(string args, string label)
+    static void DeleteServiceIfPresent()
     {
-        int code = Run("sc.exe", args);
-        if (code != 0) throw new InvalidOperationException($"{label} failed (sc.exe exit {code})");
+        if (!IsInstalled()) return;
+        try
+        {
+            using var sc = new ServiceController(SvcName);
+            if (sc.Status != ServiceControllerStatus.Stopped && sc.Status != ServiceControllerStatus.StopPending)
+            {
+                sc.Stop();
+                sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(20));
+            }
+        }
+        catch { }
+
+        ScExeOrThrow("Service delete", "delete", SvcName);
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (!IsInstalled()) return;
+            Thread.Sleep(500);
+        }
+        throw new InvalidOperationException("Service delete timed out; Windows still reports the service as installed. Try again in a few seconds.");
     }
 
-    static int Run(string exe, string args)
+    static void ScExe(params string[] args) => Run("sc.exe", args);
+
+    static void ScExeOrThrow(string label, params string[] args)
     {
-        var p = Process.Start(new ProcessStartInfo(exe, args)
-        { UseShellExecute = false, CreateNoWindow = true,
-          RedirectStandardOutput = true, RedirectStandardError = true });
-        if (p == null) return -1;
-        p.WaitForExit(10000);
-        return p.ExitCode;
+        var result = Run("sc.exe", args);
+        if (result.ExitCode != 0)
+            throw new InvalidOperationException($"{label} failed (sc.exe exit {result.ExitCode}): {result.Output}");
+    }
+
+    static RunResult Run(string exe, params string[] args)
+    {
+        var psi = new ProcessStartInfo(exe)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        foreach (var arg in args) psi.ArgumentList.Add(arg);
+        var p = Process.Start(psi);
+        if (p == null) return new RunResult(-1, "failed to start process");
+        string stdout = p.StandardOutput.ReadToEnd();
+        string stderr = p.StandardError.ReadToEnd();
+        if (!p.WaitForExit(30000))
+        {
+            try { p.Kill(entireProcessTree: true); } catch { }
+            return new RunResult(-2, "timed out");
+        }
+        string output = string.Join(" ", new[] { stdout.Trim(), stderr.Trim() }.Where(s => !string.IsNullOrEmpty(s)));
+        return new RunResult(p.ExitCode, output);
     }
 
     public static bool IsInstalled()
@@ -939,4 +973,6 @@ static class ServiceManager
         using var id = WindowsIdentity.GetCurrent();
         return new WindowsPrincipal(id).IsInRole(WindowsBuiltInRole.Administrator);
     }
+
+    readonly record struct RunResult(int ExitCode, string Output);
 }
