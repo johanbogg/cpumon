@@ -22,6 +22,8 @@ sealed class ServerForm : BorderlessForm
     string _currentToolTip = "";
     readonly Dictionary<string, ProcDialog> _procDialogs = new();
     readonly HashSet<string> _selectedMachines = new();
+    string _osFilter = "all";
+    string _sortMode = "name";
 
     public ServerForm(bool noBroadcast)
     {
@@ -213,6 +215,8 @@ sealed class ServerForm : BorderlessForm
             if (a == "showapproved") { BeginInvoke(() => { using var d = new ApprovedClientsDialog(_engine.Store, _engine.Clients, _engine.Log); d.ShowDialog(this); }); break; }
             if (a == "theme") { Th.Toggle(); break; }
             if (a == "alerts") { BeginInvoke(() => { using var d = new AlertConfigDialog(_engine.Alerts); if (d.ShowDialog(this) == DialogResult.OK) _ct.Invalidate(); }); break; }
+            if (a == "os_filter") { CycleOsFilter(); break; }
+            if (a == "sort_mode") { CycleSortMode(); break; }
             if (a == "openrelease")
             {
                 // Prefer the locally staged folder when the release has been downloaded;
@@ -253,8 +257,8 @@ sealed class ServerForm : BorderlessForm
 
             if (a == "select") { if (!_selectedMachines.Remove(m)) _selectedMachines.Add(m); _ct.Invalidate(); break; }
             if (a == "clear_selection") { _selectedMachines.Clear(); _ct.Invalidate(); break; }
-            if (a == "select_all") { foreach (var k in _engine.Clients.Keys) _selectedMachines.Add(k); _ct.Invalidate(); break; }
-            if (a == "select_outdated") { foreach (var kv in _engine.Clients) if (ServerEngine.ClientNeedsUpdate(kv.Value.ClientVersion)) _selectedMachines.Add(kv.Key); _ct.Invalidate(); break; }
+            if (a == "select_all") { foreach (var visible in VisibleClients()) _selectedMachines.Add(visible.MachineName); _ct.Invalidate(); break; }
+            if (a == "select_outdated") { foreach (var visible in VisibleClients()) if (ServerEngine.ClientNeedsUpdate(visible.ClientVersion)) _selectedMachines.Add(visible.MachineName); _ct.Invalidate(); break; }
             if (a == "push_update_selected") { PushUpdateToSelected(); break; }
 
             if (!_engine.Clients.TryGetValue(m, out var cl)) continue;
@@ -359,6 +363,36 @@ sealed class ServerForm : BorderlessForm
         return path;
     }
 
+    void CycleOsFilter()
+    {
+        _osFilter = _osFilter switch { "all" => "windows", "windows" => "linux", _ => "all" };
+        _sy = 0;
+        _ct.Invalidate();
+    }
+
+    void CycleSortMode()
+    {
+        _sortMode = _sortMode == "name" ? "os" : "name";
+        _ct.Invalidate();
+    }
+
+    List<RemoteClient> VisibleClients()
+    {
+        IEnumerable<RemoteClient> clients = _engine.Clients.Values;
+        clients = _osFilter switch
+        {
+            "windows" => clients.Where(cl => cl.LastReport != null && !ServerEngine.IsLinuxClient(cl)),
+            "linux" => clients.Where(cl => cl.LastReport != null && ServerEngine.IsLinuxClient(cl)),
+            _ => clients
+        };
+        clients = _sortMode == "os"
+            ? clients.OrderBy(OsSortKey).ThenBy(cl => cl.MachineName, StringComparer.OrdinalIgnoreCase)
+            : clients.OrderBy(cl => cl.MachineName, StringComparer.OrdinalIgnoreCase);
+        return clients.ToList();
+    }
+
+    static string OsSortKey(RemoteClient cl) => ServerEngine.IsLinuxClient(cl) ? "2-linux" : "1-windows";
+
     void OnMouseMove(object? sender, MouseEventArgs e)
     {
         string tip = "";
@@ -379,6 +413,8 @@ sealed class ServerForm : BorderlessForm
         "openrelease" => "Open the staged folder in Explorer (or the GitHub release page if not yet staged)",
         "openreleasenotes" => "Open the GitHub release page in your browser",
         "cpu_detail" => "Show detailed CPU sensors",
+        "os_filter" => "Filter visible clients by operating system",
+        "sort_mode" => "Sort visible clients by name or operating system",
         var a when a.StartsWith("files_path:", StringComparison.Ordinal) => "Open this drive in the file browser",
         _ => ""
     };
@@ -459,7 +495,8 @@ sealed class ServerForm : BorderlessForm
 
         DrawStatusBar(g, x, y, w);
         y += 76;
-        bool anyOutdated = _engine.Clients.Any(kv => ServerEngine.ClientNeedsUpdate(kv.Value.ClientVersion));
+        var visibleClients = VisibleClients();
+        bool anyOutdated = visibleClients.Any(cl => ServerEngine.ClientNeedsUpdate(cl.ClientVersion));
         if (_selectedMachines.Count > 0 || anyOutdated) { DrawSelectionBar(g, x, y, w, anyOutdated); y += 42; }
 
         var pendingClients = _engine.PendingApprovals.Values.OrderBy(p => p.MachineName).ToList();
@@ -482,9 +519,8 @@ sealed class ServerForm : BorderlessForm
 
         if (!_engine.Clients.IsEmpty)
         {
-            foreach (var kv in _engine.Clients.OrderBy(k => k.Key))
+            foreach (var cl in visibleClients)
             {
-                var cl = kv.Value;
                 if (cl.LastReport == null)
                 {
                     DrawConnectedWithoutReport(g, x, y, w, cl);
@@ -495,9 +531,18 @@ sealed class ServerForm : BorderlessForm
                 int ch = cl.Expanded ? DrawExpanded(g, x, y, w, cl, stale) : DrawCollapsed(g, x, y, w, cl, stale);
                 y += ch + 6;
             }
+            if (visibleClients.Count == 0)
+            {
+                using var f = new Font("Segoe UI", 9f);
+                using var b = new SolidBrush(Th.Dim);
+                g.DrawString("No clients match the current OS filter.", f, b, x + 6, y + 10);
+                y += 40;
+            }
         }
 
-        var offlineClients = _engine.Store.All().Where(a => !a.Revoked && !_engine.Clients.ContainsKey(a.Name)).OrderBy(a => a.Name).ToList();
+        var offlineClients = _osFilter == "all"
+            ? _engine.Store.All().Where(a => !a.Revoked && !_engine.Clients.ContainsKey(a.Name)).OrderBy(a => a.Name).ToList()
+            : new List<ApprovedClient>();
         if (offlineClients.Count > 0)
         {
             using (var hf = new Font("Segoe UI", 7f)) using (var hb = new SolidBrush(Th.Dim))
@@ -551,6 +596,10 @@ sealed class ServerForm : BorderlessForm
             if (staged)
                 DrawBtn(g, bx, y + 23, 56, 24, "Notes", Th.Dim, "", "openreleasenotes");
         }
+
+        string osLabel = _osFilter switch { "windows" => "OS: Win", "linux" => "OS: Linux", _ => "OS: All" };
+        DrawBtn(g, x + w - 180, y + 43, 78, 22, osLabel, _osFilter == "all" ? Th.Dim : Th.Cyan, "", "os_filter");
+        DrawBtn(g, x + w - 96, y + 43, 84, 22, _sortMode == "os" ? "Sort: OS" : "Sort: Name", Th.Dim, "", "sort_mode");
 
         using (var cf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var ccb = new SolidBrush(_engine.ConnectionCount > 0 ? Th.Grn : Th.Dim))
@@ -635,6 +684,15 @@ sealed class ServerForm : BorderlessForm
             mx += (int)bsz.Width + 4;
         }
         using var mf = new Font("Segoe UI", 8f);
+        int chipLeft = HeaderChipX(x, w, 60) - 8;
+        string osText = "OS: " + ShortOsLabel(r);
+        var osSz = g.MeasureString(osText, mf);
+        if (mx + osSz.Width + 10 < chipLeft)
+        {
+            using var osb = new SolidBrush(ServerEngine.IsLinuxClient(cl) ? Th.Cyan : Th.Dim);
+            g.DrawString(osText, mf, osb, mx, y + 14);
+            mx += (int)osSz.Width + 16;
+        }
 
         if (r.TotalLoadPercent.HasValue)
         { using var lb = new SolidBrush(Th.LdC(r.TotalLoadPercent.Value)); g.DrawString($"{r.TotalLoadPercent.Value:0}%", mf, lb, mx, y + 14); mx += 48; }
@@ -909,6 +967,20 @@ sealed class ServerForm : BorderlessForm
 
     static string FmtNet(double kbps) => kbps >= 1024 ? $"{kbps / 1024.0:0.0}M" : $"{kbps:0}K";
     static string FmtGb(double value, string format) => value.ToString(format);
+    static string ShortOsLabel(MachineReport r)
+    {
+        string os = r.OsVersion ?? "";
+        if (os.Contains("linux", StringComparison.OrdinalIgnoreCase)) return "Linux";
+        if (os.Contains("Windows", StringComparison.OrdinalIgnoreCase))
+        {
+            string clean = os.Replace("Microsoft", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("Windows NT", "Windows", StringComparison.OrdinalIgnoreCase)
+                .Replace("  ", " ")
+                .Trim();
+            return clean.Length > 24 ? clean[..24].TrimEnd() : clean;
+        }
+        return string.IsNullOrWhiteSpace(os) ? "Unknown" : (os.Length > 24 ? os[..24].TrimEnd() : os);
+    }
     static void DrawMetric(Graphics g, int x, int y, string l, string v, Color c)
     {
         using var lf = new Font("Segoe UI", 6f); using var lb = new SolidBrush(Color.FromArgb(110, Th.Brt));
