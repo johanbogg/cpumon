@@ -18,6 +18,11 @@ sealed class ServerForm : BorderlessForm
     bool _exitRequested;
     bool _trayBalloonShown;
     int _sy, _contentH;
+    bool _scrollDrag;
+    int _scrollDragOffset;
+    Rectangle _scrollThumb = Rectangle.Empty;
+    int _scrollTop;
+    int _scrollBottom;
     readonly List<(Rectangle R, string M, string A)> _btns = new();
     string _currentToolTip = "";
     readonly Dictionary<string, ProcDialog> _procDialogs = new();
@@ -40,9 +45,13 @@ sealed class ServerForm : BorderlessForm
 
         var tp = MkTitle("⬡ CPU Monitor Server", Th.Grn);
 
-        _ct = new DPanel { Dock = DockStyle.Fill, BackColor = Th.Bg };
+        _ct = new DPanel { Dock = DockStyle.Fill, BackColor = Th.Bg, TabStop = true };
         _ct.Paint += PaintContent;
-        _ct.MouseWheel += (_, e) => { _sy = Math.Clamp(_sy - e.Delta / 4, 0, Math.Max(0, _contentH - _ct.Height + 20)); _ct.Invalidate(); };
+        _ct.MouseWheel += (_, e) => ScrollTo(_sy - e.Delta / 4);
+        _ct.MouseEnter += (_, _) => _ct.Focus();
+        _ct.KeyDown += OnContentKeyDown;
+        _ct.MouseDown += OnContentMouseDown;
+        _ct.MouseUp += OnContentMouseUp;
         _ct.MouseClick += OnClick;
         _ct.MouseMove += OnMouseMove;
 
@@ -205,8 +214,9 @@ sealed class ServerForm : BorderlessForm
     void OnClick(object? sender, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
+        if (ScrollbarVisible() && new Rectangle(_ct.Width - 14, _scrollTop, 14, ScrollViewportH()).Contains(e.Location)) return;
 
-        foreach (var (r, m, a) in _btns)
+        foreach (var (r, m, a) in _btns.AsEnumerable().Reverse())
         {
             if (!r.Contains(e.Location)) continue;
 
@@ -349,6 +359,60 @@ sealed class ServerForm : BorderlessForm
         }
     }
 
+    int ScrollViewportH() => Math.Max(1, _scrollBottom - _scrollTop);
+
+    int ScrollMax() => Math.Max(0, _contentH - ScrollViewportH());
+
+    bool ScrollbarVisible() => ScrollMax() > 0;
+
+    void ScrollTo(int value)
+    {
+        int next = Math.Clamp(value, 0, ScrollMax());
+        if (next == _sy) return;
+        _sy = next;
+        _ct.Invalidate();
+    }
+
+    void OnContentKeyDown(object? sender, KeyEventArgs e)
+    {
+        int delta = e.KeyCode switch
+        {
+            Keys.Down => 32,
+            Keys.Up => -32,
+            Keys.PageDown => Math.Max(80, ScrollViewportH() - 40),
+            Keys.PageUp => -Math.Max(80, ScrollViewportH() - 40),
+            Keys.Home => -_sy,
+            Keys.End => ScrollMax() - _sy,
+            _ => 0
+        };
+        if (delta == 0) return;
+        e.Handled = true;
+        ScrollTo(_sy + delta);
+    }
+
+    void OnContentMouseDown(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left || !ScrollbarVisible()) return;
+        var bar = new Rectangle(_ct.Width - 14, _scrollTop, 14, ScrollViewportH());
+        if (!bar.Contains(e.Location)) return;
+
+        if (_scrollThumb.Contains(e.Location))
+        {
+            _scrollDrag = true;
+            _scrollDragOffset = e.Y - _scrollThumb.Y;
+            _ct.Capture = true;
+            return;
+        }
+
+        ScrollTo(e.Y < _scrollThumb.Y ? _sy - Math.Max(80, ScrollViewportH() - 40) : _sy + Math.Max(80, ScrollViewportH() - 40));
+    }
+
+    void OnContentMouseUp(object? sender, MouseEventArgs e)
+    {
+        _scrollDrag = false;
+        _ct.Capture = false;
+    }
+
     void OpenFileBrowserAt(RemoteClient cl, string path)
     {
         string initialPath = NormalizeInitialFilePath(path);
@@ -395,8 +459,19 @@ sealed class ServerForm : BorderlessForm
 
     void OnMouseMove(object? sender, MouseEventArgs e)
     {
+        if (_scrollDrag)
+        {
+            int max = ScrollMax();
+            int trackH = Math.Max(40, ScrollViewportH());
+            int thumbH = Math.Max(32, (int)(trackH * Math.Min(1f, ScrollViewportH() / (float)Math.Max(_contentH, 1))));
+            int usable = Math.Max(1, trackH - thumbH);
+            int thumbY = Math.Clamp(e.Y - _scrollDragOffset, _scrollTop, _scrollTop + usable);
+            ScrollTo((int)Math.Round((thumbY - _scrollTop) * (max / (double)usable)));
+            return;
+        }
+
         string tip = "";
-        foreach (var (r, _, a) in _btns)
+        foreach (var (r, _, a) in _btns.AsEnumerable().Reverse())
         {
             if (!r.Contains(e.Location)) continue;
             tip = TooltipForAction(a);
@@ -490,11 +565,14 @@ sealed class ServerForm : BorderlessForm
         foreach (var k in _engine.Clients.Where(kv => (DateTime.UtcNow - kv.Value.LastSeen).TotalSeconds > 120).Select(kv => kv.Key).ToList())
         { if (_engine.Clients.TryRemove(k, out var c)) c.Dispose(); _selectedMachines.Remove(k); }
 
-        _sy = Math.Clamp(_sy, 0, Math.Max(0, _contentH - _ct.Height + 20));
-        int x = 10, y = 6 - _sy, w = _ct.Width - 20;
+        int x = 10, y, w = _ct.Width - 20;
 
-        DrawStatusBar(g, x, y, w);
-        y += 79;
+        const int logH = 106;
+        _scrollTop = 6 + 79;
+        _scrollBottom = Math.Max(_scrollTop + 40, _ct.Height - logH - 12);
+        _sy = Math.Clamp(_sy, 0, ScrollMax());
+        y = _scrollTop - _sy;
+
         var visibleClients = VisibleClients();
         bool anyOutdated = visibleClients.Any(cl => ServerEngine.ClientNeedsUpdate(cl.ClientVersion));
         if (_selectedMachines.Count > 0 || anyOutdated) { DrawSelectionBar(g, x, y, w, anyOutdated); y += 42; }
@@ -552,9 +630,36 @@ sealed class ServerForm : BorderlessForm
             { DrawOffline(g, x, y, w, ac); y += 52; }
         }
 
-        _contentH = y + _sy - 6;
-        int logY = Math.Max(y + 8, _ct.Height - 110);
-        DrawLog(g, 10, logY, w, _ct.Height - logY - 4);
+        _contentH = y + _sy - _scrollTop + 12;
+        int logY = Math.Max(6, _ct.Height - logH - 4);
+        DrawLog(g, 10, logY, w, Math.Min(logH, _ct.Height - logY - 4));
+        DrawStatusBar(g, x, 6, w);
+        DrawScrollbar(g);
+    }
+
+    void DrawScrollbar(Graphics g)
+    {
+        int max = ScrollMax();
+        if (max <= 0)
+        {
+            _scrollThumb = Rectangle.Empty;
+            return;
+        }
+
+        int trackX = _ct.Width - 10;
+        int trackY = _scrollTop;
+        int trackH = Math.Max(40, ScrollViewportH());
+        int thumbH = Math.Max(32, (int)(trackH * Math.Min(1f, ScrollViewportH() / (float)Math.Max(_contentH, 1))));
+        int usable = Math.Max(1, trackH - thumbH);
+        int thumbY = trackY + (int)Math.Round((_sy / (double)max) * usable);
+        _scrollThumb = new Rectangle(trackX, thumbY, 6, thumbH);
+
+        using var track = new SolidBrush(Color.FromArgb(35, Th.Dim));
+        using var thumb = new SolidBrush(Color.FromArgb(150, Th.Dim));
+        using var pTrack = Th.RR(trackX, trackY, 6, trackH, 3);
+        using var pThumb = Th.RR(_scrollThumb.X, _scrollThumb.Y, _scrollThumb.Width, _scrollThumb.Height, 3);
+        g.FillPath(track, pTrack);
+        g.FillPath(thumb, pThumb);
     }
 
     void DrawStatusBar(Graphics g, int x, int y, int w)
