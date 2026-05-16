@@ -54,6 +54,7 @@ sealed class ServerForm : BorderlessForm
         _engine.SysInfoReceived += OnEngineSysInfo;
         _engine.ServicesReceived += OnEngineServices;
         _engine.EventsReceived += OnEngineEvents;
+        _engine.CpuDetailReceived += OnEngineCpuDetail;
         _engine.ScreenshotReceived += OnEngineScreenshot;
         _engine.UpdateAvailable += OnEngineUpdateAvailable;
         _engine.ReleaseStaged += OnEngineReleaseStaged;
@@ -94,6 +95,7 @@ sealed class ServerForm : BorderlessForm
             _engine.SysInfoReceived -= OnEngineSysInfo;
             _engine.ServicesReceived -= OnEngineServices;
             _engine.EventsReceived -= OnEngineEvents;
+            _engine.CpuDetailReceived -= OnEngineCpuDetail;
             _engine.ScreenshotReceived -= OnEngineScreenshot;
             _engine.UpdateAvailable -= OnEngineUpdateAvailable;
             _engine.ReleaseStaged -= OnEngineReleaseStaged;
@@ -154,6 +156,12 @@ sealed class ServerForm : BorderlessForm
     {
         if (IsDisposed) return;
         BeginInvoke(() => { using var d = new EventViewerDialog(cl); d.ShowDialog(this); });
+    }
+
+    void OnEngineCpuDetail(RemoteClient cl, CpuDetailReport detail)
+    {
+        if (IsDisposed) return;
+        BeginInvoke(() => new CpuDetailDialog(cl.MachineName, detail).Show(this));
     }
 
     void OnEngineScreenshot(RemoteClient cl, ScreenshotData shot)
@@ -264,6 +272,7 @@ sealed class ServerForm : BorderlessForm
                         _engine.RequestShutdown(m);
                     break;
                 case "sysinfo": _engine.RequestSysInfo(m); break;
+                case "cpu_detail": _engine.RequestCpuDetail(m); break;
                 case "health": BeginInvoke(() => new HealthDialog(cl, _engine.Store).Show(this)); break;
                 case "screenshot": _engine.RequestScreenshot(m); break;
                 case "forget":
@@ -349,6 +358,7 @@ sealed class ServerForm : BorderlessForm
     {
         "openrelease" => "Open the staged folder in Explorer (or the GitHub release page if not yet staged)",
         "openreleasenotes" => "Open the GitHub release page in your browser",
+        "cpu_detail" => "Show detailed CPU sensors",
         _ => ""
     };
 
@@ -707,9 +717,11 @@ sealed class ServerForm : BorderlessForm
 
         // Metrics row 1 — CPU
         int my = y + 59, mx = x + 14;
+        int cpuMetricsX = mx;
         DrawMetric(g, mx, my, "LOAD", Th.F(r.TotalLoadPercent, "0", "%"), Th.LdC(r.TotalLoadPercent ?? 0)); mx += 112;
         DrawMetric(g, mx, my, "FREQ", Th.FF(r.PackageFrequencyMHz), Th.Blu); mx += 112;
         DrawMetric(g, mx, my, "TEMP", Th.F(r.PackageTemperatureC, "0.0", "°C"), Th.TpC(r.PackageTemperatureC ?? 0)); mx += 112;
+        if (!linux) _btns.Add((new Rectangle(cpuMetricsX - 4, my - 13, Math.Min(336, w - 28), 32), r.MachineName, "cpu_detail"));
         if (r.PackagePowerW is > 0) { DrawMetric(g, mx, my, "PWR", Th.F(r.PackagePowerW, "0.0", "W"), Th.Org); mx += 112; }
         if (r.GpuLoadPercent.HasValue) DrawMetric(g, mx, my, "GPU", Th.F(r.GpuLoadPercent, "0", "%"), Th.LdC(r.GpuLoadPercent ?? 0));
 

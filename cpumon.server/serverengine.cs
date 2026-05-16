@@ -81,6 +81,7 @@ public sealed class ServerEngine : IDisposable
     public event Action<RemoteClient>? SysInfoReceived;
     public event Action<RemoteClient>? ServicesReceived;
     public event Action<RemoteClient>? EventsReceived;
+    public event Action<RemoteClient, CpuDetailReport>? CpuDetailReceived;
     public event Action<RemoteClient, ScreenshotData>? ScreenshotReceived;
     public event Action? UpdateAvailable;
     public event Action? ReleaseStaged;
@@ -197,6 +198,14 @@ public sealed class ServerEngine : IDisposable
         if (!_cls.TryGetValue(machine, out var cl)) return false;
         cl.Send(new ServerCommand { Cmd = "screenshot", CmdId = Guid.NewGuid().ToString("N")[..8] });
         _log.Add($"Shot→{machine}", Th.Cyan);
+        return true;
+    }
+
+    public bool RequestCpuDetail(string machine)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "cpu_detail", CmdId = Guid.NewGuid().ToString("N")[..8] });
+        _log.Add($"CPU detail->{machine}", Th.Cyan);
         return true;
     }
 
@@ -699,6 +708,12 @@ public sealed class ServerEngine : IDisposable
                             if (TryRoutePawCommandResult(cl, msg.CmdId, "list_events", new ServerCommand { Cmd = "paw_events", PawSource = cl.MachineName, PawEvents = msg.Events }))
                                 break;
                             try { EventsReceived?.Invoke(cl); } catch { }
+                            break;
+
+                        case "cpu_detail" when msg.CpuDetail != null:
+                            if (!string.IsNullOrEmpty(msg.CpuDetail.MachineName) && msg.CpuDetail.MachineName != cl.MachineName)
+                                msg.CpuDetail.MachineName = cl.MachineName;
+                            try { CpuDetailReceived?.Invoke(cl, msg.CpuDetail); } catch { }
                             break;
 
                         case "cmdresult":

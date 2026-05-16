@@ -114,6 +114,74 @@ sealed class SysInfoDialog : Form
     }
 }
 
+sealed class CpuDetailDialog : Form
+{
+    public CpuDetailDialog(string machine, CpuDetailReport detail)
+    {
+        Text = $"CPU Detail - {machine}";
+        Size = new Size(620, 500);
+        MinimumSize = new Size(420, 300);
+        StartPosition = FormStartPosition.CenterParent;
+        BackColor = Th.Bg;
+        ForeColor = Th.Brt;
+        FormBorderStyle = FormBorderStyle.Sizable;
+
+        var top = new RichTextBox
+        {
+            Dock = DockStyle.Top,
+            Height = 118,
+            BackColor = Th.Card,
+            ForeColor = Th.Brt,
+            Font = new Font("Consolas", 9.5f),
+            ReadOnly = true,
+            BorderStyle = BorderStyle.None
+        };
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"  {machine}");
+        sb.AppendLine($"  CPU: {detail.CpuName}");
+        sb.AppendLine($"  Load: {Fmt(detail.TotalLoadPercent, "0.0", "%")}");
+        sb.AppendLine($"  Frequency: {FmtFreq(detail.PackageFrequencyMHz)}");
+        sb.AppendLine($"  Temperature: {Fmt(detail.PackageTemperatureC, "0.0", " C")}");
+        if (detail.PackagePowerW.HasValue) sb.AppendLine($"  Power: {Fmt(detail.PackagePowerW, "0.0", " W")}");
+        sb.AppendLine($"  Cores reported: {detail.Cores.Count} / {detail.CoreCount}");
+        top.Text = sb.ToString();
+
+        var grid = new DataGridView
+        {
+            Dock = DockStyle.Fill,
+            BackgroundColor = Th.Bg,
+            ForeColor = Th.Brt,
+            GridColor = Th.Brd,
+            DefaultCellStyle = new DataGridViewCellStyle { BackColor = Th.Card, ForeColor = Th.Brt, SelectionBackColor = Color.FromArgb(50, 80, 160) },
+            ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = Th.TBg, ForeColor = Th.Blu },
+            EnableHeadersVisualStyles = false,
+            RowHeadersVisible = false,
+            AllowUserToAddRows = false,
+            ReadOnly = true,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            BorderStyle = BorderStyle.None
+        };
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Core", HeaderText = "Core", AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells });
+        grid.Columns.Add("Load", "Load");
+        grid.Columns.Add("Freq", "Frequency");
+        grid.Columns.Add("Temp", "Temperature");
+
+        foreach (var c in detail.Cores.OrderBy(c => c.Index))
+            grid.Rows.Add(c.Index + 1, Fmt(c.LoadPercent, "0.0", "%"), FmtFreq(c.FrequencyMHz), Fmt(c.TemperatureC, "0.0", " C"));
+
+        if (detail.Cores.Count == 0)
+            grid.Rows.Add("-", "No per-core sensors reported", "", "");
+
+        Controls.Add(grid);
+        Controls.Add(top);
+    }
+
+    static string Fmt(float? value, string format, string suffix) => value.HasValue ? value.Value.ToString(format) + suffix : "N/A";
+    static string FmtFreq(float? mhz) => mhz.HasValue ? (mhz.Value >= 1000 ? $"{mhz.Value / 1000f:0.00} GHz" : $"{mhz.Value:0} MHz") : "N/A";
+}
+
 sealed class ProcDialog : Form
 {
     readonly RemoteClient _cl;

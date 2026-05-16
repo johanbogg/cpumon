@@ -438,6 +438,7 @@ public sealed class ClientMessage
 {
     [JsonPropertyName("type")] public string Type { get; set; } = "";
     [JsonPropertyName("report")] public MachineReport? Report { get; set; }
+    [JsonPropertyName("cpuDetail")] public CpuDetailReport? CpuDetail { get; set; }
     [JsonPropertyName("processes")] public List<ProcessInfo>? Processes { get; set; }
     [JsonPropertyName("sysinfo")] public SystemInfoReport? SysInfo { get; set; }
     [JsonPropertyName("cmdId")] public string? CmdId { get; set; }
@@ -674,6 +675,19 @@ public sealed class CoreReport
     [JsonPropertyName("l")] public float? LoadPercent { get; set; }
 }
 
+public sealed class CpuDetailReport
+{
+    [JsonPropertyName("name")] public string MachineName { get; set; } = "";
+    [JsonPropertyName("cpuName")] public string CpuName { get; set; } = "";
+    [JsonPropertyName("coreCount")] public int CoreCount { get; set; }
+    [JsonPropertyName("temp")] public float? PackageTemperatureC { get; set; }
+    [JsonPropertyName("freq")] public float? PackageFrequencyMHz { get; set; }
+    [JsonPropertyName("load")] public float? TotalLoadPercent { get; set; }
+    [JsonPropertyName("power")] public float? PackagePowerW { get; set; }
+    [JsonPropertyName("cores")] public List<CoreReport> Cores { get; set; } = new();
+    [JsonPropertyName("ts")] public long TimestampUtcMs { get; set; }
+}
+
 public sealed class ProcessInfo
 {
     [JsonPropertyName("pid")] public int Pid { get; set; }
@@ -712,9 +726,9 @@ public sealed class DiskInfoReport
     [JsonPropertyName("format")] public string Format { get; set; } = "";
 }
 
-public readonly record struct CpuSnapshot(bool IsAvailable, float? PackageTemperatureC, float? PackageFrequencyMHz, float? TotalLoadPercent, float? PackagePowerW, IReadOnlyList<CoreSnapshot> Cores)
+public readonly record struct CpuSnapshot(bool IsAvailable, int CoreCount, float? PackageTemperatureC, float? PackageFrequencyMHz, float? TotalLoadPercent, float? PackagePowerW, IReadOnlyList<CoreSnapshot> Cores)
 {
-    public static CpuSnapshot Unavailable() => new(false, null, null, null, null, Array.Empty<CoreSnapshot>());
+    public static CpuSnapshot Unavailable() => new(false, 0, null, null, null, null, Array.Empty<CoreSnapshot>());
 }
 
 public readonly record struct CoreSnapshot(int Index, float? FrequencyMHz, float? TemperatureC, float? LoadPercent);

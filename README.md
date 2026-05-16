@@ -226,7 +226,7 @@ cpumon/
 │   ├── program.cs
 │   └── cpumon.client.csproj
 ├── cpumon.tests/
-│   ├── Program.cs         — 18 smoke tests run automatically by build.ps1 before publish
+│   ├── Program.cs         — 19 smoke tests run automatically by build.ps1 before publish
 │   └── cpumon.tests.csproj
 ├── tools/
 │   └── iconGen/           — one-shot console tool that calls Th.MakeHexIconBytes(Color) and

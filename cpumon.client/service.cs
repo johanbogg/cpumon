@@ -697,6 +697,7 @@ sealed class CpuMonService : ServiceBase
                 }
                 else if (cmd.Cmd == "auth_pending") { _approvalRequested = true; _ns = NetState.AuthPending; }
                 else if (cmd.Cmd == "mode" && cmd.Mode != null) _pacer.Mode = cmd.Mode;
+                else if (cmd.Cmd == "cpu_detail") SendCpuDetail(cmd.CmdId);
                 else if (cmd.Cmd == "rdp_open" && cmd.RdpId != null) { _activeRdpSessions[cmd.RdpId] = 0; SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_start", RdpId = cmd.RdpId, Fps = cmd.RdpFps, Quality = cmd.RdpQuality }); }
                 else if (cmd.Cmd == "rdp_close" && cmd.RdpId != null) { _activeRdpSessions.TryRemove(cmd.RdpId, out _); SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_stop", RdpId = cmd.RdpId }); }
                 else if (cmd.Cmd == "rdp_set_fps" && cmd.RdpId != null && _activeRdpSessions.ContainsKey(cmd.RdpId)) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_set_fps", RdpId = cmd.RdpId, Fps = cmd.RdpFps });
@@ -728,6 +729,22 @@ sealed class CpuMonService : ServiceBase
                 else CmdExec.Run(cmd, _tl, ref _wr);
             }
             catch (Exception ex) { LogSink.Warn("Service.CmdLoop", "Command dispatch failed", ex); }
+        }
+    }
+
+    void SendCpuDetail(string? cmdId)
+    {
+        try
+        {
+            var detail = ReportBuilder.BuildCpuDetail(_mon.GetSnapshot(includeCores: true), _cpu);
+            var msg = new ClientMessage { Type = "cpu_detail", CpuDetail = detail, MachineName = Environment.MachineName, AuthKey = _ak, CmdId = cmdId };
+            lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(msg, Proto.JsonOpts)); _wr?.Flush(); }
+        }
+        catch (Exception ex)
+        {
+            LogSink.Warn("Service.CpuDetail", "Failed to send CPU detail", ex);
+            var err = new ClientMessage { Type = "cmdresult", CmdId = cmdId, Success = false, Message = ex.Message };
+            lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(err, Proto.JsonOpts)); _wr?.Flush(); } catch { } }
         }
     }
 

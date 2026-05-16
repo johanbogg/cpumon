@@ -30,6 +30,7 @@ internal static class Program
             TestServerEnginePendingApprovalMissing();
             TestVersionComparisonAcrossMinor();
             TestLinuxUpdatePayload();
+            TestCpuReportKeepsCoresOnDemand();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -346,6 +347,24 @@ internal static class Program
         }
         Assert(!LinuxUpdatePayload.TryRead(emptyZip, out _, out _, out var err5), "zip without cpumon.py should fail");
         Assert(err5.Contains("did not contain cpumon.py", StringComparison.Ordinal), "error should mention missing cpumon.py");
+    }
+
+    static void TestCpuReportKeepsCoresOnDemand()
+    {
+        var cores = new[]
+        {
+            new CoreSnapshot(0, 4200, 52, 12),
+            new CoreSnapshot(1, 4100, 50, 9)
+        };
+        var summary = new CpuSnapshot(true, 2, 51, 4150, 10, 18, Array.Empty<CoreSnapshot>());
+        var normal = ReportBuilder.Build(summary, "Test CPU");
+        Assert(normal.CoreCount == 2, "normal report should keep core count");
+        Assert(normal.Cores.Count == 0, "normal report should not carry per-core telemetry");
+
+        var detail = ReportBuilder.BuildCpuDetail(new CpuSnapshot(true, 2, 51, 4150, 10, 18, cores), "Test CPU");
+        Assert(detail.CoreCount == 2, "detail report should keep core count");
+        Assert(detail.Cores.Count == 2, "detail report should include per-core telemetry on demand");
+        Assert(detail.Cores[0].Index == 0 && detail.Cores[1].Index == 1, "detail report should preserve core order");
     }
 
     static void TestServerEnginePendingApprovalMissing()
