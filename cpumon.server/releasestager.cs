@@ -44,17 +44,21 @@ public static class ReleaseStager
             if (Directory.Exists(tempDir)) { try { Directory.Delete(tempDir, true); } catch { } }
             Directory.CreateDirectory(tempDir);
 
-            Dictionary<string, string>? sums = null;
-            if (!string.IsNullOrEmpty(info.ChecksumsUrl))
+            if (string.IsNullOrEmpty(info.ChecksumsUrl))
+                throw new InvalidDataException($"Release {info.TagName} has no SHA256SUMS asset; refusing to stage unsigned assets");
+
+            string sumsTxt;
+            try
             {
-                try
-                {
-                    string sumsTxt = await _http.GetStringAsync(info.ChecksumsUrl, ct).ConfigureAwait(false);
-                    sums = ParseSums(sumsTxt);
-                    await File.WriteAllTextAsync(Path.Combine(tempDir, $"SHA256SUMS-{info.Version}.txt"), sumsTxt, ct).ConfigureAwait(false);
-                }
-                catch (Exception ex) { LogSink.Warn("ReleaseStager", $"SHA256SUMS fetch failed; staging without hash verification: {ex.Message}"); }
+                sumsTxt = await _http.GetStringAsync(info.ChecksumsUrl, ct).ConfigureAwait(false);
             }
+            catch (Exception ex)
+            {
+                throw new InvalidDataException($"SHA256SUMS fetch failed for {info.TagName}: {ex.Message}", ex);
+            }
+
+            var sums = ParseSums(sumsTxt);
+            await File.WriteAllTextAsync(Path.Combine(tempDir, $"SHA256SUMS-{info.Version}.txt"), sumsTxt, ct).ConfigureAwait(false);
 
             var assets = new List<(string Url, string ZipName, string SubDir)>();
             if (info.ClientAssetUrl != null) assets.Add((info.ClientAssetUrl, $"cpumon-client-{info.Version}.zip", "client"));
@@ -70,17 +74,17 @@ public static class ReleaseStager
 
             foreach (var (url, zipName, subDir) in assets)
             {
+                if (!sums.TryGetValue(zipName, out var expected))
+                    throw new InvalidDataException($"SHA256SUMS has no entry for {zipName}; refusing to stage {info.TagName}");
+
                 string zipPath = Path.Combine(tempDir, zipName);
                 using (var stream = await _http.GetStreamAsync(url, ct).ConfigureAwait(false))
                 using (var fs = File.Create(zipPath))
                     await stream.CopyToAsync(fs, ct).ConfigureAwait(false);
 
-                if (sums != null && sums.TryGetValue(zipName, out var expected))
-                {
-                    string actual = await ComputeSha256Async(zipPath, ct).ConfigureAwait(false);
-                    if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidDataException($"SHA256 mismatch for {zipName}: expected {expected[..16]}…, got {actual[..16]}…");
-                }
+                string actual = await ComputeSha256Async(zipPath, ct).ConfigureAwait(false);
+                if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"SHA256 mismatch for {zipName}");
 
                 ZipFile.ExtractToDirectory(zipPath, Path.Combine(tempDir, subDir));
             }
@@ -123,7 +127,6 @@ public static class ReleaseStager
                 if (string.Equals(Path.GetFullPath(old), keepFull, StringComparison.OrdinalIgnoreCase)) continue;
                 try { Directory.Delete(old, true); } catch { }
             }
-            // Also clean up any leftover .tmp staging dirs from interrupted runs.
             foreach (var t in Directory.GetDirectories(ReleasesDir, "*.tmp"))
             {
                 try { Directory.Delete(t, true); } catch { }

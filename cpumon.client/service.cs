@@ -52,6 +52,7 @@ sealed class CpuMonService : ServiceBase
     int _agentLaunchProcessId;
     long _agentLastPong = DateTime.UtcNow.Ticks;
     long _agentLastLaunchTicks;
+    long _agentLastTaskLaunchTicks;
     volatile bool _preferAgentTaskLaunch;
     long _authFailedAt;
     volatile bool _authRequestPending;
@@ -185,12 +186,21 @@ sealed class CpuMonService : ServiceBase
 
                 try
                 {
+                    if (_preferAgentTaskLaunch &&
+                        (DateTime.UtcNow - new DateTime(Interlocked.Read(ref _agentLastTaskLaunchTicks))).TotalSeconds < 30)
+                    {
+                        await Task.Delay(5000, ct);
+                        continue;
+                    }
+
                     int pid = LaunchInInteractiveSession(exePath, "--agent", _preferAgentTaskLaunch);
                     if (pid > 0)
                     {
                         _agentLaunchProcessId = pid;
                         _agentLastLaunchTicks = DateTime.UtcNow.Ticks;
                     }
+                    else if (_preferAgentTaskLaunch)
+                        Interlocked.Exchange(ref _agentLastTaskLaunchTicks, DateTime.UtcNow.Ticks);
                 }
                 catch (Exception ex) { LogSink.Warn("Service.AgentLaunch", "Failed to launch interactive agent", ex); }
                 await Task.Delay(5000, ct);
@@ -222,9 +232,14 @@ sealed class CpuMonService : ServiceBase
                     return true;
                 }
 
-                LogSink.Warn("Service.AgentLaunch", $"Launched agent pid {pid} is still running but has not connected; killing before retry");
-                try { proc.Kill(entireProcessTree: true); } catch { proc.Kill(); }
-                try { proc.WaitForExit(3000); } catch { }
+                if (IsOurProcess(proc))
+                {
+                    LogSink.Warn("Service.AgentLaunch", $"Launched agent pid {pid} is still running but has not connected; killing before retry");
+                    try { proc.Kill(entireProcessTree: true); } catch { proc.Kill(); }
+                    try { proc.WaitForExit(3000); } catch { }
+                }
+                else
+                    LogSink.Warn("Service.AgentLaunch", $"Launched agent pid {pid} no longer matches CpuMon; not killing");
                 _preferAgentTaskLaunch = true;
             }
             else
@@ -245,6 +260,18 @@ sealed class CpuMonService : ServiceBase
 
         _agentLaunchProcessId = 0;
         return false;
+    }
+
+    static bool IsOurProcess(Process proc)
+    {
+        try
+        {
+            string? procPath = proc.MainModule?.FileName;
+            string? ourPath = Environment.ProcessPath;
+            return procPath != null && ourPath != null &&
+                string.Equals(Path.GetFullPath(procPath), Path.GetFullPath(ourPath), StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     static int LaunchInInteractiveSession(string exePath, string args, bool preferTask)
@@ -447,9 +474,11 @@ sealed class CpuMonService : ServiceBase
                     _agentReader = localReader;
                     _agentWriter = localWriter;
                     _agentProcessId = connectedAgentPid;
+                    _agentLaunchProcessId = 0;
                 }
 
                 _agentConnected = true;
+                _preferAgentTaskLaunch = false;
                 Interlocked.Exchange(ref _agentLastPong, DateTime.UtcNow.Ticks);
                 if (_isPaw) SendToAgent(new AgentIpc.AgentMessage { Type = "paw_granted" });
                 if (_authRequestPending) SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" });
@@ -584,9 +613,19 @@ sealed class CpuMonService : ServiceBase
             $"echo %date% %time% Starting CpuMon update > \"{logPath}\"\r\n" +
             $"echo Running as %USERNAME% >> \"{logPath}\"\r\n" +
             "sc stop CpuMonClient\r\n" +
-            "timeout /t 5 /nobreak > nul\r\n" +
-            $"move /Y \"{updatePath}\" \"{exePath}\" >> \"{logPath}\" 2>&1\r\n" +
+            "for /L %%i in (1,1,30) do (\r\n" +
+            "  sc query CpuMonClient | find \"STOPPED\" > nul && goto stopped\r\n" +
+            "  timeout /t 1 /nobreak > nul\r\n" +
+            ")\r\n" +
+            $"echo Service did not report STOPPED before update >> \"{logPath}\"\r\n" +
+            ":stopped\r\n" +
+            "for /L %%i in (1,1,5) do (\r\n" +
+            $"  move /Y \"{updatePath}\" \"{exePath}\" >> \"{logPath}\" 2>&1\r\n" +
+            "  if not errorlevel 1 goto moved\r\n" +
+            "  timeout /t 1 /nobreak > nul\r\n" +
+            ")\r\n" +
             "if errorlevel 1 goto fail\r\n" +
+            ":moved\r\n" +
             "sc start CpuMonClient\r\n" +
             "goto done\r\n" +
             ":fail\r\n" +
@@ -709,6 +748,26 @@ sealed class CpuMonService : ServiceBase
         }
     }
 
+    bool TrySendToAgent(AgentIpc.AgentMessage msg)
+    {
+        lock (_agentLock)
+        {
+            if (!_agentConnected || _agentWriter == null) return false;
+            try
+            {
+                _agentWriter.WriteLine(JsonSerializer.Serialize(msg, Proto.JsonOpts));
+                _agentWriter.Flush();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogSink.Warn("Service.SendToAgent", "Failed to write to agent pipe", ex);
+                _agentConnected = false;
+                return false;
+            }
+        }
+    }
+
     static void DisposeQuietly(IDisposable? disposable)
     {
         try { disposable?.Dispose(); } catch { }
@@ -730,7 +789,7 @@ sealed class CpuMonService : ServiceBase
         int pid;
         lock (_agentLock)
         {
-            pid = _agentProcessId;
+            pid = _agentProcessId > 0 ? _agentProcessId : _agentLaunchProcessId;
             if (_agentConnected && _agentWriter != null)
             {
                 try
@@ -740,6 +799,8 @@ sealed class CpuMonService : ServiceBase
                 }
                 catch (Exception ex) { LogSink.Debug("Service.AgentLaunch", "Failed to request interactive agent exit", ex); }
             }
+            _agentProcessId = 0;
+            _agentLaunchProcessId = 0;
         }
 
         EndInteractiveAgentTask();
@@ -750,11 +811,7 @@ sealed class CpuMonService : ServiceBase
             using var proc = Process.GetProcessById(pid);
             if (proc.WaitForExit(2000)) return;
 
-            string? procPath = null;
-            try { procPath = proc.MainModule?.FileName; } catch { }
-            string? ourPath = Environment.ProcessPath;
-            if (procPath != null && ourPath != null &&
-                string.Equals(Path.GetFullPath(procPath), Path.GetFullPath(ourPath), StringComparison.OrdinalIgnoreCase))
+            if (IsOurProcess(proc))
             {
                 LogSink.Info("Service.AgentLaunch", $"Killing interactive agent PID {pid} during service stop");
                 proc.Kill(true);
@@ -929,7 +986,8 @@ sealed class CpuMonService : ServiceBase
                 else if (cmd.Cmd == "terminal_open" && cmd.TermId != null)
                 {
                     if (!_agentConnected) OpenServiceTerminal(cmd);
-                    else SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_open", TermId = cmd.TermId, Shell = cmd.Shell });
+                    else if (!TrySendToAgent(new AgentIpc.AgentMessage { Type = "terminal_open", TermId = cmd.TermId, Shell = cmd.Shell }))
+                        OpenServiceTerminal(cmd);
                 }
                 else if (cmd.Cmd == "terminal_input" && cmd.TermId != null)
                 {

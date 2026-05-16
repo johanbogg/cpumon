@@ -552,7 +552,24 @@ public sealed class RemoteClient : IDisposable
     readonly TcpClient _tcp; readonly SslStream _ssl; readonly StreamReader _rd; readonly StreamWriter _wr; readonly object _wl = new();
     public RemoteClient(TcpClient tcp, SslStream ssl) { _tcp = tcp; _ssl = ssl; _rd = new StreamReader(new LineLengthLimitedStream(ssl), Encoding.UTF8); _wr = new StreamWriter(ssl, new UTF8Encoding(false)) { AutoFlush = false }; LastSeen = DateTime.UtcNow; }
     public Task<string?> ReadLineAsync(CancellationToken ct) => _rd.ReadLineAsync(ct).AsTask();
-    public void Send(ServerCommand cmd) { lock (_wl) { try { _wr.WriteLine(JsonSerializer.Serialize(cmd, Proto.JsonOpts)); _wr.Flush(); } catch { if (PendingCmds.Count < 5) PendingCmds.Enqueue(cmd); } } }
+    public void Send(ServerCommand cmd) => Send(cmd, queueOnFailure: true);
+    public bool Send(ServerCommand cmd, bool queueOnFailure)
+    {
+        lock (_wl)
+        {
+            try
+            {
+                _wr.WriteLine(JsonSerializer.Serialize(cmd, Proto.JsonOpts));
+                _wr.Flush();
+                return true;
+            }
+            catch
+            {
+                if (queueOnFailure && PendingCmds.Count < 5) PendingCmds.Enqueue(cmd);
+                return false;
+            }
+        }
+    }
     public void FlushPending() { while (PendingCmds.TryDequeue(out var cmd)) { try { Send(cmd); } catch { break; } } }
     public void Kick() { try { _tcp.Close(); } catch { } }
     public void Dispose()

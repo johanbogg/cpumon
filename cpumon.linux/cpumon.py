@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import platform
+import py_compile
 import select
 import shutil
 import signal
@@ -564,12 +565,10 @@ class Client:
             print(f"\n[Server] {cmd.get('message', '')}\n", flush=True)
 
         elif c == "restart":
-            self._res(cid, True, "Restarting…")
-            threading.Timer(0.5, lambda: subprocess.run(["shutdown", "-r", "now"])).start()
+            threading.Thread(target=self._power_action, args=(cid, ["shutdown", "-r", "now"], "Restart"), daemon=True).start()
 
         elif c == "shutdown":
-            self._res(cid, True, "Shutting down…")
-            threading.Timer(0.5, lambda: subprocess.run(["shutdown", "-h", "now"])).start()
+            threading.Thread(target=self._power_action, args=(cid, ["shutdown", "-h", "now"], "Shutdown"), daemon=True).start()
 
         elif c == "listprocesses":
             threading.Thread(target=self._send_processes, args=(cid,), daemon=True).start()
@@ -712,7 +711,13 @@ class Client:
             path     = cmd.get("path")
             new_name = cmd.get("newName")
             try:
+                if not new_name or os.path.basename(new_name) != new_name or "/" in new_name or "\\" in new_name:
+                    raise ValueError("invalid target name")
                 new_path = os.path.join(os.path.dirname(path), new_name)
+                parent = os.path.realpath(os.path.dirname(path))
+                dest_parent = os.path.realpath(os.path.dirname(new_path))
+                if parent != dest_parent:
+                    raise ValueError("target must stay in the same directory")
                 os.rename(path, new_path)
                 self._res(cid, True, f"Renamed to {new_name}")
             except Exception as e:
@@ -724,6 +729,17 @@ class Client:
                 self._handle_update_chunk(chunk)
 
     # ── Helpers for file/process ops ───────────────────────────────────────
+
+    def _power_action(self, cmd_id, argv, label):
+        try:
+            res = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+            msg = (res.stderr or res.stdout or "").strip()
+            if res.returncode == 0:
+                self._res(cmd_id, True, f"{label} requested")
+            else:
+                self._res(cmd_id, False, f"{label} failed ({res.returncode}): {msg}")
+        except Exception as e:
+            self._res(cmd_id, False, f"{label} failed: {e}")
 
     def _send_processes(self, cmd_id=None):
         try:
@@ -865,6 +881,19 @@ class Client:
             except OSError: pass
 
     def _apply_update(self, script_path: str, tmp_path: str):
+        try:
+            py_compile.compile(tmp_path, doraise=True)
+        except Exception as e:
+            print(f"Update refused: Python syntax check failed: {e}", flush=True)
+            try: os.unlink(tmp_path)
+            except OSError: pass
+            return
+        bak_path = script_path + ".bak"
+        try:
+            if os.path.exists(script_path):
+                shutil.copy2(script_path, bak_path)
+        except Exception as e:
+            print(f"Update backup failed: {e}", flush=True)
         os.replace(tmp_path, script_path)
         os.chmod(script_path, 0o755)
         try:

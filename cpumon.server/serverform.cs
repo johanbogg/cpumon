@@ -33,7 +33,7 @@ sealed class ServerForm : BorderlessForm
         StartPosition = FormStartPosition.Manual;
         Location = new Point(50, 50);
         ClientSize = new Size(820, 640);
-        MinimumSize = new Size(420, 400);
+        MinimumSize = new Size(620, 400);
         BackColor = Th.Bg; ForeColor = Th.Brt;
         Font = new Font("Segoe UI", 9f);
         DoubleBuffered = true; ShowInTaskbar = true;
@@ -381,8 +381,8 @@ sealed class ServerForm : BorderlessForm
         IEnumerable<RemoteClient> clients = _engine.Clients.Values;
         clients = _osFilter switch
         {
-            "windows" => clients.Where(cl => cl.LastReport != null && !ServerEngine.IsLinuxClient(cl)),
-            "linux" => clients.Where(cl => cl.LastReport != null && ServerEngine.IsLinuxClient(cl)),
+            "windows" => clients.Where(cl => cl.LastReport == null || !ServerEngine.IsLinuxClient(cl)),
+            "linux" => clients.Where(cl => cl.LastReport == null || ServerEngine.IsLinuxClient(cl)),
             _ => clients
         };
         clients = _sortMode == "os"

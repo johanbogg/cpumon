@@ -796,7 +796,7 @@ public sealed class ServerEngine : IDisposable
                                     pawTarget.PawCmdOwners[pc.TransferId] = cl.MachineName;
                                 if (pc.Cmd == "terminal_open" && pc.TermId != null)
                                     pawTarget.PawTerminalOwners[pc.TermId] = cl.MachineName;
-                                try { pawTarget.Send(pc); } catch { }
+                                pawTarget.Send(pc, queueOnFailure: false);
                             }
                             break;
                     }
@@ -902,10 +902,14 @@ public sealed class ServerEngine : IDisposable
         current.IsPaw = previous.IsPaw;
         current.SendMode = "full";
         while (previous.PendingCmds.TryDequeue(out var pc))
-            current.PendingCmds.Enqueue(pc);
+            if (IsReplaySafeCommand(pc.Cmd))
+                current.PendingCmds.Enqueue(pc);
         if (disposePrevious)
             previous.Dispose();
     }
+
+    static bool IsReplaySafeCommand(string? cmd) =>
+        cmd is "mode" or "paw_granted" or "paw_revoked" or "paw_clients";
 }
 
 public sealed class PendingClientApproval

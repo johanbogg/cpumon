@@ -51,7 +51,7 @@ sealed class PawDashboardForm : Form
     {
         _clients = clients; _sendCmd = sendCmd; _log = log;
 
-        Text = "🔑 PAW Dashboard"; Size = new Size(700, 550); MinimumSize = new Size(500, 350);
+        Text = "🔑 PAW Dashboard"; Size = new Size(700, 550); MinimumSize = new Size(620, 350);
         StartPosition = FormStartPosition.CenterScreen; BackColor = Th.Bg; ForeColor = Th.Brt;
         FormBorderStyle = FormBorderStyle.Sizable; Font = new Font("Segoe UI", 9f);
 
@@ -204,7 +204,8 @@ sealed class PawDashboardForm : Form
             DrawBtn(g, bx, by2, 120, BtnH, "PowerShell", Th.Blu, r.MachineName, "powershell"); bx += 128;
         }
         DrawBtn(g, bx, by2, 100, BtnH, "📁 Files", Th.Yel, r.MachineName, "files"); bx += 108;
-        DrawBtn(g, bx, by2, 80, BtnH, "🖥 RDP", Th.Cyan, r.MachineName, "rdp");
+        if (!linux)
+            DrawBtn(g, bx, by2, 80, BtnH, "🖥 RDP", Th.Cyan, r.MachineName, "rdp");
 
         return h;
     }
