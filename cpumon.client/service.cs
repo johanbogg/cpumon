@@ -74,6 +74,7 @@ sealed class CpuMonService : ServiceBase
     const uint CreateUnicodeEnvironment = 0x00000400;
     const uint InvalidSessionId = 0xFFFFFFFF;
     const int WtsActive = 0;
+    const string AgentTask = "CpuMonAgent";
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct STARTUPINFO
@@ -264,7 +265,7 @@ sealed class CpuMonService : ServiceBase
             ? "Launching agent via scheduled task after active launch exited before connecting"
             : "Launching agent via scheduled task fallback");
         var create = Process.Start(new ProcessStartInfo("schtasks.exe",
-            $"/create /tn \"CpuMonAgent\" /tr \"\\\"{exePath}\\\" {args}\" /sc onlogon /rl highest /f")
+            $"/create /tn \"{AgentTask}\" /tr \"\\\"{exePath}\\\" {args}\" /sc onlogon /ru INTERACTIVE /rl highest /f")
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })
         ;
         create?.WaitForExit(5000);
@@ -275,7 +276,7 @@ sealed class CpuMonService : ServiceBase
             LogSink.Warn("Service.AgentLaunch", $"Scheduled task create exited {create.ExitCode}: {output}");
         }
 
-        var run = Process.Start(new ProcessStartInfo("schtasks.exe", "/run /tn \"CpuMonAgent\"")
+        var run = Process.Start(new ProcessStartInfo("schtasks.exe", $"/run /tn \"{AgentTask}\"")
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true });
         run?.WaitForExit(5000);
         if (run != null && run.ExitCode != 0)
@@ -927,11 +928,23 @@ sealed class CpuMonService : ServiceBase
                 else if (cmd.Cmd == "rdp_set_bandwidth" && cmd.RdpId != null && _activeRdpSessions.ContainsKey(cmd.RdpId)) SendToAgent(new AgentIpc.AgentMessage { Type = "rdp_set_bandwidth", RdpId = cmd.RdpId, Quality = cmd.RdpBandwidthKBps });
                 else if (cmd.Cmd == "terminal_open" && cmd.TermId != null)
                 {
-                    if (!_agentConnected) { var e = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = "Agent not connected" }; lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(e, Proto.JsonOpts)); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.CmdLoop", "Failed to report unavailable agent for terminal open", ex); } } }
+                    if (!_agentConnected) OpenServiceTerminal(cmd);
                     else SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_open", TermId = cmd.TermId, Shell = cmd.Shell });
                 }
-                else if (cmd.Cmd == "terminal_input" && cmd.TermId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_input", TermId = cmd.TermId, CmdInput = cmd.Input });
-                else if (cmd.Cmd == "terminal_close" && cmd.TermId != null) SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_close", TermId = cmd.TermId });
+                else if (cmd.Cmd == "terminal_input" && cmd.TermId != null)
+                {
+                    if (CmdExec.Sessions.TryGetValue(cmd.TermId, out var termTs))
+                        termTs.WriteInput(cmd.Input ?? "");
+                    else
+                        SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_input", TermId = cmd.TermId, CmdInput = cmd.Input });
+                }
+                else if (cmd.Cmd == "terminal_close" && cmd.TermId != null)
+                {
+                    if (CmdExec.Sessions.TryRemove(cmd.TermId, out var termClose))
+                        termClose.Dispose();
+                    else
+                        SendToAgent(new AgentIpc.AgentMessage { Type = "terminal_close", TermId = cmd.TermId });
+                }
                 else if (cmd.Cmd == "start")
                 {
                     if (!_agentConnected) { var e = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = "Agent not connected" }; lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(e, Proto.JsonOpts)); _wr?.Flush(); } catch (Exception ex) { LogSink.Debug("Service.CmdLoop", "Failed to report unavailable agent for process start", ex); } } }
@@ -963,6 +976,23 @@ sealed class CpuMonService : ServiceBase
         {
             LogSink.Warn("Service.CpuDetail", "Failed to send CPU detail", ex);
             var err = new ClientMessage { Type = "cmdresult", CmdId = cmdId, Success = false, Message = ex.Message };
+            lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(err, Proto.JsonOpts)); _wr?.Flush(); } catch { } }
+        }
+    }
+
+    void OpenServiceTerminal(ServerCommand cmd)
+    {
+        if (cmd.TermId == null) return;
+        if (CmdExec.Sessions.TryRemove(cmd.TermId, out var oldTs)) oldTs.Dispose();
+        try
+        {
+            LogSink.Info("Service.CmdLoop", $"Opening {cmd.Shell ?? "cmd"} terminal in service session because agent is not connected");
+            CmdExec.Sessions[cmd.TermId] = new TerminalSession(cmd.TermId, cmd.Shell ?? "cmd", _tl, _wr);
+        }
+        catch (Exception ex)
+        {
+            LogSink.Warn("Service.CmdLoop", "Failed to open service-side terminal", ex);
+            var err = new ClientMessage { Type = "cmdresult", CmdId = cmd.CmdId, Success = false, Message = $"Terminal: {ex.Message}" };
             lock (_tl) { try { _wr?.WriteLine(JsonSerializer.Serialize(err, Proto.JsonOpts)); _wr?.Flush(); } catch { } }
         }
     }
@@ -1115,7 +1145,7 @@ static class ServiceManager
     {
         Run("schtasks.exe", "/delete", "/tn", AgentTask, "/f");
         Run("schtasks.exe", "/create", "/tn", AgentTask, "/tr", $"{QuoteServiceArg(exePath)} --agent",
-            "/sc", "onlogon", "/rl", "highest", "/delay", "0000:05", "/f");
+            "/sc", "onlogon", "/ru", "INTERACTIVE", "/rl", "highest", "/delay", "0000:05", "/f");
     }
 
     static void DeleteServiceIfPresent()
