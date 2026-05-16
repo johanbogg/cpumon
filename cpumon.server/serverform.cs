@@ -259,6 +259,12 @@ sealed class ServerForm : BorderlessForm
 
             if (!_engine.Clients.TryGetValue(m, out var cl)) continue;
 
+            if (a.StartsWith("files_path:", StringComparison.Ordinal))
+            {
+                OpenFileBrowserAt(cl, a["files_path:".Length..]);
+                break;
+            }
+
             switch (a)
             {
                 case "toggle": cl.Expanded = !cl.Expanded; _ct.Invalidate(); break;
@@ -339,6 +345,20 @@ sealed class ServerForm : BorderlessForm
         }
     }
 
+    void OpenFileBrowserAt(RemoteClient cl, string path)
+    {
+        string initialPath = NormalizeInitialFilePath(path);
+        BeginInvoke(() => new FileBrowserDialog(cl, initialPath).Show(this));
+        _engine.Log.Add($"Files->{cl.MachineName} {initialPath}", Th.Yel);
+    }
+
+    static string NormalizeInitialFilePath(string path)
+    {
+        path = path.Trim();
+        if (path.Length == 2 && path[1] == ':') return path + "\\";
+        return path;
+    }
+
     void OnMouseMove(object? sender, MouseEventArgs e)
     {
         string tip = "";
@@ -359,6 +379,7 @@ sealed class ServerForm : BorderlessForm
         "openrelease" => "Open the staged folder in Explorer (or the GitHub release page if not yet staged)",
         "openreleasenotes" => "Open the GitHub release page in your browser",
         "cpu_detail" => "Show detailed CPU sensors",
+        var a when a.StartsWith("files_path:", StringComparison.Ordinal) => "Open this drive in the file browser",
         _ => ""
     };
 
@@ -728,7 +749,7 @@ sealed class ServerForm : BorderlessForm
         // Metrics row 2 — storage & net
         int my2 = y + 87, mx2 = x + 14;
         if (r.RamTotalGB > 0) { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); DrawMetric(g, mx2, my2, $"RAM {pct}%", $"{FmtGb(r.RamUsedGB, "0.0")} GB / {FmtGb(r.RamTotalGB, "0.0")} GB", pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); mx2 += 172; }
-        foreach (var drv in r.Drives.Take(3)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); mx2 += 104; }
+        foreach (var drv in r.Drives.Take(3)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; int driveX = mx2; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); _btns.Add((new Rectangle(driveX - 4, my2 - 13, 100, 32), r.MachineName, "files_path:" + drv.Name)); mx2 += 104; }
         if (r.GpuVramTotalMB is > 0 && r.GpuVramUsedMB.HasValue) { string vram = r.GpuVramTotalMB > 1024 ? $"{FmtGb(r.GpuVramUsedMB.Value / 1024.0, "0.1")}/{FmtGb(r.GpuVramTotalMB.Value / 1024.0, "0.0")}G" : $"{r.GpuVramUsedMB.Value:0}/{r.GpuVramTotalMB.Value:0}M"; DrawMetric(g, mx2, my2, "VRAM", vram, Th.Blu); mx2 += 112; }
         if (r.NetUpKBps + r.NetDownKBps > 0.5) DrawMetric(g, mx2, my2, "NET ↑↓", $"{FmtNet(r.NetUpKBps)}/{FmtNet(r.NetDownKBps)}", Th.Dim);
 
