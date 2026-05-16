@@ -66,7 +66,6 @@ sealed class CpuMonService : ServiceBase
 
     const uint TokenAllAccess = 0x000F01FF;
     const uint CreateUnicodeEnvironment = 0x00000400;
-    const uint CreateNoWindow = 0x08000000;
     const uint InvalidSessionId = 0xFFFFFFFF;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -168,7 +167,11 @@ sealed class CpuMonService : ServiceBase
             }
             // Poll in short slices so we notice a killed agent quickly
             for (int i = 0; i < 30 && _agentConnected && !ct.IsCancellationRequested; i++)
+            {
+                if (_authRequestPending && i % 5 == 0)
+                    SendToAgent(new AgentIpc.AgentMessage { Type = "auth_request" });
                 await Task.Delay(1000, ct);
+            }
         }
     }
 
@@ -208,7 +211,7 @@ sealed class CpuMonService : ServiceBase
             var si = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>(), lpDesktop = @"winsta0\default" };
             string cmd = $"{QuoteForCommandLine(exePath)} {args}";
             if (!CreateProcessAsUser(primaryToken, null, cmd, IntPtr.Zero, IntPtr.Zero, false,
-                    CreateUnicodeEnvironment | CreateNoWindow, env, Path.GetDirectoryName(exePath), ref si, out pi))
+                    CreateUnicodeEnvironment, env, Path.GetDirectoryName(exePath), ref si, out pi))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser failed");
             LogSink.Info("Service.AgentLaunch", $"Started interactive agent pid {pi.dwProcessId} in session {sessionId}");
         }
