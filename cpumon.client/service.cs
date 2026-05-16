@@ -52,6 +52,7 @@ sealed class CpuMonService : ServiceBase
     int _agentLaunchProcessId;
     long _agentLastPong = DateTime.UtcNow.Ticks;
     long _agentLastLaunchTicks;
+    volatile bool _preferAgentTaskLaunch;
     long _authFailedAt;
     volatile bool _authRequestPending;
     readonly ConcurrentDictionary<string, byte> _activeRdpSessions = new();
@@ -183,7 +184,7 @@ sealed class CpuMonService : ServiceBase
 
                 try
                 {
-                    int pid = LaunchInInteractiveSession(exePath, "--agent");
+                    int pid = LaunchInInteractiveSession(exePath, "--agent", _preferAgentTaskLaunch);
                     if (pid > 0)
                     {
                         _agentLaunchProcessId = pid;
@@ -223,11 +224,18 @@ sealed class CpuMonService : ServiceBase
                 LogSink.Warn("Service.AgentLaunch", $"Launched agent pid {pid} is still running but has not connected; killing before retry");
                 try { proc.Kill(entireProcessTree: true); } catch { proc.Kill(); }
                 try { proc.WaitForExit(3000); } catch { }
+                _preferAgentTaskLaunch = true;
+            }
+            else
+            {
+                LogSink.Warn("Service.AgentLaunch", $"Launched agent pid {pid} exited before connecting; exit code {proc.ExitCode}");
+                _preferAgentTaskLaunch = true;
             }
         }
         catch (ArgumentException)
         {
-            LogSink.Warn("Service.AgentLaunch", $"Launched agent pid {pid} exited before connecting");
+            LogSink.Warn("Service.AgentLaunch", $"Launched agent pid {pid} exited before connecting; process no longer exists");
+            _preferAgentTaskLaunch = true;
         }
         catch (Exception ex)
         {
@@ -238,25 +246,44 @@ sealed class CpuMonService : ServiceBase
         return false;
     }
 
-    static int LaunchInInteractiveSession(string exePath, string args)
+    static int LaunchInInteractiveSession(string exePath, string args, bool preferTask)
     {
-        try
+        if (!preferTask)
         {
-            return LaunchWithActiveUserToken(exePath, args);
-        }
-        catch (Exception ex)
-        {
-            LogSink.Warn("Service.AgentLaunch", "Active user launch failed; falling back to scheduled task", ex);
+            try
+            {
+                return LaunchWithActiveUserToken(exePath, args);
+            }
+            catch (Exception ex)
+            {
+                LogSink.Warn("Service.AgentLaunch", "Active user launch failed; falling back to scheduled task", ex);
+            }
         }
 
-        Process.Start(new ProcessStartInfo("schtasks.exe",
+        LogSink.Info("Service.AgentLaunch", preferTask
+            ? "Launching agent via scheduled task after active launch exited before connecting"
+            : "Launching agent via scheduled task fallback");
+        var create = Process.Start(new ProcessStartInfo("schtasks.exe",
             $"/create /tn \"CpuMonAgent\" /tr \"\\\"{exePath}\\\" {args}\" /sc onlogon /rl highest /f")
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })
-        ?.WaitForExit(5000);
+        ;
+        create?.WaitForExit(5000);
+        if (create != null && create.ExitCode != 0)
+        {
+            string output = "";
+            try { output = (create.StandardOutput.ReadToEnd() + create.StandardError.ReadToEnd()).Trim(); } catch { }
+            LogSink.Warn("Service.AgentLaunch", $"Scheduled task create exited {create.ExitCode}: {output}");
+        }
 
-        Process.Start(new ProcessStartInfo("schtasks.exe", "/run /tn \"CpuMonAgent\"")
-        { UseShellExecute = false, CreateNoWindow = true })
-        ?.WaitForExit(5000);
+        var run = Process.Start(new ProcessStartInfo("schtasks.exe", "/run /tn \"CpuMonAgent\"")
+        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true });
+        run?.WaitForExit(5000);
+        if (run != null && run.ExitCode != 0)
+        {
+            string output = "";
+            try { output = (run.StandardOutput.ReadToEnd() + run.StandardError.ReadToEnd()).Trim(); } catch { }
+            LogSink.Warn("Service.AgentLaunch", $"Scheduled task run exited {run.ExitCode}: {output}");
+        }
         return 0;
     }
 
