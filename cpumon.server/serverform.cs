@@ -494,7 +494,7 @@ sealed class ServerForm : BorderlessForm
         int x = 10, y = 6 - _sy, w = _ct.Width - 20;
 
         DrawStatusBar(g, x, y, w);
-        y += 76;
+        y += 79;
         var visibleClients = VisibleClients();
         bool anyOutdated = visibleClients.Any(cl => ServerEngine.ClientNeedsUpdate(cl.ClientVersion));
         if (_selectedMachines.Count > 0 || anyOutdated) { DrawSelectionBar(g, x, y, w, anyOutdated); y += 42; }
@@ -559,7 +559,7 @@ sealed class ServerForm : BorderlessForm
 
     void DrawStatusBar(Graphics g, int x, int y, int w)
     {
-        using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, 70, 8); g.FillPath(bg, p); }
+        using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, 73, 8); g.FillPath(bg, p); }
         Color accentClr = _engine.BroadcastDisabled ? Th.Org : Th.Grn;
         using (var ac = new SolidBrush(Color.FromArgb(180, accentClr)))
             g.FillRectangle(ac, x + 1, y + 8, 4, 54);
@@ -598,8 +598,8 @@ sealed class ServerForm : BorderlessForm
         }
 
         string osLabel = _osFilter switch { "windows" => "OS: Win", "linux" => "OS: Linux", _ => "OS: All" };
-        DrawBtn(g, x + w - 180, y + 48, 78, 18, osLabel, _osFilter == "all" ? Th.Dim : Th.Cyan, "", "os_filter");
-        DrawBtn(g, x + w - 96, y + 48, 84, 18, _sortMode == "os" ? "Sort: OS" : "Sort: Name", Th.Dim, "", "sort_mode");
+        DrawBtn(g, x + w - 180, y + 51, 78, 18, osLabel, _osFilter == "all" ? Th.Dim : Th.Cyan, "", "os_filter");
+        DrawBtn(g, x + w - 96, y + 51, 84, 18, _sortMode == "os" ? "Sort: OS" : "Sort: Name", Th.Dim, "", "sort_mode");
 
         using (var cf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var ccb = new SolidBrush(_engine.ConnectionCount > 0 ? Th.Grn : Th.Dim))
