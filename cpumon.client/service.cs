@@ -49,7 +49,9 @@ sealed class CpuMonService : ServiceBase
     readonly object _agentLock = new();
     volatile bool _agentConnected;
     int _agentProcessId;
+    int _agentLaunchProcessId;
     long _agentLastPong = DateTime.UtcNow.Ticks;
+    long _agentLastLaunchTicks;
     long _authFailedAt;
     volatile bool _authRequestPending;
     readonly ConcurrentDictionary<string, byte> _activeRdpSessions = new();
@@ -173,7 +175,22 @@ sealed class CpuMonService : ServiceBase
         {
             if (!_agentConnected)
             {
-                try { LaunchInInteractiveSession(exePath, "--agent"); } catch (Exception ex) { LogSink.Warn("Service.AgentLaunch", "Failed to launch interactive agent", ex); }
+                if (ShouldDelayAgentRelaunch())
+                {
+                    await Task.Delay(5000, ct);
+                    continue;
+                }
+
+                try
+                {
+                    int pid = LaunchInInteractiveSession(exePath, "--agent");
+                    if (pid > 0)
+                    {
+                        _agentLaunchProcessId = pid;
+                        _agentLastLaunchTicks = DateTime.UtcNow.Ticks;
+                    }
+                }
+                catch (Exception ex) { LogSink.Warn("Service.AgentLaunch", "Failed to launch interactive agent", ex); }
                 await Task.Delay(5000, ct);
                 continue;
             }
@@ -187,12 +204,45 @@ sealed class CpuMonService : ServiceBase
         }
     }
 
-    static void LaunchInInteractiveSession(string exePath, string args)
+    bool ShouldDelayAgentRelaunch()
+    {
+        int pid = _agentLaunchProcessId;
+        if (pid <= 0) return false;
+
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            if (!proc.HasExited)
+            {
+                if ((DateTime.UtcNow - new DateTime(Interlocked.Read(ref _agentLastLaunchTicks))).TotalSeconds < 45)
+                {
+                    LogSink.Debug("Service.AgentLaunch", $"Waiting for launched agent pid {pid} to connect");
+                    return true;
+                }
+
+                LogSink.Warn("Service.AgentLaunch", $"Launched agent pid {pid} is still running but has not connected; killing before retry");
+                try { proc.Kill(entireProcessTree: true); } catch { proc.Kill(); }
+                try { proc.WaitForExit(3000); } catch { }
+            }
+        }
+        catch (ArgumentException)
+        {
+            LogSink.Warn("Service.AgentLaunch", $"Launched agent pid {pid} exited before connecting");
+        }
+        catch (Exception ex)
+        {
+            LogSink.Debug("Service.AgentLaunch", $"Failed to inspect launched agent pid {pid}", ex);
+        }
+
+        _agentLaunchProcessId = 0;
+        return false;
+    }
+
+    static int LaunchInInteractiveSession(string exePath, string args)
     {
         try
         {
-            LaunchWithActiveUserToken(exePath, args);
-            return;
+            return LaunchWithActiveUserToken(exePath, args);
         }
         catch (Exception ex)
         {
@@ -207,9 +257,10 @@ sealed class CpuMonService : ServiceBase
         Process.Start(new ProcessStartInfo("schtasks.exe", "/run /tn \"CpuMonAgent\"")
         { UseShellExecute = false, CreateNoWindow = true })
         ?.WaitForExit(5000);
+        return 0;
     }
 
-    static void LaunchWithActiveUserToken(string exePath, string args)
+    static int LaunchWithActiveUserToken(string exePath, string args)
     {
         Exception? lastError = null;
         bool sawSession = false;
@@ -218,8 +269,7 @@ sealed class CpuMonService : ServiceBase
             sawSession = true;
             try
             {
-                LaunchWithSessionToken(sessionId, exePath, args);
-                return;
+                return LaunchWithSessionToken(sessionId, exePath, args);
             }
             catch (Exception ex)
             {
@@ -258,7 +308,7 @@ sealed class CpuMonService : ServiceBase
         }
     }
 
-    static void LaunchWithSessionToken(uint sessionId, string exePath, string args)
+    static int LaunchWithSessionToken(uint sessionId, string exePath, string args)
     {
         IntPtr userToken = IntPtr.Zero, primaryToken = IntPtr.Zero, env = IntPtr.Zero;
         PROCESS_INFORMATION pi = default;
@@ -277,6 +327,7 @@ sealed class CpuMonService : ServiceBase
                     CreateUnicodeEnvironment, env, Path.GetDirectoryName(exePath), ref si, out pi))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser failed");
             LogSink.Info("Service.AgentLaunch", $"Started interactive agent pid {pi.dwProcessId} in session {sessionId}");
+            return pi.dwProcessId;
         }
         finally
         {

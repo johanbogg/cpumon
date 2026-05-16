@@ -89,7 +89,17 @@ internal static class Program
         // Agent runs in the interactive user session, no UAC needed
         if (agentMode)
         {
-            Application.Run(new AgentContext());
+            try
+            {
+                LogSink.Info("Agent.Startup", $"Starting interactive agent. user={Environment.UserName} interactive={Environment.UserInteractive} exe={Environment.ProcessPath ?? Application.ExecutablePath}");
+                Application.Run(new AgentContext());
+                LogSink.Info("Agent.Startup", "Interactive agent exited normally");
+            }
+            catch (Exception ex)
+            {
+                LogSink.Error("Agent.Startup", "Interactive agent crashed during startup", ex);
+                throw;
+            }
             return;
         }
 

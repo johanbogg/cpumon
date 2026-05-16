@@ -74,6 +74,7 @@ sealed class AgentContext : ApplicationContext
 
     public AgentContext()
     {
+        LogSink.Info("Agent.Startup", "Creating interactive agent context");
         _uiCtx = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
 
         _tray = new NotifyIcon
@@ -99,6 +100,7 @@ sealed class AgentContext : ApplicationContext
         });
         _tray.ContextMenuStrip = menu;
 
+        LogSink.Info("Agent.Pipe", "Starting service pipe connection loop");
         Task.Run(() => PipeLoop(_cts.Token));
         Task.Run(() => TrayUpdateLoop(_cts.Token));
     }
@@ -191,12 +193,14 @@ sealed class AgentContext : ApplicationContext
         {
             try
             {
+                LogSink.Info("Agent.Pipe", $"Connecting to service pipe {AgentIpc.PipeName}");
                 var pipe = new System.IO.Pipes.NamedPipeClientStream(
                     ".", AgentIpc.PipeName,
                     System.IO.Pipes.PipeDirection.InOut,
                     System.IO.Pipes.PipeOptions.Asynchronous);
 
                 await pipe.ConnectAsync(5000, ct);
+                LogSink.Info("Agent.Pipe", "Connected to service pipe");
 
                 lock (_pipeLock)
                 {
@@ -212,6 +216,7 @@ sealed class AgentContext : ApplicationContext
                     _pipeWriter?.Flush();
                 }
                 _connected = true;
+                LogSink.Info("Agent.Pipe", "Agent hello sent; pipe ready");
 
                 // Read commands from service — snapshot reader once before the loop.
                 // CaptureAndSend holds _pipeLock for the entire duration of a pipe write
@@ -384,7 +389,7 @@ sealed class AgentContext : ApplicationContext
                 }
             }
             catch (OperationCanceledException) { break; }
-            catch (Exception ex) { LogSink.Debug("Agent.Pipe", "Pipe loop disconnected or failed", ex); }
+            catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Pipe loop disconnected or failed", ex); }
             finally
             {
                 _connected = false;
