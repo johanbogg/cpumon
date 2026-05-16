@@ -1,6 +1,7 @@
 // "service.cs"
 using System;
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
@@ -55,6 +56,39 @@ sealed class CpuMonService : ServiceBase
 
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool GetNamedPipeClientProcessId(IntPtr hPipe, out uint clientProcessId);
+    [DllImport("kernel32.dll")] static extern uint WTSGetActiveConsoleSessionId();
+    [DllImport("wtsapi32.dll", SetLastError = true)] static extern bool WTSQueryUserToken(uint sessionId, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool DuplicateTokenEx(IntPtr existingToken, uint desiredAccess, IntPtr tokenAttributes, int impersonationLevel, int tokenType, out IntPtr duplicateToken);
+    [DllImport("userenv.dll", SetLastError = true)] static extern bool CreateEnvironmentBlock(out IntPtr environment, IntPtr token, bool inherit);
+    [DllImport("userenv.dll", SetLastError = true)] static extern bool DestroyEnvironmentBlock(IntPtr environment);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern bool CreateProcessAsUser(IntPtr token, string? applicationName, string commandLine, IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint creationFlags, IntPtr environment, string? currentDirectory, ref STARTUPINFO startupInfo, out PROCESS_INFORMATION processInformation);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr handle);
+
+    const uint TokenAllAccess = 0x000F01FF;
+    const uint CreateUnicodeEnvironment = 0x00000400;
+    const uint CreateNoWindow = 0x08000000;
+    const uint InvalidSessionId = 0xFFFFFFFF;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct STARTUPINFO
+    {
+        public int cb;
+        public string? lpReserved;
+        public string? lpDesktop;
+        public string? lpTitle;
+        public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+        public short wShowWindow, cbReserved2;
+        public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct PROCESS_INFORMATION
+    {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
 
     public CpuMonService(string? forceIp = null, string? token = null)
     {
@@ -140,15 +174,55 @@ sealed class CpuMonService : ServiceBase
 
     static void LaunchInInteractiveSession(string exePath, string args)
     {
-        Process.Start(new ProcessStartInfo("schtasks.exe",
-            $"/create /tn \"CpuMonAgent\" /tr \"\\\"{exePath}\\\" {args}\" /sc onlogon /rl highest /f")
-        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })
-        ?.WaitForExit(5000);
+        try
+        {
+            LaunchWithActiveUserToken(exePath, args);
+            return;
+        }
+        catch (Exception ex)
+        {
+            LogSink.Warn("Service.AgentLaunch", "Active user launch failed; falling back to scheduled task", ex);
+        }
 
         Process.Start(new ProcessStartInfo("schtasks.exe", "/run /tn \"CpuMonAgent\"")
         { UseShellExecute = false, CreateNoWindow = true })
         ?.WaitForExit(5000);
     }
+
+    static void LaunchWithActiveUserToken(string exePath, string args)
+    {
+        uint sessionId = WTSGetActiveConsoleSessionId();
+        if (sessionId == InvalidSessionId) throw new InvalidOperationException("No active console session");
+
+        IntPtr userToken = IntPtr.Zero, primaryToken = IntPtr.Zero, env = IntPtr.Zero;
+        PROCESS_INFORMATION pi = default;
+        try
+        {
+            if (!WTSQueryUserToken(sessionId, out userToken))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "WTSQueryUserToken failed");
+            if (!DuplicateTokenEx(userToken, TokenAllAccess, IntPtr.Zero, 2, 1, out primaryToken))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "DuplicateTokenEx failed");
+            if (!CreateEnvironmentBlock(out env, primaryToken, false))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateEnvironmentBlock failed");
+
+            var si = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>(), lpDesktop = @"winsta0\default" };
+            string cmd = $"{QuoteForCommandLine(exePath)} {args}";
+            if (!CreateProcessAsUser(primaryToken, null, cmd, IntPtr.Zero, IntPtr.Zero, false,
+                    CreateUnicodeEnvironment | CreateNoWindow, env, Path.GetDirectoryName(exePath), ref si, out pi))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser failed");
+            LogSink.Info("Service.AgentLaunch", $"Started interactive agent pid {pi.dwProcessId} in session {sessionId}");
+        }
+        finally
+        {
+            if (pi.hThread != IntPtr.Zero) CloseHandle(pi.hThread);
+            if (pi.hProcess != IntPtr.Zero) CloseHandle(pi.hProcess);
+            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
+            if (primaryToken != IntPtr.Zero) CloseHandle(primaryToken);
+            if (userToken != IntPtr.Zero) CloseHandle(userToken);
+        }
+    }
+
+    static string QuoteForCommandLine(string value) => "\"" + value.Replace("\"", "\\\"") + "\"";
 
     async Task AgentPipeLoop(CancellationToken ct)
     {
