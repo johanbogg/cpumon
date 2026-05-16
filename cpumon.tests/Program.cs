@@ -36,6 +36,8 @@ internal static class Program
             TestDashboardStatePendingApprovalsSorted();
             TestDashboardStateWaitingClientsStayVisibleUnderOsFilters();
             TestDashboardStateClientProjectionFlags();
+            TestDashboardControllerOwnsFiltersSortAndSelection();
+            TestDashboardControllerPendingDelegatesReturnFalseForMissing();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -460,6 +462,54 @@ internal static class Program
         Assert(!card.CanRdp, "linux client should not expose RDP capability");
         Assert(card.CanTerminal, "linux client should expose terminal capability");
         Assert(!ReferenceEquals(card.Report, linux.LastReport), "dashboard state should not expose the live report instance");
+    }
+
+    static void TestDashboardControllerOwnsFiltersSortAndSelection()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        var linux = FakeRemoteClient();
+        linux.MachineName = "linux-box";
+        linux.ClientVersion = "0.0.1-linux";
+        linux.LastReport = new MachineReport { MachineName = linux.MachineName, OsVersion = "Linux Debian" };
+        engine.Clients[linux.MachineName] = linux;
+
+        var windows = FakeRemoteClient();
+        windows.MachineName = "win-box";
+        windows.ClientVersion = Proto.AppVersion;
+        windows.LastReport = new MachineReport { MachineName = windows.MachineName, OsVersion = "Microsoft Windows 11" };
+        engine.Clients[windows.MachineName] = windows;
+
+        var controller = new ServerDashboardController(engine);
+        Assert(controller.GetState().OsFilter == "all", "dashboard controller should default to all clients");
+        Assert(controller.GetState().SortMode == "name", "dashboard controller should default to name sort");
+
+        controller.ToggleSelection("WIN-BOX");
+        Assert(controller.GetState().SelectedMachineNames.Contains("win-box"), "dashboard controller selection should be case-insensitive");
+        controller.ToggleSelection("win-box");
+        Assert(controller.GetState().SelectedMachineNames.Count == 0, "toggling a selected machine should clear it");
+
+        Assert(controller.CycleOsFilter() == "windows", "first OS filter cycle should select windows");
+        controller.SelectAllVisible();
+        var windowsState = controller.GetState();
+        Assert(windowsState.Clients.Count == 1 && windowsState.Clients[0].MachineName == "win-box", "windows filter should expose only the Windows client");
+        Assert(windowsState.SelectedMachineNames.SetEquals(new[] { "win-box" }), "select all should select visible clients only");
+
+        Assert(controller.CycleOsFilter() == "linux", "second OS filter cycle should select linux");
+        controller.SelectOutdatedVisible();
+        var linuxState = controller.GetState();
+        Assert(linuxState.Clients.Count == 1 && linuxState.Clients[0].MachineName == "linux-box", "linux filter should expose only the Linux client");
+        Assert(linuxState.SelectedMachineNames.SetEquals(new[] { "win-box", "linux-box" }), "select outdated should add outdated visible clients");
+
+        Assert(controller.CycleSortMode() == "os", "sort mode should cycle to os");
+        controller.ClearSelection();
+        Assert(controller.GetState().SelectedMachineNames.Count == 0, "clear selection should remove selected clients");
+    }
+
+    static void TestDashboardControllerPendingDelegatesReturnFalseForMissing()
+    {
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
+        Assert(!controller.ApprovePending("no-such-machine"), "controller approving missing pending client should return false");
+        Assert(!controller.RejectPending("no-such-machine"), "controller rejecting missing pending client should return false");
     }
 
     static RemoteClient FakeRemoteClient()

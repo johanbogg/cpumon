@@ -11,7 +11,7 @@ using Timer = System.Windows.Forms.Timer;
 sealed class ServerForm : BorderlessForm
 {
     readonly ServerEngine _engine;
-    readonly ServerDashboardStateBuilder _dashboardStateBuilder;
+    readonly ServerDashboardController _dashboard;
     readonly Panel _ct;
     readonly Timer _tm;
     readonly ToolTip _toolTip = new();
@@ -27,14 +27,11 @@ sealed class ServerForm : BorderlessForm
     readonly List<(Rectangle R, string M, string A)> _btns = new();
     string _currentToolTip = "";
     readonly Dictionary<string, ProcDialog> _procDialogs = new();
-    readonly HashSet<string> _selectedMachines = new();
-    string _osFilter = "all";
-    string _sortMode = "name";
 
     public ServerForm(bool noBroadcast)
     {
         _engine = new ServerEngine(noBroadcast);
-        _dashboardStateBuilder = new ServerDashboardStateBuilder(_engine);
+        _dashboard = new ServerDashboardController(_engine);
 
         Text = $"CPU Monitor — Server  v{Proto.AppVersion}";
         StartPosition = FormStartPosition.Manual;
@@ -244,8 +241,8 @@ sealed class ServerForm : BorderlessForm
                 if (url != null) { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); } catch (Exception ex) { LogSink.Warn("Server.UI", $"Failed to open release URL {url}", ex); } }
                 break;
             }
-            if (a == "approve_pending") { _engine.ApprovePending(m); _ct.Invalidate(); break; }
-            if (a == "reject_pending") { _engine.RejectPending(m); _ct.Invalidate(); break; }
+            if (a == "approve_pending") { _dashboard.ApprovePending(m); _ct.Invalidate(); break; }
+            if (a == "reject_pending") { _dashboard.RejectPending(m); _ct.Invalidate(); break; }
             if (a == "forget_offline")
             {
                 if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
@@ -267,10 +264,10 @@ sealed class ServerForm : BorderlessForm
             }
             if (a == "wake_offline") { _engine.WakeOffline(m); break; }
 
-            if (a == "select") { if (!_selectedMachines.Remove(m)) _selectedMachines.Add(m); _ct.Invalidate(); break; }
-            if (a == "clear_selection") { _selectedMachines.Clear(); _ct.Invalidate(); break; }
-            if (a == "select_all") { foreach (var visible in VisibleClients()) _selectedMachines.Add(visible.MachineName); _ct.Invalidate(); break; }
-            if (a == "select_outdated") { foreach (var visible in VisibleClients()) if (ServerEngine.ClientNeedsUpdate(visible.ClientVersion)) _selectedMachines.Add(visible.MachineName); _ct.Invalidate(); break; }
+            if (a == "select") { _dashboard.ToggleSelection(m); _ct.Invalidate(); break; }
+            if (a == "clear_selection") { _dashboard.ClearSelection(); _ct.Invalidate(); break; }
+            if (a == "select_all") { _dashboard.SelectAllVisible(); _ct.Invalidate(); break; }
+            if (a == "select_outdated") { _dashboard.SelectOutdatedVisible(); _ct.Invalidate(); break; }
             if (a == "push_update_selected") { PushUpdateToSelected(); break; }
 
             if (!_engine.Clients.TryGetValue(m, out var cl)) continue;
@@ -431,33 +428,16 @@ sealed class ServerForm : BorderlessForm
 
     void CycleOsFilter()
     {
-        _osFilter = _osFilter switch { "all" => "windows", "windows" => "linux", _ => "all" };
+        _dashboard.CycleOsFilter();
         _sy = 0;
         _ct.Invalidate();
     }
 
     void CycleSortMode()
     {
-        _sortMode = _sortMode == "name" ? "os" : "name";
+        _dashboard.CycleSortMode();
         _ct.Invalidate();
     }
-
-    List<RemoteClient> VisibleClients()
-    {
-        IEnumerable<RemoteClient> clients = _engine.Clients.Values;
-        clients = _osFilter switch
-        {
-            "windows" => clients.Where(cl => cl.LastReport == null || !ServerEngine.IsLinuxClient(cl)),
-            "linux" => clients.Where(cl => cl.LastReport == null || ServerEngine.IsLinuxClient(cl)),
-            _ => clients
-        };
-        clients = _sortMode == "os"
-            ? clients.OrderBy(OsSortKey).ThenBy(cl => cl.MachineName, StringComparer.OrdinalIgnoreCase)
-            : clients.OrderBy(cl => cl.MachineName, StringComparer.OrdinalIgnoreCase);
-        return clients.ToList();
-    }
-
-    static string OsSortKey(RemoteClient cl) => ServerEngine.IsLinuxClient(cl) ? "2-linux" : "1-windows";
 
     void OnMouseMove(object? sender, MouseEventArgs e)
     {
@@ -502,7 +482,7 @@ sealed class ServerForm : BorderlessForm
         using (var bg = new SolidBrush(Color.FromArgb(35, Th.Grn))) g.FillRectangle(bg, x, y, w, h);
         using (var pen = new Pen(Color.FromArgb(55, Th.Grn), 1f)) g.DrawRectangle(pen, x, y, w - 1, h - 1);
         using var f = new Font("Segoe UI", 8f);
-        int n = _selectedMachines.Count;
+        int n = _dashboard.SelectedMachineNames.Count;
         using var b = new SolidBrush(n > 0 ? Th.Grn : Th.Dim);
         g.DrawString(n > 0 ? $"{n} client{(n == 1 ? "" : "s")} selected" : "No selection", f, b, x + 10, y + 12);
         int bx = x + w - 14;
@@ -524,15 +504,16 @@ sealed class ServerForm : BorderlessForm
 
     void PushUpdateToSelected()
     {
-        var winClients = _engine.Clients.Where(kv => _selectedMachines.Contains(kv.Key) && !ServerEngine.IsLinuxClient(kv.Value)).Select(kv => kv.Value).ToList();
-        var linuxClients = _engine.Clients.Where(kv => _selectedMachines.Contains(kv.Key) && ServerEngine.IsLinuxClient(kv.Value)).Select(kv => kv.Value).ToList();
+        var selectedMachines = _dashboard.SelectedMachineNames;
+        var winClients = _engine.Clients.Where(kv => selectedMachines.Contains(kv.Key) && !ServerEngine.IsLinuxClient(kv.Value)).Select(kv => kv.Value).ToList();
+        var linuxClients = _engine.Clients.Where(kv => selectedMachines.Contains(kv.Key) && ServerEngine.IsLinuxClient(kv.Value)).Select(kv => kv.Value).ToList();
         if (winClients.Count == 0 && linuxClients.Count == 0) return;
         BeginInvoke(() =>
         {
             string filter = winClients.Count > 0 && linuxClients.Count > 0
                 ? "Client files|*.exe;*.py;*.zip|Executables|*.exe|Linux update|*.py;*.zip"
                 : winClients.Count > 0 ? "Executable|*.exe" : "Linux update|*.py;*.zip|Python script|*.py|Release zip|*.zip";
-            using var ofd = new OpenFileDialog { Title = $"Select file to push to {_selectedMachines.Count} client(s)", Filter = filter };
+            using var ofd = new OpenFileDialog { Title = $"Select file to push to {selectedMachines.Count} client(s)", Filter = filter };
             if (ofd.ShowDialog(this) != DialogResult.OK) return;
             string path = ofd.FileName;
             bool isLinuxPayload = path.EndsWith(".py", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
@@ -565,7 +546,7 @@ sealed class ServerForm : BorderlessForm
 
         // Purge stale clients
         foreach (var k in _engine.Clients.Where(kv => (DateTime.UtcNow - kv.Value.LastSeen).TotalSeconds > 120).Select(kv => kv.Key).ToList())
-        { if (_engine.Clients.TryRemove(k, out var c)) c.Dispose(); _selectedMachines.Remove(k); }
+        { if (_engine.Clients.TryRemove(k, out var c)) { c.Dispose(); if (_dashboard.SelectedMachineNames.Contains(k)) _dashboard.ToggleSelection(k); } }
 
         int x = 10, y, w = _ct.Width - 20;
 
@@ -575,9 +556,9 @@ sealed class ServerForm : BorderlessForm
         _sy = Math.Clamp(_sy, 0, ScrollMax());
         y = _scrollTop - _sy;
 
-        var state = _dashboardStateBuilder.Build(_selectedMachines, _osFilter, _sortMode);
+        var state = _dashboard.GetState();
         bool anyOutdated = state.Clients.Any(cl => cl.IsOutdated);
-        if (_selectedMachines.Count > 0 || anyOutdated) { DrawSelectionBar(g, x, y, w, anyOutdated); y += 42; }
+        if (state.SelectedMachineNames.Count > 0 || anyOutdated) { DrawSelectionBar(g, x, y, w, anyOutdated); y += 42; }
 
         if (state.AuthenticatedClientCount == 0 && state.PendingApprovals.Count == 0)
         {
@@ -701,9 +682,9 @@ sealed class ServerForm : BorderlessForm
                 DrawBtn(g, bx, y + 23, 56, 24, "Notes", Th.Dim, "", "openreleasenotes");
         }
 
-        string osLabel = _osFilter switch { "windows" => "OS: Win", "linux" => "OS: Linux", _ => "OS: All" };
-        DrawBtn(g, x + w - 180, y + 51, 78, 18, osLabel, _osFilter == "all" ? Th.Dim : Th.Cyan, "", "os_filter");
-        DrawBtn(g, x + w - 96, y + 51, 84, 18, _sortMode == "os" ? "Sort: OS" : "Sort: Name", Th.Dim, "", "sort_mode");
+        string osLabel = state.OsFilter switch { "windows" => "OS: Win", "linux" => "OS: Linux", _ => "OS: All" };
+        DrawBtn(g, x + w - 180, y + 51, 78, 18, osLabel, state.OsFilter == "all" ? Th.Dim : Th.Cyan, "", "os_filter");
+        DrawBtn(g, x + w - 96, y + 51, 84, 18, state.SortMode == "os" ? "Sort: OS" : "Sort: Name", Th.Dim, "", "sort_mode");
 
         using (var cf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var ccb = new SolidBrush(state.ConnectionCount > 0 ? Th.Grn : Th.Dim))
@@ -754,7 +735,7 @@ sealed class ServerForm : BorderlessForm
         using (var ac = new SolidBrush(Color.FromArgb(200, brd)))
             g.FillRectangle(ac, x + 1, y + 6, 4, h - 12);
 
-        bool sel = _selectedMachines.Contains(r.MachineName);
+        bool sel = _dashboard.SelectedMachineNames.Contains(r.MachineName);
         var cbR = new Rectangle(x + w - 20, y + 15, 12, 12);
         _btns.Add((cbR, r.MachineName, "select"));
         _btns.Add((new Rectangle(x, y, w, h), r.MachineName, "toggle"));
@@ -845,7 +826,7 @@ sealed class ServerForm : BorderlessForm
         using (var ac = new SolidBrush(Color.FromArgb(200, brd)))
             g.FillRectangle(ac, x + 1, y + 8, 4, h - 16);
 
-        bool selExp = _selectedMachines.Contains(r.MachineName);
+        bool selExp = _dashboard.SelectedMachineNames.Contains(r.MachineName);
         var cbRExp = new Rectangle(x + w - 20, y + 15, 12, 12);
         _btns.Add((cbRExp, r.MachineName, "select"));
         _btns.Add((new Rectangle(x, y, w, 32), r.MachineName, "toggle"));
