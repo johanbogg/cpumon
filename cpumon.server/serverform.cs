@@ -598,8 +598,8 @@ sealed class ServerForm : BorderlessForm
         }
 
         string osLabel = _osFilter switch { "windows" => "OS: Win", "linux" => "OS: Linux", _ => "OS: All" };
-        DrawBtn(g, x + w - 180, y + 43, 78, 22, osLabel, _osFilter == "all" ? Th.Dim : Th.Cyan, "", "os_filter");
-        DrawBtn(g, x + w - 96, y + 43, 84, 22, _sortMode == "os" ? "Sort: OS" : "Sort: Name", Th.Dim, "", "sort_mode");
+        DrawBtn(g, x + w - 180, y + 48, 78, 18, osLabel, _osFilter == "all" ? Th.Dim : Th.Cyan, "", "os_filter");
+        DrawBtn(g, x + w - 96, y + 48, 84, 18, _sortMode == "os" ? "Sort: OS" : "Sort: Name", Th.Dim, "", "sort_mode");
 
         using (var cf = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
         using (var ccb = new SolidBrush(_engine.ConnectionCount > 0 ? Th.Grn : Th.Dim))
