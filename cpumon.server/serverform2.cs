@@ -26,7 +26,7 @@ sealed class ServerForm2 : Form
     readonly ListView _offline = MakeList("Machine", "Seen", "IP", "MAC");
     readonly TextBox _log = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Th.TBg, ForeColor = Th.Brt, Font = new Font("Consolas", 8.5f), BorderStyle = BorderStyle.FixedSingle };
 
-    readonly FlowLayoutPanel _actions = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = true, Padding = new Padding(4), BackColor = Th.TBg };
+    readonly FlowLayoutPanel _actions = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = true, Padding = new Padding(10, 8, 10, 8), BackColor = Th.TBg, AutoScroll = true };
     string? _selectedClient;
     string? _selectedOffline;
     string? _selectedPending;
@@ -60,12 +60,12 @@ sealed class ServerForm2 : Form
     void BuildLayout()
     {
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Th.Bg };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
 
-        var top = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new Padding(8), BackColor = Th.TBg };
-        var tokWrap = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Margin = new Padding(0, 0, 16, 0) };
+        var top = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new Padding(10, 8, 10, 8), BackColor = Th.TBg };
+        var tokWrap = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Margin = new Padding(0, 2, 18, 0) };
         tokWrap.Controls.Add(_tokenLabel);
         tokWrap.Controls.Add(_statusLabel);
         top.Controls.Add(tokWrap);
@@ -79,7 +79,7 @@ sealed class ServerForm2 : Form
         middle.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
 
         middle.Controls.Add(WrapList("Connected clients", _clients), 0, 0);
-        middle.Controls.Add(_actions, 1, 0);
+        middle.Controls.Add(WrapList("Actions", _actions), 1, 0);
         middle.Controls.Add(WrapList("Pending approvals", _pending), 0, 1);
         middle.Controls.Add(WrapList("Offline", _offline), 1, 1);
 
@@ -93,10 +93,11 @@ sealed class ServerForm2 : Form
     static Control WrapList(string title, Control inner)
     {
         var p = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(6), BackColor = Th.Bg };
-        p.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
+        p.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
         p.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        p.Controls.Add(new Label { Text = title, ForeColor = Th.Dim, AutoSize = true, Font = new Font("Segoe UI", 7.5f, FontStyle.Bold) }, 0, 0);
+        p.Controls.Add(new Label { Text = title, ForeColor = Th.Dim, AutoSize = true, Font = new Font("Segoe UI", 7.5f, FontStyle.Bold), Margin = new Padding(2, 3, 0, 0) }, 0, 0);
         inner.Dock = DockStyle.Fill;
+        inner.Margin = new Padding(0);
         p.Controls.Add(inner, 0, 1);
         return p;
     }
@@ -112,6 +113,7 @@ sealed class ServerForm2 : Form
             BackColor = Th.TBg,
             ForeColor = Th.Brt,
             BorderStyle = BorderStyle.FixedSingle,
+            HeaderStyle = ColumnHeaderStyle.Nonclickable,
             Font = new Font("Segoe UI", 9f)
         };
         foreach (var c in columns) lv.Columns.Add(c, 110);
@@ -120,12 +122,9 @@ sealed class ServerForm2 : Form
 
     static void StyleBtn(Button b)
     {
-        b.BackColor = Th.Card;
-        b.ForeColor = Th.Brt;
-        b.FlatStyle = FlatStyle.Flat;
-        b.FlatAppearance.BorderColor = Th.Brd;
-        b.Margin = new Padding(4, 8, 4, 4);
-        b.Padding = new Padding(8, 2, 8, 2);
+        StyleButton(b, Th.Blu, subtle: true);
+        b.Margin = new Padding(4, 6, 4, 4);
+        b.MinimumSize = new Size(0, 30);
     }
 
     void WireEvents()
@@ -300,18 +299,47 @@ sealed class ServerForm2 : Form
         }
         else
         {
-            _actions.Controls.Add(new Label { Text = "Select a client to see actions", ForeColor = Th.Dim, AutoSize = true, Margin = new Padding(6) });
+            _actions.Controls.Add(new Label { Text = "Select a client to see available actions", ForeColor = Th.Dim, AutoSize = true, Margin = new Padding(6, 8, 6, 0) });
         }
         _actions.ResumeLayout();
     }
 
     void AddAction(string text, Color accent, Action onClick)
     {
-        var b = new Button { Text = text, AutoSize = true, BackColor = Th.Card, ForeColor = accent, FlatStyle = FlatStyle.Flat, Margin = new Padding(4) };
-        b.FlatAppearance.BorderColor = Color.FromArgb(80, accent);
+        var b = new Button { Text = text };
+        StyleButton(b, accent);
         b.Click += (_, _) => onClick();
         _actions.Controls.Add(b);
     }
 
-    void AddSep() => _actions.Controls.Add(new Label { Text = "│", ForeColor = Th.Brd, AutoSize = true, Margin = new Padding(8, 6, 8, 0) });
+    static void StyleButton(Button b, Color accent, bool subtle = false)
+    {
+        var baseColor = subtle ? Th.TBg : Th.Card;
+        b.AutoSize = true;
+        b.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        b.UseVisualStyleBackColor = false;
+        b.BackColor = Mix(baseColor, accent, subtle ? 0.08f : 0.14f);
+        b.ForeColor = subtle ? Th.Brt : accent;
+        b.FlatStyle = FlatStyle.Flat;
+        b.FlatAppearance.BorderSize = 1;
+        b.FlatAppearance.BorderColor = Mix(Th.Brd, accent, subtle ? 0.28f : 0.52f);
+        b.FlatAppearance.MouseOverBackColor = Mix(Th.Card, accent, subtle ? 0.16f : 0.24f);
+        b.FlatAppearance.MouseDownBackColor = Mix(Th.Bg, accent, subtle ? 0.18f : 0.30f);
+        b.Cursor = Cursors.Hand;
+        b.TabStop = false;
+        b.Margin = new Padding(4, 4, 4, 6);
+        b.Padding = new Padding(12, 4, 12, 4);
+        b.MinimumSize = new Size(96, 34);
+    }
+
+    static Color Mix(Color a, Color b, float amount)
+    {
+        amount = Math.Clamp(amount, 0f, 1f);
+        int r = (int)(a.R + (b.R - a.R) * amount);
+        int g = (int)(a.G + (b.G - a.G) * amount);
+        int bl = (int)(a.B + (b.B - a.B) * amount);
+        return Color.FromArgb(r, g, bl);
+    }
+
+    void AddSep() => _actions.Controls.Add(new Label { Text = "|", ForeColor = Th.Brd, AutoSize = true, Margin = new Padding(8, 10, 8, 0) });
 }
