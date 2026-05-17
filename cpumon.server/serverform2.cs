@@ -42,6 +42,7 @@ sealed class ServerForm2 : Form
         ForeColor = Th.Brt;
         Font = new Font("Segoe UI", 9f);
         Icon = Th.MakeHexIcon(Th.Grn);
+        DwmDark.Hook(this);
 
         _engine = new ServerEngine(noBroadcast);
         _platform = new WinFormsServerPlatformServices(this, _engine, Refresh);

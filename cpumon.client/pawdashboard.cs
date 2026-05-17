@@ -49,6 +49,7 @@ sealed class PawDashboardForm : Form
 
     public PawDashboardForm(ConcurrentDictionary<string, PawRemoteClient> clients, Action<string, ServerCommand> sendCmd, CLog log)
     {
+        DwmDark.Hook(this);
         _clients = clients; _sendCmd = sendCmd; _log = log;
 
         Text = "🔑 PAW Dashboard"; Size = new Size(700, 550); MinimumSize = new Size(620, 350);
@@ -411,6 +412,7 @@ sealed class PawTerminalDialog : Form
 
     public PawTerminalDialog(string target, string shell, string termId, Action<string, ServerCommand> send)
     {
+        DwmDark.Hook(this);
         _target = target; _termId = termId; _send = send;
         Text = $"🔑 PAW {shell.ToUpper()} — {target}"; Size = new Size(840, 560); MinimumSize = new Size(480, 300);
         StartPosition = FormStartPosition.CenterParent; BackColor = Color.FromArgb(12, 12, 16); ForeColor = Color.FromArgb(204, 204, 204);
@@ -489,6 +491,7 @@ sealed class PawFileBrowserDialogClient : Form
 
     public PawFileBrowserDialogClient(string target, string browserId, Action<string, ServerCommand> send)
     {
+        DwmDark.Hook(this);
         _target = target; _browserId = browserId; _send = send;
         Text = $"🔑 PAW Files — {target}"; Size = new Size(900, 600); MinimumSize = new Size(600, 400);
         StartPosition = FormStartPosition.CenterParent; BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
@@ -622,6 +625,7 @@ sealed class PawProcDialog : Form
 
     public PawProcDialog(string source, Action<string, ServerCommand> send)
     {
+        DwmDark.Hook(this);
         _source = source; _send = send;
         Text = $"🔑 Processes — {source}"; Size = new Size(740, 560); StartPosition = FormStartPosition.CenterScreen;
         BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
@@ -707,6 +711,7 @@ sealed class PawServicesDialog : Form
 
     public PawServicesDialog(string source, Action<string, ServerCommand> send)
     {
+        DwmDark.Hook(this);
         _source = source; _send = send;
         Text = $"Services - {source}"; Size = new Size(780, 520); StartPosition = FormStartPosition.CenterParent;
         BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
@@ -785,6 +790,7 @@ sealed class PawSysInfoDialog : Form
 {
     public PawSysInfoDialog(string source, SystemInfoReport si)
     {
+        DwmDark.Hook(this);
         Text = $"🔑 SysInfo — {source}"; Size = new Size(560, 520); StartPosition = FormStartPosition.CenterParent;
         BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
         var rtb = new RichTextBox { Dock = DockStyle.Fill, BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Consolas", 9.5f), ReadOnly = true, BorderStyle = BorderStyle.None };

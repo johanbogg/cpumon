@@ -19,6 +19,7 @@ sealed class ApprovedClientsDialog : Form
 {
     public ApprovedClientsDialog(ApprovedClientStore store, ConcurrentDictionary<string, RemoteClient> live, CLog log)
     {
+        DwmDark.Hook(this);
         Text = "Approved Clients"; Size = new Size(600, 400); MinimumSize = new Size(400, 250);
         StartPosition = FormStartPosition.CenterParent; BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
 
@@ -91,6 +92,7 @@ sealed class SysInfoDialog : Form
 {
     public SysInfoDialog(RemoteClient cl)
     {
+        DwmDark.Hook(this);
         var si = cl.LastSysInfo!;
         Text = $"SysInfo — {cl.MachineName}"; Size = new Size(560, 520); StartPosition = FormStartPosition.CenterParent;
         BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
@@ -118,6 +120,7 @@ sealed class CpuDetailDialog : Form
 {
     public CpuDetailDialog(string machine, CpuDetailReport detail)
     {
+        DwmDark.Hook(this);
         Text = $"CPU Detail - {machine}";
         Size = new Size(620, 500);
         MinimumSize = new Size(420, 300);
@@ -192,6 +195,7 @@ sealed class ProcDialog : Form
 
     public ProcDialog(RemoteClient cl)
     {
+        DwmDark.Hook(this);
         _cl = cl;
         Text = $"Processes — {cl.MachineName}"; Size = new Size(740, 560); StartPosition = FormStartPosition.CenterScreen;
         BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
@@ -288,6 +292,7 @@ sealed class ServicesDialog : Form
 {
     public ServicesDialog(RemoteClient cl)
     {
+        DwmDark.Hook(this);
         Text = $"Services — {cl.MachineName}"; Size = new Size(780, 520); StartPosition = FormStartPosition.CenterParent;
         BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
 
@@ -362,6 +367,7 @@ sealed class EventViewerDialog : Form
 {
     public EventViewerDialog(RemoteClient cl)
     {
+        DwmDark.Hook(this);
         var events = cl.LastEvents ?? new List<EventLogEntry>();
         Text = $"⚠ Events — {cl.MachineName}"; Size = new Size(900, 500); MinimumSize = new Size(600, 350);
         StartPosition = FormStartPosition.CenterParent; BackColor = Th.Bg; ForeColor = Th.Brt; FormBorderStyle = FormBorderStyle.Sizable;
@@ -403,6 +409,7 @@ sealed class HealthDialog : Form
 
     public HealthDialog(RemoteClient cl, ApprovedClientStore store)
     {
+        DwmDark.Hook(this);
         _cl = cl;
         _store = store;
         Text = $"Health — {cl.MachineName}";

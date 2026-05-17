@@ -174,6 +174,7 @@ public sealed class AlertConfigDialog : Form
 
     public AlertConfigDialog(AlertService svc)
     {
+        DwmDark.Hook(this);
         _svc = svc;
         var cfg = svc.Config;
 
