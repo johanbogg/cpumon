@@ -177,7 +177,8 @@ public sealed class ServerDashboardController
 
     public void RequestProcesses(string machineName)
     {
-        DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "processes", MachineName = machineName });
+        if (_platform != null) _platform.ShowProcessDialog(machineName);
+        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "processes", MachineName = machineName });
         _engine.RequestProcessList(machineName);
     }
 
@@ -193,25 +194,47 @@ public sealed class ServerDashboardController
 
     public bool TogglePaw(string machineName) => _engine.TogglePaw(machineName);
 
-    public void ShowApprovedClients() => DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "approved" });
+    public void ShowApprovedClients()
+    {
+        if (_platform != null) _platform.ShowApprovedClients();
+        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "approved" });
+    }
 
-    public void ShowAlerts() => DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "alerts" });
+    public void ShowAlerts()
+    {
+        if (_platform != null) _platform.ShowAlerts();
+        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "alerts" });
+    }
 
-    public void ShowHealth(string machineName) => DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "health", MachineName = machineName });
+    public void ShowHealth(string machineName)
+    {
+        if (_platform != null) _platform.ShowHealthDialog(machineName);
+        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "health", MachineName = machineName });
+    }
 
     public void OpenTerminal(string machineName, string shell)
     {
-        DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "terminal", MachineName = machineName, Argument = shell });
+        if (_platform != null) _platform.ShowTerminal(machineName, shell);
+        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "terminal", MachineName = machineName, Argument = shell });
     }
 
     public void OpenFileBrowser(string machineName, string? initialPath = null)
     {
-        DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "files", MachineName = machineName, Argument = initialPath });
+        if (_platform != null) _platform.ShowFileBrowser(machineName, initialPath);
+        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "files", MachineName = machineName, Argument = initialPath });
     }
 
-    public void OpenRdp(string machineName) => DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "rdp", MachineName = machineName });
+    public void OpenRdp(string machineName)
+    {
+        if (_platform != null) _platform.ShowRdp(machineName);
+        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "rdp", MachineName = machineName });
+    }
 
-    public void SendUserMessage(string machineName) => DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "send_message", MachineName = machineName });
+    public void SendUserMessage(string machineName)
+    {
+        if (_platform != null) _platform.PromptSendUserMessage(machineName, text => SubmitUserMessage(machineName, text));
+        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "send_message", MachineName = machineName });
+    }
 
     public bool SubmitUserMessage(string machineName, string text)
     {

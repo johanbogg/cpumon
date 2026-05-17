@@ -579,6 +579,31 @@ internal static class Program
         controller.PushUpdate("lnx");
         Assert(platform.FilePickerRequest != null, "PushUpdate should route file picker through platform services");
         Assert(platform.FilePickerRequest!.Filter.Contains("*.py"), "platform file picker should preserve Linux filter");
+
+        controller.ShowApprovedClients();
+        Assert(platform.ShowApprovedCalled, "ShowApprovedClients should route through platform services");
+
+        controller.ShowAlerts();
+        Assert(platform.ShowAlertsCalled, "ShowAlerts should route through platform services");
+
+        controller.RequestProcesses("no-such-box");
+        Assert(platform.ShowProcessMachine == "no-such-box", "RequestProcesses should route through platform services");
+
+        controller.ShowHealth("lnx");
+        Assert(platform.ShowHealthMachine == "lnx", "ShowHealth should route through platform services");
+
+        controller.OpenTerminal("lnx", "bash");
+        Assert(platform.ShowTerminalCall == ("lnx", "bash"), "OpenTerminal should route shell argument through platform services");
+
+        controller.OpenFileBrowser("lnx", "/var/log");
+        Assert(platform.ShowFileBrowserCall == ("lnx", "/var/log"), "OpenFileBrowser should route initial path through platform services");
+
+        controller.OpenRdp("lnx");
+        Assert(platform.ShowRdpMachine == "lnx", "OpenRdp should route through platform services");
+
+        controller.SendUserMessage("lnx");
+        Assert(platform.PromptSendUserMessageCall?.Machine == "lnx", "SendUserMessage should route through platform services");
+        platform.PromptSendUserMessageCall?.OnSubmit("hello");
     }
 
     static void TestDashboardControllerToggleExpandedFlipsClient()
@@ -680,11 +705,39 @@ internal static class Program
         public DashboardPromptRequest? PromptRequest { get; private set; }
         public DashboardFilePickerRequest? FilePickerRequest { get; private set; }
         public string? OpenExternalTarget { get; private set; }
+        public bool ShowApprovedCalled { get; private set; }
+        public bool ShowAlertsCalled { get; private set; }
+        public string? ShowProcessMachine { get; private set; }
+        public string? UpdateProcessMachine { get; private set; }
+        public string? ShowSysInfoMachine { get; private set; }
+        public string? ShowServicesMachine { get; private set; }
+        public string? ShowEventsMachine { get; private set; }
+        public (string Machine, CpuDetailReport Detail)? ShowCpuDetailCall { get; private set; }
+        public (string Machine, ScreenshotData Shot)? ShowScreenshotCall { get; private set; }
+        public string? ShowHealthMachine { get; private set; }
+        public (string Machine, string Shell)? ShowTerminalCall { get; private set; }
+        public (string Machine, string? Path)? ShowFileBrowserCall { get; private set; }
+        public string? ShowRdpMachine { get; private set; }
+        public (string Machine, Action<string> OnSubmit)? PromptSendUserMessageCall { get; private set; }
 
         public void SetClipboardText(string text) => ClipboardText = text;
         public void Confirm(DashboardMessageBoxRequest request) => ConfirmRequest = request;
         public void Prompt(DashboardPromptRequest request) => PromptRequest = request;
         public void PickFile(DashboardFilePickerRequest request) => FilePickerRequest = request;
         public void OpenExternal(string target) => OpenExternalTarget = target;
+        public void ShowApprovedClients() => ShowApprovedCalled = true;
+        public void ShowAlerts() => ShowAlertsCalled = true;
+        public void ShowProcessDialog(string machineName) => ShowProcessMachine = machineName;
+        public void UpdateProcessDialog(string machineName) => UpdateProcessMachine = machineName;
+        public void ShowSysInfoDialog(string machineName) => ShowSysInfoMachine = machineName;
+        public void ShowServicesDialog(string machineName) => ShowServicesMachine = machineName;
+        public void ShowEventsDialog(string machineName) => ShowEventsMachine = machineName;
+        public void ShowCpuDetailDialog(string machineName, CpuDetailReport detail) => ShowCpuDetailCall = (machineName, detail);
+        public void ShowScreenshotDialog(string machineName, ScreenshotData shot) => ShowScreenshotCall = (machineName, shot);
+        public void ShowHealthDialog(string machineName) => ShowHealthMachine = machineName;
+        public void ShowTerminal(string machineName, string shell) => ShowTerminalCall = (machineName, shell);
+        public void ShowFileBrowser(string machineName, string? initialPath) => ShowFileBrowserCall = (machineName, initialPath);
+        public void ShowRdp(string machineName) => ShowRdpMachine = machineName;
+        public void PromptSendUserMessage(string machineName, Action<string> onSubmit) => PromptSendUserMessageCall = (machineName, onSubmit);
     }
 }

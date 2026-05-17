@@ -12,6 +12,7 @@ sealed class ServerForm : BorderlessForm
 {
     readonly ServerEngine _engine;
     readonly ServerDashboardController _dashboard;
+    readonly IServerPlatformServices _platform;
     readonly Panel _ct;
     readonly Timer _tm;
     readonly ToolTip _toolTip = new();
@@ -26,7 +27,6 @@ sealed class ServerForm : BorderlessForm
     int _scrollBottom;
     readonly List<(Rectangle R, string M, string A)> _btns = new();
     string _currentToolTip = "";
-    readonly Dictionary<string, ProcDialog> _procDialogs = new();
 
     public ServerForm(bool noBroadcast)
     {
@@ -56,7 +56,8 @@ sealed class ServerForm : BorderlessForm
         Controls.Add(_ct);
         Controls.Add(tp);
 
-        _dashboard = new ServerDashboardController(_engine, new WinFormsServerPlatformServices(this, () => _ct.Invalidate()));
+        _platform = new WinFormsServerPlatformServices(this, _engine, () => _ct.Invalidate());
+        _dashboard = new ServerDashboardController(_engine, _platform);
 
         _tm = new Timer { Interval = 500 };
         _tm.Tick += (_, _) => _ct.Invalidate();
@@ -69,8 +70,6 @@ sealed class ServerForm : BorderlessForm
         _engine.ScreenshotReceived += OnEngineScreenshot;
         _engine.UpdateAvailable += OnEngineUpdateAvailable;
         _engine.ReleaseStaged += OnEngineReleaseStaged;
-
-        _dashboard.DialogRequested += OnDashboardDialog;
 
         var appIcon = Th.MakeHexIcon(Th.Grn);
         Icon = appIcon;
@@ -112,7 +111,6 @@ sealed class ServerForm : BorderlessForm
             _engine.ScreenshotReceived -= OnEngineScreenshot;
             _engine.UpdateAvailable -= OnEngineUpdateAvailable;
             _engine.ReleaseStaged -= OnEngineReleaseStaged;
-            _dashboard.DialogRequested -= OnDashboardDialog;
             _engine.Dispose();
         };
 
@@ -144,45 +142,17 @@ sealed class ServerForm : BorderlessForm
         Activate();
     }
 
-    void OnEngineProcessList(RemoteClient cl)
-    {
-        if (IsDisposed) return;
-        BeginInvoke(() =>
-        {
-            if (_procDialogs.TryGetValue(cl.MachineName, out var existing) && !existing.IsDisposed && cl.LastProcessList != null)
-                existing.UpdateList(cl.LastProcessList);
-        });
-    }
+    void OnEngineProcessList(RemoteClient cl) => _platform.UpdateProcessDialog(cl.MachineName);
 
-    void OnEngineSysInfo(RemoteClient cl)
-    {
-        if (IsDisposed) return;
-        BeginInvoke(() => { using var d = new SysInfoDialog(cl); d.ShowDialog(this); });
-    }
+    void OnEngineSysInfo(RemoteClient cl) => _platform.ShowSysInfoDialog(cl.MachineName);
 
-    void OnEngineServices(RemoteClient cl)
-    {
-        if (IsDisposed) return;
-        BeginInvoke(() => { using var d = new ServicesDialog(cl); d.ShowDialog(this); });
-    }
+    void OnEngineServices(RemoteClient cl) => _platform.ShowServicesDialog(cl.MachineName);
 
-    void OnEngineEvents(RemoteClient cl)
-    {
-        if (IsDisposed) return;
-        BeginInvoke(() => { using var d = new EventViewerDialog(cl); d.ShowDialog(this); });
-    }
+    void OnEngineEvents(RemoteClient cl) => _platform.ShowEventsDialog(cl.MachineName);
 
-    void OnEngineCpuDetail(RemoteClient cl, CpuDetailReport detail)
-    {
-        if (IsDisposed) return;
-        BeginInvoke(() => new CpuDetailDialog(cl.MachineName, detail).Show(this));
-    }
+    void OnEngineCpuDetail(RemoteClient cl, CpuDetailReport detail) => _platform.ShowCpuDetailDialog(cl.MachineName, detail);
 
-    void OnEngineScreenshot(RemoteClient cl, ScreenshotData shot)
-    {
-        if (IsDisposed) return;
-        BeginInvoke(() => new ScreenshotPreviewDialog(cl.MachineName, shot).Show(this));
-    }
+    void OnEngineScreenshot(RemoteClient cl, ScreenshotData shot) => _platform.ShowScreenshotDialog(cl.MachineName, shot);
 
     void OnEngineUpdateAvailable()
     {
@@ -194,92 +164,6 @@ sealed class ServerForm : BorderlessForm
     {
         if (IsDisposed) return;
         BeginInvoke(() => _ct.Invalidate());
-    }
-
-    void OpenProcessDialog(string machine)
-    {
-        if (!_engine.Clients.TryGetValue(machine, out var cl)) return;
-        if (_procDialogs.TryGetValue(cl.MachineName, out var existing) && !existing.IsDisposed)
-        {
-            existing.BringToFront();
-            return;
-        }
-
-        var d = new ProcDialog(cl);
-        if (cl.LastProcessList != null) d.UpdateList(cl.LastProcessList);
-        _procDialogs[cl.MachineName] = d;
-        d.FormClosed += (_, _) => _procDialogs.Remove(cl.MachineName);
-        d.Show(this);
-    }
-
-    void OnDashboardDialog(DashboardDialogRequest req)
-    {
-        if (IsDisposed) return;
-        BeginInvoke(() =>
-        {
-            switch (req.Kind)
-            {
-                case "approved":
-                {
-                    using var d = new ApprovedClientsDialog(_engine.Store, _engine.Clients, _engine.Log);
-                    d.ShowDialog(this);
-                    break;
-                }
-                case "alerts":
-                {
-                    using var d = new AlertConfigDialog(_engine.Alerts);
-                    if (d.ShowDialog(this) == DialogResult.OK) _ct.Invalidate();
-                    break;
-                }
-                case "processes": OpenProcessDialog(req.MachineName); break;
-                case "health":
-                    if (_engine.Clients.TryGetValue(req.MachineName, out var hcl))
-                        new HealthDialog(hcl, _engine.Store).Show(this);
-                    break;
-                case "terminal":
-                    if (_engine.Clients.TryGetValue(req.MachineName, out var tcl) && req.Argument is { } shell)
-                    {
-                        new TerminalDialog(tcl, shell).Show(this);
-                        var tag = shell == "cmd" ? "CMD" : shell == "powershell" ? "PS" : "Bash";
-                        _engine.Log.Add($"{tag}→{req.MachineName}", Th.Cyan);
-                    }
-                    break;
-                case "files":
-                    if (_engine.Clients.TryGetValue(req.MachineName, out var fcl))
-                    {
-                        var dlg = req.Argument is { } p ? new FileBrowserDialog(fcl, p) : new FileBrowserDialog(fcl);
-                        dlg.Show(this);
-                        _engine.Log.Add(req.Argument != null ? $"Files->{req.MachineName} {req.Argument}" : $"Files→{req.MachineName}", Th.Yel);
-                    }
-                    break;
-                case "rdp":
-                    if (_engine.Clients.TryGetValue(req.MachineName, out var rcl))
-                    {
-                        var rdpId = Guid.NewGuid().ToString("N")[..12];
-                        var name = req.MachineName;
-                        var rdpViewer = new RdpViewerDialog(name, rdpId,
-                            cmd => { if (_engine.Clients.TryGetValue(name, out var rc)) try { rc.Send(cmd); } catch { } },
-                            () => { if (_engine.Clients.TryGetValue(name, out var rc)) rc.RdpDialogs.TryRemove(rdpId, out _); });
-                        rcl.RdpDialogs[rdpId] = rdpViewer;
-                        rcl.Send(new ServerCommand { Cmd = "rdp_open", RdpId = rdpId, RdpFps = Proto.RdpFpsDefault, RdpQuality = Proto.RdpJpegQuality });
-                        rdpViewer.Show(this);
-                        _engine.Log.Add($"RDP→{name}", Th.Cyan);
-                    }
-                    break;
-                case "send_message":
-                {
-                    using var dlg = new Form { Text = "Send Message", Size = new Size(420, 148), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt, MaximizeBox = false, MinimizeBox = false };
-                    var txt = new TextBox { BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Segoe UI", 10f), Location = new Point(12, 12), Size = new Size(390, 28), BorderStyle = BorderStyle.FixedSingle };
-                    txt.PlaceholderText = "Message to show on remote screen...";
-                    var send = new Button { Text = "Send", DialogResult = DialogResult.OK, Location = new Point(12, 52), Size = new Size(80, 30), BackColor = Color.FromArgb(30, 60, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat }; send.FlatAppearance.BorderColor = Th.Grn;
-                    var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(100, 52), Size = new Size(80, 30), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
-                    dlg.Controls.AddRange(new Control[] { txt, send, cancel }); dlg.AcceptButton = send;
-                    if (dlg.ShowDialog(this) == DialogResult.OK)
-                        _dashboard.SubmitUserMessage(req.MachineName, txt.Text);
-                    break;
-                }
-            }
-        });
     }
 
     void OnClick(object? sender, MouseEventArgs e)
