@@ -411,15 +411,16 @@ sealed class ServerForm : BorderlessForm
         {
             foreach (var clientState in state.Clients)
             {
-                // TODO Phase 4: draw cards entirely from ClientCardState.
-                if (!_engine.Clients.TryGetValue(clientState.MachineName, out var cl)) continue;
-                if (cl.LastReport == null)
+                if (clientState.IsWaitingForFirstReport)
                 {
-                    DrawConnectedWithoutReport(g, x, y, w, cl);
+                    DrawConnectedWithoutReport(g, x, y, w, clientState);
                     y += 44;
                     continue;
                 }
-                int ch = clientState.IsExpanded ? DrawExpanded(g, x, y, w, cl, clientState.IsStale) : DrawCollapsed(g, x, y, w, cl, clientState.IsStale);
+                bool sel = state.SelectedMachineNames.Contains(clientState.MachineName);
+                int ch = clientState.IsExpanded
+                    ? DrawExpanded(g, x, y, w, clientState, sel)
+                    : DrawCollapsed(g, x, y, w, clientState, sel);
                 y += ch + 6;
             }
             if (state.Clients.Count == 0)
@@ -525,7 +526,7 @@ sealed class ServerForm : BorderlessForm
         }
     }
 
-    void DrawConnectedWithoutReport(Graphics g, int x, int y, int w, RemoteClient cl)
+    void DrawConnectedWithoutReport(Graphics g, int x, int y, int w, ClientCardState card)
     {
         int h = 38;
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
@@ -534,64 +535,58 @@ sealed class ServerForm : BorderlessForm
             g.FillRectangle(ac, x + 1, y + 6, 4, h - 12);
         using (var dot = new SolidBrush(Th.Yel)) g.FillEllipse(dot, x + 12, y + 14, 8, 8);
 
-        var alias = _engine.Store.GetAlias(cl.MachineName);
-        bool hasAlias = !string.IsNullOrEmpty(alias);
-        string displayName = hasAlias ? alias! : cl.MachineName;
+        bool hasAlias = !string.IsNullOrEmpty(card.Alias);
         using var nf = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
         using (var nb = new SolidBrush(Th.Brt))
-            g.DrawString(displayName, nf, nb, x + 26, y + 7);
+            g.DrawString(card.DisplayName, nf, nb, x + 26, y + 7);
         if (hasAlias)
         {
             using var hnf = new Font("Segoe UI", 7f);
             using var hnb = new SolidBrush(Color.FromArgb(85, 85, 100));
-            var nsz = g.MeasureString(displayName, nf);
-            g.DrawString(cl.MachineName, hnf, hnb, x + 30 + (int)nsz.Width, y + 11);
+            var nsz = g.MeasureString(card.DisplayName, nf);
+            g.DrawString(card.MachineName, hnf, hnb, x + 30 + (int)nsz.Width, y + 11);
         }
 
         using var sf = new Font("Segoe UI", 7.5f);
         using var sb = new SolidBrush(Th.Yel);
-        string ver = string.IsNullOrEmpty(cl.ClientVersion) ? "" : $" · v{cl.ClientVersion}";
+        string ver = string.IsNullOrEmpty(card.ClientVersion) ? "" : $" · v{card.ClientVersion}";
         g.DrawString($"Connected · waiting for first report{ver}", sf, sb, x + 26, y + 23);
     }
 
-    int DrawCollapsed(Graphics g, int x, int y, int w, RemoteClient cl, bool stale)
+    int DrawCollapsed(Graphics g, int x, int y, int w, ClientCardState card, bool isSelected)
     {
-        var r = cl.LastReport!;
+        var r = card.Report!;
         int h = 42;
-        Color brd = stale ? Th.Org : Th.Grn;
+        Color brd = card.IsStale ? Th.Org : Th.Grn;
 
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 6); g.FillPath(bg, p); }
         using (var bp = new Pen(Color.FromArgb(50, brd), 1f)) { using var p = Th.RR(x, y, w, h, 6); g.DrawPath(bp, p); }
         using (var ac = new SolidBrush(Color.FromArgb(200, brd)))
             g.FillRectangle(ac, x + 1, y + 6, 4, h - 12);
 
-        bool sel = _dashboard.SelectedMachineNames.Contains(r.MachineName);
         var cbR = new Rectangle(x + w - 20, y + 15, 12, 12);
-        _btns.Add((cbR, r.MachineName, "select"));
-        _btns.Add((new Rectangle(x, y, w, h), r.MachineName, "toggle"));
-        using (var cbBg = new SolidBrush(sel ? Th.Grn : Color.FromArgb(30, Th.Brd))) g.FillRectangle(cbBg, cbR);
-        using (var cbPen = new Pen(sel ? Th.Grn : Th.Dim, 1f)) g.DrawRectangle(cbPen, cbR);
-        if (sel) { using var ck = new Pen(Color.Black, 1.5f); g.DrawLine(ck, cbR.X + 2, cbR.Y + 6, cbR.X + 4, cbR.Y + 9); g.DrawLine(ck, cbR.X + 4, cbR.Y + 9, cbR.X + 9, cbR.Y + 3); }
+        _btns.Add((cbR, card.MachineName, "select"));
+        _btns.Add((new Rectangle(x, y, w, h), card.MachineName, "toggle"));
+        using (var cbBg = new SolidBrush(isSelected ? Th.Grn : Color.FromArgb(30, Th.Brd))) g.FillRectangle(cbBg, cbR);
+        using (var cbPen = new Pen(isSelected ? Th.Grn : Th.Dim, 1f)) g.DrawRectangle(cbPen, cbR);
+        if (isSelected) { using var ck = new Pen(Color.Black, 1.5f); g.DrawLine(ck, cbR.X + 2, cbR.Y + 6, cbR.X + 4, cbR.Y + 9); g.DrawLine(ck, cbR.X + 4, cbR.Y + 9, cbR.X + 9, cbR.Y + 3); }
 
         using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 17, 8, 8);
-        var alias = _engine.Store.GetAlias(r.MachineName);
-        bool hasAlias = !string.IsNullOrEmpty(alias);
-        string displayName = hasAlias ? alias! : r.MachineName;
+        bool hasAlias = !string.IsNullOrEmpty(card.Alias);
         using var nf = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
         using var nb = new SolidBrush(Th.Brt);
-        g.DrawString(displayName, nf, nb, x + 28, hasAlias ? y + 8 : y + 13);
+        g.DrawString(card.DisplayName, nf, nb, x + 28, hasAlias ? y + 8 : y + 13);
         if (hasAlias)
         {
             using var hnf = new Font("Segoe UI", 7f);
             using var hnb = new SolidBrush(Color.FromArgb(85, 85, 100));
-            g.DrawString(r.MachineName, hnf, hnb, x + 28, y + 25);
+            g.DrawString(card.MachineName, hnf, hnb, x + 28, y + 25);
         }
-        var nsz = g.MeasureString(displayName, nf);
-        bool outdated = ServerEngine.ClientNeedsUpdate(cl.ClientVersion);
+        var nsz = g.MeasureString(card.DisplayName, nf);
         int mx = x + 32 + (int)nsz.Width + 14;
-        if (outdated)
+        if (card.IsOutdated)
         {
-            string badge = $"⚠ v{cl.ClientVersion}";
+            string badge = $"⚠ v{card.ClientVersion}";
             using var bf = new Font("Segoe UI", 7f);
             using var bb = new SolidBrush(Th.Org);
             g.DrawString(badge, bf, bb, mx - 4, hasAlias ? y + 9 : y + 14);
@@ -600,11 +595,11 @@ sealed class ServerForm : BorderlessForm
         }
         using var mf = new Font("Segoe UI", 8f);
         int chipLeft = HeaderChipX(x, w, 60) - 8;
-        string osText = "OS: " + ShortOsLabel(r);
+        string osText = "OS: " + card.OsLabel;
         var osSz = g.MeasureString(osText, mf);
         if (mx + osSz.Width + 10 < chipLeft)
         {
-            using var osb = new SolidBrush(ServerEngine.IsLinuxClient(cl) ? Th.Cyan : Th.Dim);
+            using var osb = new SolidBrush(card.IsLinux ? Th.Cyan : Th.Dim);
             g.DrawString(osText, mf, osb, mx, y + 14);
             mx += (int)osSz.Width + 16;
         }
@@ -623,8 +618,8 @@ sealed class ServerForm : BorderlessForm
         { using var netb = new SolidBrush(Th.Dim); g.DrawString($"↑{FmtNet(r.NetUpKBps)} ↓{FmtNet(r.NetDownKBps)}", mf, netb, mx, y + 14); }
 
         // LIVE / MON / IDLE chip
-        Color chipC = cl.SendMode == "full" ? Th.Grn : cl.SendMode == "monitor" ? Th.Org : Th.Dim;
-        string chipTxt = cl.SendMode == "full" ? "● LIVE" : cl.SendMode == "monitor" ? "◉ MON" : "○ IDLE";
+        Color chipC = card.SendMode == "full" ? Th.Grn : card.SendMode == "monitor" ? Th.Org : Th.Dim;
+        string chipTxt = card.SendMode == "full" ? "● LIVE" : card.SendMode == "monitor" ? "◉ MON" : "○ IDLE";
         using (var chipF = new Font("Segoe UI", 6.5f, FontStyle.Bold))
         {
             var csz = g.MeasureString(chipTxt, chipF);
@@ -643,57 +638,53 @@ sealed class ServerForm : BorderlessForm
         return h;
     }
 
-    int DrawExpanded(Graphics g, int x, int y, int w, RemoteClient cl, bool stale)
+    int DrawExpanded(Graphics g, int x, int y, int w, ClientCardState card, bool isSelected)
     {
-        var r = cl.LastReport!;
-        bool linux = ServerEngine.IsLinuxClient(cl);
+        var r = card.Report!;
+        bool linux = card.IsLinux;
         const int BtnH = 26, BtnGap = 8;
         int hdrH = 100, h = hdrH + 6 + BtnH + BtnGap + BtnH + 6;
-        Color brd = stale ? Th.Org : Th.Grn;
+        Color brd = card.IsStale ? Th.Org : Th.Grn;
 
         using (var bg = new SolidBrush(Th.Card)) { using var p = Th.RR(x, y, w, h, 8); g.FillPath(bg, p); }
         using (var bp = new Pen(Color.FromArgb(50, brd), 1f)) { using var p = Th.RR(x, y, w, h, 8); g.DrawPath(bp, p); }
         using (var ac = new SolidBrush(Color.FromArgb(200, brd)))
             g.FillRectangle(ac, x + 1, y + 8, 4, h - 16);
 
-        bool selExp = _dashboard.SelectedMachineNames.Contains(r.MachineName);
         var cbRExp = new Rectangle(x + w - 20, y + 15, 12, 12);
-        _btns.Add((cbRExp, r.MachineName, "select"));
-        _btns.Add((new Rectangle(x, y, w, 32), r.MachineName, "toggle"));
-        using (var cbBg2 = new SolidBrush(selExp ? Th.Grn : Color.FromArgb(30, Th.Brd))) g.FillRectangle(cbBg2, cbRExp);
-        using (var cbPen2 = new Pen(selExp ? Th.Grn : Th.Dim, 1f)) g.DrawRectangle(cbPen2, cbRExp);
-        if (selExp) { using var ck2 = new Pen(Color.Black, 1.5f); g.DrawLine(ck2, cbRExp.X + 2, cbRExp.Y + 6, cbRExp.X + 4, cbRExp.Y + 9); g.DrawLine(ck2, cbRExp.X + 4, cbRExp.Y + 9, cbRExp.X + 9, cbRExp.Y + 3); }
+        _btns.Add((cbRExp, card.MachineName, "select"));
+        _btns.Add((new Rectangle(x, y, w, 32), card.MachineName, "toggle"));
+        using (var cbBg2 = new SolidBrush(isSelected ? Th.Grn : Color.FromArgb(30, Th.Brd))) g.FillRectangle(cbBg2, cbRExp);
+        using (var cbPen2 = new Pen(isSelected ? Th.Grn : Th.Dim, 1f)) g.DrawRectangle(cbPen2, cbRExp);
+        if (isSelected) { using var ck2 = new Pen(Color.Black, 1.5f); g.DrawLine(ck2, cbRExp.X + 2, cbRExp.Y + 6, cbRExp.X + 4, cbRExp.Y + 9); g.DrawLine(ck2, cbRExp.X + 4, cbRExp.Y + 9, cbRExp.X + 9, cbRExp.Y + 3); }
 
         using (var ef = new Font("Segoe UI", 10f)) using (var eb = new SolidBrush(Th.Dim))
             g.DrawString("▴", ef, eb, x + w - 38, y + 12);
         using (var dot = new SolidBrush(brd)) g.FillEllipse(dot, x + 12, y + 17, 8, 8);
-        var alias2 = _engine.Store.GetAlias(r.MachineName);
-        bool hasAlias2 = !string.IsNullOrEmpty(alias2);
-        string displayName2 = hasAlias2 ? alias2! : r.MachineName;
+        bool hasAlias2 = !string.IsNullOrEmpty(card.Alias);
         using var expNf = new Font("Segoe UI Semibold", 11f, FontStyle.Bold);
-        using (var nb2 = new SolidBrush(Th.Brt)) g.DrawString(displayName2, expNf, nb2, x + 28, y + 7);
-        var expNsz = g.MeasureString(displayName2, expNf);
+        using (var nb2 = new SolidBrush(Th.Brt)) g.DrawString(card.DisplayName, expNf, nb2, x + 28, y + 7);
+        var expNsz = g.MeasureString(card.DisplayName, expNf);
         int expX = x + 30 + (int)expNsz.Width;
         if (hasAlias2)
         {
             using var hnf = new Font("Segoe UI", 7f);
             using var hnb = new SolidBrush(Color.FromArgb(85, 85, 100));
-            g.DrawString(r.MachineName, hnf, hnb, expX, y + 11);
-            expX += (int)g.MeasureString(r.MachineName, hnf).Width + 4;
+            g.DrawString(card.MachineName, hnf, hnb, expX, y + 11);
+            expX += (int)g.MeasureString(card.MachineName, hnf).Width + 4;
         }
-        if (!string.IsNullOrEmpty(cl.ClientVersion))
+        if (!string.IsNullOrEmpty(card.ClientVersion))
         {
-            bool outdated = ServerEngine.ClientNeedsUpdate(cl.ClientVersion);
             using var vf = new Font("Segoe UI", 7f);
-            using var vb = new SolidBrush(outdated ? Th.Org : Th.Dim);
-            g.DrawString($"v{cl.ClientVersion}" + (outdated ? " ⚠" : ""), vf, vb, expX, y + 11);
+            using var vb = new SolidBrush(card.IsOutdated ? Th.Org : Th.Dim);
+            g.DrawString($"v{card.ClientVersion}" + (card.IsOutdated ? " ⚠" : ""), vf, vb, expX, y + 11);
         }
         using (var cf = new Font("Segoe UI", 7.5f)) using (var cb = new SolidBrush(Th.Dim))
             g.DrawString(r.CpuName, cf, cb, x + 28, y + 27);
 
         // LIVE / MON / IDLE chip
-        Color chipC = cl.SendMode == "full" ? Th.Grn : cl.SendMode == "monitor" ? Th.Org : Th.Dim;
-        string chipTxt = cl.SendMode == "full" ? "● LIVE" : cl.SendMode == "monitor" ? "◉ MON" : "○ IDLE";
+        Color chipC = card.SendMode == "full" ? Th.Grn : card.SendMode == "monitor" ? Th.Org : Th.Dim;
+        string chipTxt = card.SendMode == "full" ? "● LIVE" : card.SendMode == "monitor" ? "◉ MON" : "○ IDLE";
         using (var chipF = new Font("Segoe UI", 6.5f, FontStyle.Bold))
         {
             var csz = g.MeasureString(chipTxt, chipF);
@@ -715,14 +706,14 @@ sealed class ServerForm : BorderlessForm
         DrawMetric(g, mx, my, "LOAD", Th.F(r.TotalLoadPercent, "0", "%"), Th.LdC(r.TotalLoadPercent ?? 0)); mx += 112;
         DrawMetric(g, mx, my, "FREQ", Th.FF(r.PackageFrequencyMHz), Th.Blu); mx += 112;
         DrawMetric(g, mx, my, "TEMP", Th.F(r.PackageTemperatureC, "0.0", "°C"), Th.TpC(r.PackageTemperatureC ?? 0)); mx += 112;
-        if (!linux) _btns.Add((new Rectangle(cpuMetricsX - 4, my - 13, Math.Min(336, w - 28), 32), r.MachineName, "cpu_detail"));
+        if (!linux) _btns.Add((new Rectangle(cpuMetricsX - 4, my - 13, Math.Min(336, w - 28), 32), card.MachineName, "cpu_detail"));
         if (r.PackagePowerW is > 0) { DrawMetric(g, mx, my, "PWR", Th.F(r.PackagePowerW, "0.0", "W"), Th.Org); mx += 112; }
         if (r.GpuLoadPercent.HasValue) DrawMetric(g, mx, my, "GPU", Th.F(r.GpuLoadPercent, "0", "%"), Th.LdC(r.GpuLoadPercent ?? 0));
 
         // Metrics row 2 — storage & net
         int my2 = y + 87, mx2 = x + 14;
         if (r.RamTotalGB > 0) { int pct = (int)(r.RamUsedGB / r.RamTotalGB * 100); DrawMetric(g, mx2, my2, $"RAM {pct}%", $"{FmtGb(r.RamUsedGB, "0.0")} GB / {FmtGb(r.RamTotalGB, "0.0")} GB", pct > 90 ? Th.Red : pct > 70 ? Th.Org : Th.Grn); mx2 += 172; }
-        foreach (var drv in r.Drives.Take(3)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; int driveX = mx2; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); _btns.Add((new Rectangle(driveX - 4, my2 - 13, 100, 32), r.MachineName, "files_path:" + drv.Name)); mx2 += 104; }
+        foreach (var drv in r.Drives.Take(3)) { int pct = drv.TotalGB > 0 ? (int)((drv.TotalGB - drv.FreeGB) / drv.TotalGB * 100) : 0; int driveX = mx2; DrawMetric(g, mx2, my2, drv.Name, $"{drv.FreeGB:0.0} G free", pct > 90 ? Th.Red : pct > 75 ? Th.Org : Th.Dim); _btns.Add((new Rectangle(driveX - 4, my2 - 13, 100, 32), card.MachineName, "files_path:" + drv.Name)); mx2 += 104; }
         if (r.GpuVramTotalMB is > 0 && r.GpuVramUsedMB.HasValue) { string vram = r.GpuVramTotalMB > 1024 ? $"{FmtGb(r.GpuVramUsedMB.Value / 1024.0, "0.1")}/{FmtGb(r.GpuVramTotalMB.Value / 1024.0, "0.0")}G" : $"{r.GpuVramUsedMB.Value:0}/{r.GpuVramTotalMB.Value:0}M"; DrawMetric(g, mx2, my2, "VRAM", vram, Th.Blu); mx2 += 112; }
         if (r.NetUpKBps + r.NetDownKBps > 0.5) DrawMetric(g, mx2, my2, "NET ↑↓", $"{FmtNet(r.NetUpKBps)}/{FmtNet(r.NetDownKBps)}", Th.Dim);
 
@@ -736,7 +727,7 @@ sealed class ServerForm : BorderlessForm
         bool TryDrawTopBtn(int width, int step, string text, Color color, string action)
         {
             if (bx + width > rowLimit) return false;
-            DrawBtn(g, bx, by, width, BtnH, text, color, r.MachineName, action);
+            DrawBtn(g, bx, by, width, BtnH, text, color, card.MachineName, action);
             bx += step;
             return true;
         }
@@ -756,19 +747,19 @@ sealed class ServerForm : BorderlessForm
         {
             TryDrawTopBtn(68, 76, "RDP", Th.Cyan, "rdp");
         }
-        if (ServerEngine.ClientNeedsUpdate(cl.ClientVersion))
+        if (card.IsOutdated)
             TryDrawTopBtn(80, 88, "Update", Th.Org, "update");
         int row1NextX = bx;
 
         // Row 2 - info tools (left) + danger zone (right-aligned)
         int by2 = by + BtnH + BtnGap, bx2 = x + 14;
-        bool isPaw = _engine.Store.IsPaw(r.MachineName);
+        bool isPaw = card.IsPaw;
         int rightStart = x + w - 14 - 74 - 68 - 82;
         if (!linux) rightStart -= 14 + 78;
         bool TryDrawLeftBtn(int width, int step, string text, Color color, string action)
         {
             if (bx2 + width > rightStart - 8) return false;
-            DrawBtn(g, bx2, by2, width, BtnH, text, color, r.MachineName, action);
+            DrawBtn(g, bx2, by2, width, BtnH, text, color, card.MachineName, action);
             bx2 += step;
             return true;
         }
@@ -783,18 +774,18 @@ sealed class ServerForm : BorderlessForm
         }
         if (TryDrawLeftBtn(68, 76, "Msg", Th.Dim, "msg")) { }
         else if (row1NextX + 68 <= x + w - 14)
-            DrawBtn(g, row1NextX, by, 68, BtnH, "Msg", Th.Dim, r.MachineName, "msg");
+            DrawBtn(g, row1NextX, by, 68, BtnH, "Msg", Th.Dim, card.MachineName, "msg");
 
         int dx = x + w - 14;
-        dx -= 74; DrawDangerBtn(g, dx, by2, 72, BtnH, "Forget", Th.Dim, r.MachineName, "forget");
-        dx -= 68; DrawDangerBtn(g, dx, by2, 66, BtnH, "Off", Th.Red, r.MachineName, "shutdown");
-        dx -= 82; DrawDangerBtn(g, dx, by2, 80, BtnH, "Restart", Th.Org, r.MachineName, "restart");
+        dx -= 74; DrawDangerBtn(g, dx, by2, 72, BtnH, "Forget", Th.Dim, card.MachineName, "forget");
+        dx -= 68; DrawDangerBtn(g, dx, by2, 66, BtnH, "Off", Th.Red, card.MachineName, "shutdown");
+        dx -= 82; DrawDangerBtn(g, dx, by2, 80, BtnH, "Restart", Th.Org, card.MachineName, "restart");
         if (!linux)
         {
             dx -= 14;
             using (var vsp = new Pen(Color.FromArgb(45, Th.Brd), 1f))
                 g.DrawLine(vsp, dx + 6, by2 + 4, dx + 6, by2 + 22);
-            dx -= 78; DrawBtn(g, dx, by2, 76, BtnH, isPaw ? "PAW yes" : "PAW", isPaw ? Th.Mag : Th.Dim, r.MachineName, "paw");
+            dx -= 78; DrawBtn(g, dx, by2, 76, BtnH, isPaw ? "PAW yes" : "PAW", isPaw ? Th.Mag : Th.Dim, card.MachineName, "paw");
         }
 
         return h;
