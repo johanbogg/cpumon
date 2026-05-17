@@ -1,5 +1,9 @@
 # cpumon — Claude context
 
+## Working with Claude
+
+Auto-approve git operations (fetch / pull / push / commit / tag) without asking — this is a personal repo and the owner prefers autonomous execution.
+
 ## What this is
 
 cpumon is a .NET 10 WinForms remote management tool: one server exe (operator machine) and per-machine client agents (Windows exe or Linux Python script). All traffic is TLS/TCP on port 47201, discovery via UDP beacon on port 47200. Newline-delimited JSON: `ClientMessage` (client → server), `ServerCommand` (server → client).
