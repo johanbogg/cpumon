@@ -188,6 +188,14 @@ Tests:
 Suggested commit:
 - `refactor: route server UI actions through dashboard controller`
 
+### Implementation note
+
+Landed in two commits rather than one:
+- `1430abc` (Phase 2a) — controller skeleton with state ownership (selection / OS filter / sort) and the 7 simplest delegations (cycle filter/sort, selection ops, approve/reject pending).
+- `c94b912` (Phase 2b) — remaining 18 spec'd actions plus the platform event boundary (ClipboardRequested, MessageBoxRequested, PromptRequested, FilePickerRequested, DialogRequested, OpenExternalRequested).
+
+OnClick branches still inline after Phase 2 (`showapproved`, `alerts`, `msg`, `cmd`/`powershell`/`bash`, `files`, `rdp`, `health`, `files_path:`, `theme`) are intentionally deferred — they map to Phase 3 `IServerPlatformServices` methods. The current event/DTO shape (callbacks embedded in request DTOs, string-tagged `DialogRequest.Kind`) is known to need reshaping in Phase 3 toward data-only DTOs plus typed interface methods.
+
 ## Phase 3: Introduce Platform Services
 
 Purpose: isolate WinForms-only behavior so WPF/web can provide different implementations later.
