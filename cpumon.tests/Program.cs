@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
@@ -36,7 +37,12 @@ internal static class Program
             TestDashboardStatePendingApprovalsSorted();
             TestDashboardStateWaitingClientsStayVisibleUnderOsFilters();
             TestDashboardStateClientProjectionFlags();
+            TestDashboardStateOsSortPlacesWindowsBeforeLinuxAndKeepsNameOrder();
+            TestDashboardStateCapabilityFlagsForLinuxAndWindows();
             TestDashboardControllerOwnsFiltersSortAndSelection();
+            TestDashboardControllerSelectAllVisibleRespectsOsFilter();
+            TestDashboardControllerSelectOutdatedVisibleRespectsVersionComparison();
+            TestDashboardControllerPurgeStaleClientsRemovesAndDeselects();
             TestDashboardControllerPendingDelegatesReturnFalseForMissing();
             TestDashboardControllerRestartRaisesWarningConfirmation();
             TestDashboardControllerForgetClientConfirmationInvokesEngineOnConfirm();
@@ -473,6 +479,48 @@ internal static class Program
         Assert(!ReferenceEquals(card.Report, linux.LastReport), "dashboard state should not expose the live report instance");
     }
 
+    static void TestDashboardStateOsSortPlacesWindowsBeforeLinuxAndKeepsNameOrder()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        AddReportedClient(engine, "z-win", "Microsoft Windows 11", Proto.AppVersion);
+        AddReportedClient(engine, "a-lnx", "Linux Debian", "0.0.1-linux");
+        AddReportedClient(engine, "m-win", "Microsoft Windows 10", Proto.AppVersion);
+        AddReportedClient(engine, "b-lnx", "Linux Ubuntu", "0.0.2-linux");
+
+        var controller = new ServerDashboardController(engine);
+        Assert(controller.CycleSortMode() == "os", "sort mode should cycle to os");
+        var names = controller.GetState().Clients.Select(c => c.MachineName).ToList();
+
+        Assert(names.SequenceEqual(new[] { "m-win", "z-win", "a-lnx", "b-lnx" }), "OS sort should place Windows clients before Linux and sort names within each group");
+    }
+
+    static void TestDashboardStateCapabilityFlagsForLinuxAndWindows()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        AddReportedClient(engine, "win-box", "Microsoft Windows 11", Proto.AppVersion);
+        AddReportedClient(engine, "linux-box", "Linux Debian", "0.0.1-linux");
+
+        var cards = new ServerDashboardController(engine).GetState().Clients.ToDictionary(c => c.MachineName, StringComparer.OrdinalIgnoreCase);
+        var win = cards["win-box"];
+        var linux = cards["linux-box"];
+
+        Assert(win.CanRdp, "Windows clients should expose RDP capability");
+        Assert(win.CanTerminal, "Windows clients should expose terminal capability");
+        Assert(!win.CanBash, "Windows clients should not expose Bash launcher capability");
+        Assert(win.CanServices, "Windows clients should expose services capability");
+        Assert(win.CanScreenshot, "Windows clients should expose screenshot capability");
+        Assert(win.CanEvents, "Windows clients should expose event viewer capability");
+        Assert(win.CanCpuDetail, "Windows clients should expose CPU detail capability");
+
+        Assert(!linux.CanRdp, "Linux clients should not expose RDP capability");
+        Assert(linux.CanTerminal, "Linux clients should expose terminal capability");
+        Assert(linux.CanBash, "Linux clients should expose Bash launcher capability");
+        Assert(linux.CanServices, "Linux clients should expose services capability");
+        Assert(!linux.CanScreenshot, "Linux clients should not expose screenshot capability");
+        Assert(!linux.CanEvents, "Linux clients should not expose Windows event viewer capability");
+        Assert(!linux.CanCpuDetail, "Linux clients should not expose CPU detail capability");
+    }
+
     static void TestDashboardControllerOwnsFiltersSortAndSelection()
     {
         var engine = new ServerEngine(noBroadcast: true);
@@ -512,6 +560,50 @@ internal static class Program
         Assert(controller.CycleSortMode() == "os", "sort mode should cycle to os");
         controller.ClearSelection();
         Assert(controller.GetState().SelectedMachineNames.Count == 0, "clear selection should remove selected clients");
+    }
+
+    static void TestDashboardControllerSelectAllVisibleRespectsOsFilter()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        AddReportedClient(engine, "win-box", "Microsoft Windows 11", Proto.AppVersion);
+        AddReportedClient(engine, "linux-box", "Linux Debian", "0.0.1-linux");
+
+        var controller = new ServerDashboardController(engine);
+        Assert(controller.CycleOsFilter() == "windows", "first OS filter cycle should select windows");
+        controller.SelectAllVisible();
+
+        var selected = controller.GetState().SelectedMachineNames;
+        Assert(selected.SetEquals(new[] { "win-box" }), "SelectAllVisible must select only clients visible under the current OS filter");
+    }
+
+    static void TestDashboardControllerSelectOutdatedVisibleRespectsVersionComparison()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        AddReportedClient(engine, "old-box", "Microsoft Windows 11", "0.0.1");
+        AddReportedClient(engine, "current-box", "Microsoft Windows 11", Proto.AppVersion);
+        AddReportedClient(engine, "future-box", "Microsoft Windows 11", "9.9.9");
+
+        var controller = new ServerDashboardController(engine);
+        controller.SelectOutdatedVisible();
+
+        Assert(controller.GetState().SelectedMachineNames.SetEquals(new[] { "old-box" }), "SelectOutdatedVisible should select only visible clients older than the server version");
+    }
+
+    static void TestDashboardControllerPurgeStaleClientsRemovesAndDeselects()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        var fresh = AddReportedClient(engine, "fresh", "Microsoft Windows 11", Proto.AppVersion);
+        fresh.LastSeen = DateTime.UtcNow;
+        var stale = AddReportedClient(engine, "stale", "Microsoft Windows 11", Proto.AppVersion);
+        stale.LastSeen = DateTime.UtcNow.AddMinutes(-5);
+
+        var controller = new ServerDashboardController(engine);
+        controller.ToggleSelection("stale");
+        controller.PurgeStaleClients();
+
+        Assert(!engine.Clients.ContainsKey("stale"), "PurgeStaleClients should remove clients older than the stale threshold");
+        Assert(engine.Clients.ContainsKey("fresh"), "PurgeStaleClients should keep fresh clients");
+        Assert(!controller.SelectedMachineNames.Contains("stale"), "PurgeStaleClients should remove stale machines from dashboard selection");
     }
 
     static void TestDashboardControllerPendingDelegatesReturnFalseForMissing()
@@ -676,6 +768,23 @@ internal static class Program
         client.LastSeen = DateTime.UtcNow;
         client.ClientVersion = Proto.AppVersion;
         client.SendMode = "full";
+        return client;
+    }
+
+    static RemoteClient AddReportedClient(ServerEngine engine, string machineName, string osVersion, string clientVersion)
+    {
+        var client = FakeRemoteClient();
+        client.MachineName = machineName;
+        client.ClientVersion = clientVersion;
+        client.LastReport = new MachineReport
+        {
+            MachineName = machineName,
+            OsVersion = osVersion,
+            CpuName = "Test CPU",
+            RamTotalGB = 8,
+            RamUsedGB = 2
+        };
+        engine.Clients[machineName] = client;
         return client;
     }
 

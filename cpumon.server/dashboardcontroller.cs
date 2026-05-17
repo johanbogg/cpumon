@@ -92,7 +92,10 @@ public sealed class ServerDashboardController
             .ToList())
         {
             if (_engine.Clients.TryRemove(machine, out var client))
-                client.Dispose();
+            {
+                try { client.Dispose(); }
+                catch (Exception ex) { _engine.Log.Add($"Client cleanup failed: {machine} ({ex.GetType().Name})", Th.Org); }
+            }
             _selectedMachineNames.Remove(machine);
         }
     }
