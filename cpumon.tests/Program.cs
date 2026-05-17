@@ -44,6 +44,8 @@ internal static class Program
             TestDashboardControllerToggleExpandedFlipsClient();
             TestDashboardControllerPushUpdatePicksLinuxFilterForLinuxClient();
             TestDashboardControllerSetOfflineMacRoutesPromptToEngine();
+            TestDashboardControllerOpenTerminalCarriesShellArgument();
+            TestDashboardControllerSubmitUserMessageDropsBlank();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -580,6 +582,26 @@ internal static class Program
         Assert(captured != null, "PushUpdate should raise FilePickerRequested for known client");
         Assert(captured!.Filter.Contains("*.py"), "Linux client picker should include .py filter");
         controller.PushUpdate("no-such-box");
+    }
+
+    static void TestDashboardControllerOpenTerminalCarriesShellArgument()
+    {
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
+        DashboardDialogRequest? captured = null;
+        controller.DialogRequested += req => captured = req;
+        controller.OpenTerminal("shell-box", "powershell");
+        Assert(captured != null, "OpenTerminal should raise DialogRequested");
+        Assert(captured!.Kind == "terminal", "terminal dialog should carry kind=terminal");
+        Assert(captured.MachineName == "shell-box", "terminal dialog should carry the machine name");
+        Assert(captured.Argument == "powershell", "terminal dialog should carry the requested shell as argument");
+    }
+
+    static void TestDashboardControllerSubmitUserMessageDropsBlank()
+    {
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
+        Assert(!controller.SubmitUserMessage("box", ""), "SubmitUserMessage should reject empty text");
+        Assert(!controller.SubmitUserMessage("box", "   "), "SubmitUserMessage should reject whitespace text");
+        Assert(!controller.SubmitUserMessage("no-such-box", "hello"), "SubmitUserMessage should return false for unknown client");
     }
 
     static void TestDashboardControllerSetOfflineMacRoutesPromptToEngine()

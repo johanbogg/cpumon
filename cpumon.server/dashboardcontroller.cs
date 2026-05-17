@@ -188,6 +188,32 @@ public sealed class ServerDashboardController
 
     public bool TogglePaw(string machineName) => _engine.TogglePaw(machineName);
 
+    public void ShowApprovedClients() => DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "approved" });
+
+    public void ShowAlerts() => DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "alerts" });
+
+    public void ShowHealth(string machineName) => DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "health", MachineName = machineName });
+
+    public void OpenTerminal(string machineName, string shell)
+    {
+        DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "terminal", MachineName = machineName, Argument = shell });
+    }
+
+    public void OpenFileBrowser(string machineName, string? initialPath = null)
+    {
+        DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "files", MachineName = machineName, Argument = initialPath });
+    }
+
+    public void OpenRdp(string machineName) => DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "rdp", MachineName = machineName });
+
+    public void SendUserMessage(string machineName) => DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "send_message", MachineName = machineName });
+
+    public bool SubmitUserMessage(string machineName, string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        return _engine.SendUserMessage(machineName, text);
+    }
+
     public void PushUpdate(string machineName)
     {
         if (!_engine.Clients.TryGetValue(machineName, out var cl)) return;

@@ -279,7 +279,65 @@ sealed class ServerForm : BorderlessForm
         {
             switch (req.Kind)
             {
+                case "approved":
+                {
+                    using var d = new ApprovedClientsDialog(_engine.Store, _engine.Clients, _engine.Log);
+                    d.ShowDialog(this);
+                    break;
+                }
+                case "alerts":
+                {
+                    using var d = new AlertConfigDialog(_engine.Alerts);
+                    if (d.ShowDialog(this) == DialogResult.OK) _ct.Invalidate();
+                    break;
+                }
                 case "processes": OpenProcessDialog(req.MachineName); break;
+                case "health":
+                    if (_engine.Clients.TryGetValue(req.MachineName, out var hcl))
+                        new HealthDialog(hcl, _engine.Store).Show(this);
+                    break;
+                case "terminal":
+                    if (_engine.Clients.TryGetValue(req.MachineName, out var tcl) && req.Argument is { } shell)
+                    {
+                        new TerminalDialog(tcl, shell).Show(this);
+                        var tag = shell == "cmd" ? "CMD" : shell == "powershell" ? "PS" : "Bash";
+                        _engine.Log.Add($"{tag}→{req.MachineName}", Th.Cyan);
+                    }
+                    break;
+                case "files":
+                    if (_engine.Clients.TryGetValue(req.MachineName, out var fcl))
+                    {
+                        var dlg = req.Argument is { } p ? new FileBrowserDialog(fcl, p) : new FileBrowserDialog(fcl);
+                        dlg.Show(this);
+                        _engine.Log.Add(req.Argument != null ? $"Files->{req.MachineName} {req.Argument}" : $"Files→{req.MachineName}", Th.Yel);
+                    }
+                    break;
+                case "rdp":
+                    if (_engine.Clients.TryGetValue(req.MachineName, out var rcl))
+                    {
+                        var rdpId = Guid.NewGuid().ToString("N")[..12];
+                        var name = req.MachineName;
+                        var rdpViewer = new RdpViewerDialog(name, rdpId,
+                            cmd => { if (_engine.Clients.TryGetValue(name, out var rc)) try { rc.Send(cmd); } catch { } },
+                            () => { if (_engine.Clients.TryGetValue(name, out var rc)) rc.RdpDialogs.TryRemove(rdpId, out _); });
+                        rcl.RdpDialogs[rdpId] = rdpViewer;
+                        rcl.Send(new ServerCommand { Cmd = "rdp_open", RdpId = rdpId, RdpFps = Proto.RdpFpsDefault, RdpQuality = Proto.RdpJpegQuality });
+                        rdpViewer.Show(this);
+                        _engine.Log.Add($"RDP→{name}", Th.Cyan);
+                    }
+                    break;
+                case "send_message":
+                {
+                    using var dlg = new Form { Text = "Send Message", Size = new Size(420, 148), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt, MaximizeBox = false, MinimizeBox = false };
+                    var txt = new TextBox { BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Segoe UI", 10f), Location = new Point(12, 12), Size = new Size(390, 28), BorderStyle = BorderStyle.FixedSingle };
+                    txt.PlaceholderText = "Message to show on remote screen...";
+                    var send = new Button { Text = "Send", DialogResult = DialogResult.OK, Location = new Point(12, 52), Size = new Size(80, 30), BackColor = Color.FromArgb(30, 60, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat }; send.FlatAppearance.BorderColor = Th.Grn;
+                    var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(100, 52), Size = new Size(80, 30), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
+                    dlg.Controls.AddRange(new Control[] { txt, send, cancel }); dlg.AcceptButton = send;
+                    if (dlg.ShowDialog(this) == DialogResult.OK)
+                        _dashboard.SubmitUserMessage(req.MachineName, txt.Text);
+                    break;
+                }
             }
         });
     }
@@ -301,9 +359,9 @@ sealed class ServerForm : BorderlessForm
 
             if (a == "newtoken") { _dashboard.RegenerateToken(); _ct.Invalidate(); break; }
             if (a == "copytoken") { _dashboard.CopyToken(); break; }
-            if (a == "showapproved") { BeginInvoke(() => { using var d = new ApprovedClientsDialog(_engine.Store, _engine.Clients, _engine.Log); d.ShowDialog(this); }); break; }
+            if (a == "showapproved") { _dashboard.ShowApprovedClients(); break; }
             if (a == "theme") { Th.Toggle(); break; }
-            if (a == "alerts") { BeginInvoke(() => { using var d = new AlertConfigDialog(_engine.Alerts); if (d.ShowDialog(this) == DialogResult.OK) _ct.Invalidate(); }); break; }
+            if (a == "alerts") { _dashboard.ShowAlerts(); break; }
             if (a == "os_filter") { CycleOsFilter(); break; }
             if (a == "sort_mode") { CycleSortMode(); break; }
             if (a == "openrelease") { _dashboard.OpenStagedReleaseOrUrl(); break; }
@@ -320,11 +378,9 @@ sealed class ServerForm : BorderlessForm
             if (a == "select_outdated") { _dashboard.SelectOutdatedVisible(); _ct.Invalidate(); break; }
             if (a == "push_update_selected") { _dashboard.PushUpdateToSelected(); break; }
 
-            if (!_engine.Clients.TryGetValue(m, out var cl)) continue;
-
             if (a.StartsWith("files_path:", StringComparison.Ordinal))
             {
-                OpenFileBrowserAt(cl, a["files_path:".Length..]);
+                _dashboard.OpenFileBrowser(m, NormalizeInitialFilePath(a["files_path:".Length..]));
                 break;
             }
 
@@ -336,38 +392,17 @@ sealed class ServerForm : BorderlessForm
                 case "shutdown": _dashboard.ShutdownClient(m); break;
                 case "sysinfo": _dashboard.RequestSysInfo(m); break;
                 case "cpu_detail": _dashboard.RequestCpuDetail(m); break;
-                case "health": BeginInvoke(() => new HealthDialog(cl, _engine.Store).Show(this)); break;
+                case "health": _dashboard.ShowHealth(m); break;
                 case "screenshot": _dashboard.RequestScreenshot(m); break;
                 case "forget": _dashboard.ForgetClient(m); break;
                 case "services": _dashboard.RequestServices(m); break;
                 case "events": _dashboard.RequestEvents(m); break;
-                case "msg":
-                    BeginInvoke(() =>
-                    {
-                        using var dlg = new Form { Text = "Send Message", Size = new Size(420, 148), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt, MaximizeBox = false, MinimizeBox = false };
-                        var txt = new TextBox { BackColor = Th.Card, ForeColor = Th.Brt, Font = new Font("Segoe UI", 10f), Location = new Point(12, 12), Size = new Size(390, 28), BorderStyle = BorderStyle.FixedSingle };
-                        txt.PlaceholderText = "Message to show on remote screen...";
-                        var send = new Button { Text = "Send", DialogResult = DialogResult.OK, Location = new Point(12, 52), Size = new Size(80, 30), BackColor = Color.FromArgb(30, 60, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat }; send.FlatAppearance.BorderColor = Th.Grn;
-                        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(100, 52), Size = new Size(80, 30), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
-                        dlg.Controls.AddRange(new Control[] { txt, send, cancel }); dlg.AcceptButton = send;
-                        if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
-                            _engine.SendUserMessage(m, txt.Text);
-                    });
-                    break;
-                case "cmd": BeginInvoke(() => new TerminalDialog(cl, "cmd").Show(this)); _engine.Log.Add($"CMD→{m}", Th.Cyan); break;
-                case "powershell": BeginInvoke(() => new TerminalDialog(cl, "powershell").Show(this)); _engine.Log.Add($"PS→{m}", Th.Cyan); break;
-                case "bash": BeginInvoke(() => new TerminalDialog(cl, "bash").Show(this)); _engine.Log.Add($"Bash→{m}", Th.Cyan); break;
-                case "files": BeginInvoke(() => new FileBrowserDialog(cl).Show(this)); _engine.Log.Add($"Files→{m}", Th.Yel); break;
-                case "rdp":
-                    string rdpId = Guid.NewGuid().ToString("N")[..12];
-                    var rdpViewer = new RdpViewerDialog(m, rdpId,
-                        cmd => { if (_engine.Clients.TryGetValue(m, out var rc)) try { rc.Send(cmd); } catch { } },
-                        () => { if (_engine.Clients.TryGetValue(m, out var rc)) rc.RdpDialogs.TryRemove(rdpId, out _); });
-                    cl.RdpDialogs[rdpId] = rdpViewer;
-                    cl.Send(new ServerCommand { Cmd = "rdp_open", RdpId = rdpId, RdpFps = Proto.RdpFpsDefault, RdpQuality = Proto.RdpJpegQuality });
-                    BeginInvoke(() => rdpViewer.Show(this));
-                    _engine.Log.Add($"RDP→{m}", Th.Cyan);
-                    break;
+                case "msg": _dashboard.SendUserMessage(m); break;
+                case "cmd": _dashboard.OpenTerminal(m, "cmd"); break;
+                case "powershell": _dashboard.OpenTerminal(m, "powershell"); break;
+                case "bash": _dashboard.OpenTerminal(m, "bash"); break;
+                case "files": _dashboard.OpenFileBrowser(m); break;
+                case "rdp": _dashboard.OpenRdp(m); break;
                 case "paw": _dashboard.TogglePaw(m); _ct.Invalidate(); break;
                 case "update": _dashboard.PushUpdate(m); break;
             }
@@ -427,13 +462,6 @@ sealed class ServerForm : BorderlessForm
     {
         _scrollDrag = false;
         _ct.Capture = false;
-    }
-
-    void OpenFileBrowserAt(RemoteClient cl, string path)
-    {
-        string initialPath = NormalizeInitialFilePath(path);
-        BeginInvoke(() => new FileBrowserDialog(cl, initialPath).Show(this));
-        _engine.Log.Add($"Files->{cl.MachineName} {initialPath}", Th.Yel);
     }
 
     static string NormalizeInitialFilePath(string path)
