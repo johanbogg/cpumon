@@ -31,7 +31,6 @@ sealed class ServerForm : BorderlessForm
     public ServerForm(bool noBroadcast)
     {
         _engine = new ServerEngine(noBroadcast);
-        _dashboard = new ServerDashboardController(_engine);
 
         Text = $"CPU Monitor — Server  v{Proto.AppVersion}";
         StartPosition = FormStartPosition.Manual;
@@ -57,6 +56,8 @@ sealed class ServerForm : BorderlessForm
         Controls.Add(_ct);
         Controls.Add(tp);
 
+        _dashboard = new ServerDashboardController(_engine, new WinFormsServerPlatformServices(this, () => _ct.Invalidate()));
+
         _tm = new Timer { Interval = 500 };
         _tm.Tick += (_, _) => _ct.Invalidate();
 
@@ -69,12 +70,7 @@ sealed class ServerForm : BorderlessForm
         _engine.UpdateAvailable += OnEngineUpdateAvailable;
         _engine.ReleaseStaged += OnEngineReleaseStaged;
 
-        _dashboard.ClipboardRequested += OnDashboardClipboard;
-        _dashboard.MessageBoxRequested += OnDashboardMessageBox;
-        _dashboard.PromptRequested += OnDashboardPrompt;
-        _dashboard.FilePickerRequested += OnDashboardFilePicker;
         _dashboard.DialogRequested += OnDashboardDialog;
-        _dashboard.OpenExternalRequested += OnDashboardOpenExternal;
 
         var appIcon = Th.MakeHexIcon(Th.Grn);
         Icon = appIcon;
@@ -116,12 +112,7 @@ sealed class ServerForm : BorderlessForm
             _engine.ScreenshotReceived -= OnEngineScreenshot;
             _engine.UpdateAvailable -= OnEngineUpdateAvailable;
             _engine.ReleaseStaged -= OnEngineReleaseStaged;
-            _dashboard.ClipboardRequested -= OnDashboardClipboard;
-            _dashboard.MessageBoxRequested -= OnDashboardMessageBox;
-            _dashboard.PromptRequested -= OnDashboardPrompt;
-            _dashboard.FilePickerRequested -= OnDashboardFilePicker;
             _dashboard.DialogRequested -= OnDashboardDialog;
-            _dashboard.OpenExternalRequested -= OnDashboardOpenExternal;
             _engine.Dispose();
         };
 
@@ -221,57 +212,6 @@ sealed class ServerForm : BorderlessForm
         d.Show(this);
     }
 
-    void OnDashboardClipboard(string text)
-    {
-        if (IsDisposed) return;
-        BeginInvoke(() => { try { Clipboard.SetText(text); } catch (Exception ex) { LogSink.Warn("Server.UI", "Clipboard.SetText failed", ex); } });
-    }
-
-    void OnDashboardMessageBox(DashboardMessageBoxRequest req)
-    {
-        if (IsDisposed) return;
-        var icon = req.Kind == DashboardConfirmKind.Warning ? MessageBoxIcon.Warning : MessageBoxIcon.None;
-        BeginInvoke(() =>
-        {
-            if (MessageBox.Show(req.Message, req.Title, MessageBoxButtons.YesNo, icon) == DialogResult.Yes)
-            {
-                req.OnConfirm();
-                _ct.Invalidate();
-            }
-        });
-    }
-
-    void OnDashboardPrompt(DashboardPromptRequest req)
-    {
-        if (IsDisposed) return;
-        BeginInvoke(() =>
-        {
-            using var dlg = new Form { Text = req.Title, Size = new Size(300, 112), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, BackColor = Th.Bg, ForeColor = Th.Brt };
-            var lbl = new Label { Text = req.Label, Location = new Point(12, 12), AutoSize = true, ForeColor = Th.Dim };
-            var txt = new TextBox { Location = new Point(12, 34), Width = 260, BackColor = Th.Card, ForeColor = Th.Brt, BorderStyle = BorderStyle.FixedSingle };
-            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(116, 62), Width = 75 };
-            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(197, 62), Width = 75 };
-            dlg.AcceptButton = ok; dlg.CancelButton = cancel;
-            dlg.Controls.AddRange(new Control[] { lbl, txt, ok, cancel });
-            if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
-            {
-                req.OnSubmit(txt.Text);
-                _ct.Invalidate();
-            }
-        });
-    }
-
-    void OnDashboardFilePicker(DashboardFilePickerRequest req)
-    {
-        if (IsDisposed) return;
-        BeginInvoke(() =>
-        {
-            using var ofd = new OpenFileDialog { Title = req.Title, Filter = req.Filter };
-            if (ofd.ShowDialog(this) != DialogResult.OK) return;
-            req.OnFileSelected(ofd.FileName);
-        });
-    }
-
     void OnDashboardDialog(DashboardDialogRequest req)
     {
         if (IsDisposed) return;
@@ -340,12 +280,6 @@ sealed class ServerForm : BorderlessForm
                 }
             }
         });
-    }
-
-    void OnDashboardOpenExternal(string target)
-    {
-        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true }); }
-        catch (Exception ex) { LogSink.Warn("Server.UI", $"Failed to open {target}", ex); }
     }
 
     void OnClick(object? sender, MouseEventArgs e)

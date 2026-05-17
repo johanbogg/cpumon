@@ -37,6 +37,7 @@ public sealed class ServerDashboardController
 {
     readonly ServerEngine _engine;
     readonly ServerDashboardStateBuilder _stateBuilder;
+    readonly IServerPlatformServices? _platform;
     readonly HashSet<string> _selectedMachineNames = new(StringComparer.OrdinalIgnoreCase);
     string _osFilter = "all";
     string _sortMode = "name";
@@ -48,9 +49,10 @@ public sealed class ServerDashboardController
     public event Action<DashboardDialogRequest>? DialogRequested;
     public event Action<string>? OpenExternalRequested;
 
-    public ServerDashboardController(ServerEngine engine)
+    public ServerDashboardController(ServerEngine engine, IServerPlatformServices? platform = null)
     {
         _engine = engine;
+        _platform = platform;
         _stateBuilder = new ServerDashboardStateBuilder(engine);
     }
 
@@ -104,7 +106,8 @@ public sealed class ServerDashboardController
     {
         var token = _engine.Token;
         if (string.IsNullOrEmpty(token)) return;
-        ClipboardRequested?.Invoke(token);
+        if (_platform != null) _platform.SetClipboardText(token);
+        else ClipboardRequested?.Invoke(token);
         _engine.Log.Add("Token copied", Th.Grn);
     }
 
@@ -124,17 +127,19 @@ public sealed class ServerDashboardController
 
     public void RequestSetOfflineMac(string machineName)
     {
-        PromptRequested?.Invoke(new DashboardPromptRequest
+        var request = new DashboardPromptRequest
         {
             Title = "Set MAC",
             Label = $"MAC for {machineName} (e.g. AA:BB:CC:DD:EE:FF):",
             OnSubmit = mac => SetOfflineMac(machineName, mac)
-        });
+        };
+        if (_platform != null) _platform.Prompt(request);
+        else PromptRequested?.Invoke(request);
     }
 
     public void ForgetOffline(string machineName)
     {
-        MessageBoxRequested?.Invoke(new DashboardMessageBoxRequest
+        Confirm(new DashboardMessageBoxRequest
         {
             Message = $"Forget {machineName}?",
             OnConfirm = () => _engine.Store.Forget(machineName)
@@ -143,7 +148,7 @@ public sealed class ServerDashboardController
 
     public void RestartClient(string machineName)
     {
-        MessageBoxRequested?.Invoke(new DashboardMessageBoxRequest
+        Confirm(new DashboardMessageBoxRequest
         {
             Message = $"Restart {machineName}?",
             Kind = DashboardConfirmKind.Warning,
@@ -153,7 +158,7 @@ public sealed class ServerDashboardController
 
     public void ShutdownClient(string machineName)
     {
-        MessageBoxRequested?.Invoke(new DashboardMessageBoxRequest
+        Confirm(new DashboardMessageBoxRequest
         {
             Message = $"SHUT DOWN {machineName}?",
             Kind = DashboardConfirmKind.Warning,
@@ -163,7 +168,7 @@ public sealed class ServerDashboardController
 
     public void ForgetClient(string machineName)
     {
-        MessageBoxRequested?.Invoke(new DashboardMessageBoxRequest
+        Confirm(new DashboardMessageBoxRequest
         {
             Message = $"Forget {machineName}?",
             OnConfirm = () => _engine.ForgetClient(machineName)
@@ -218,7 +223,7 @@ public sealed class ServerDashboardController
     {
         if (!_engine.Clients.TryGetValue(machineName, out var cl)) return;
         bool linux = ServerEngine.IsLinuxClient(cl);
-        FilePickerRequested?.Invoke(new DashboardFilePickerRequest
+        PickFile(new DashboardFilePickerRequest
         {
             Title = linux ? "Select Linux cpumon.py or cpumon-linux release zip" : "Select new client exe to push",
             Filter = linux ? "Linux update|*.py;*.zip|Python script|*.py|Release zip|*.zip" : "Executable|*.exe",
@@ -235,7 +240,7 @@ public sealed class ServerDashboardController
         string filter = winClients.Count > 0 && linuxClients.Count > 0
             ? "Client files|*.exe;*.py;*.zip|Executables|*.exe|Linux update|*.py;*.zip"
             : winClients.Count > 0 ? "Executable|*.exe" : "Linux update|*.py;*.zip|Python script|*.py|Release zip|*.zip";
-        FilePickerRequested?.Invoke(new DashboardFilePickerRequest
+        PickFile(new DashboardFilePickerRequest
         {
             Title = $"Select file to push to {snapshot.Count} client(s)",
             Filter = filter,
@@ -247,13 +252,31 @@ public sealed class ServerDashboardController
     {
         var staged = _engine.StagedReleaseDir;
         string? target = staged != null && System.IO.Directory.Exists(staged) ? staged : _engine.AvailableUpdate?.ReleaseUrl;
-        if (target != null) OpenExternalRequested?.Invoke(target);
+        if (target != null) OpenExternal(target);
     }
 
     public void OpenReleaseNotes()
     {
         var url = _engine.AvailableUpdate?.ReleaseUrl;
-        if (url != null) OpenExternalRequested?.Invoke(url);
+        if (url != null) OpenExternal(url);
+    }
+
+    void Confirm(DashboardMessageBoxRequest request)
+    {
+        if (_platform != null) _platform.Confirm(request);
+        else MessageBoxRequested?.Invoke(request);
+    }
+
+    void PickFile(DashboardFilePickerRequest request)
+    {
+        if (_platform != null) _platform.PickFile(request);
+        else FilePickerRequested?.Invoke(request);
+    }
+
+    void OpenExternal(string target)
+    {
+        if (_platform != null) _platform.OpenExternal(target);
+        else OpenExternalRequested?.Invoke(target);
     }
 
     void DoPushUpdate(RemoteClient cl, bool linux, string path)

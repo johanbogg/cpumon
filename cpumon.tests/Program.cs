@@ -41,6 +41,7 @@ internal static class Program
             TestDashboardControllerRestartRaisesWarningConfirmation();
             TestDashboardControllerForgetClientConfirmationInvokesEngineOnConfirm();
             TestDashboardControllerCopyTokenRaisesClipboardEvent();
+            TestDashboardControllerUsesPlatformServicesWhenProvided();
             TestDashboardControllerToggleExpandedFlipsClient();
             TestDashboardControllerPushUpdatePicksLinuxFilterForLinuxClient();
             TestDashboardControllerSetOfflineMacRoutesPromptToEngine();
@@ -553,6 +554,33 @@ internal static class Program
         Assert(captured == engine.Token, "CopyToken should publish current engine token to clipboard event");
     }
 
+    static void TestDashboardControllerUsesPlatformServicesWhenProvided()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        var linux = FakeRemoteClient();
+        linux.MachineName = "lnx";
+        linux.LastReport = new MachineReport { MachineName = linux.MachineName, OsVersion = "Linux Debian" };
+        engine.Clients[linux.MachineName] = linux;
+
+        var platform = new FakeServerPlatformServices();
+        var controller = new ServerDashboardController(engine, platform);
+
+        controller.CopyToken();
+        Assert(platform.ClipboardText == engine.Token, "CopyToken should route clipboard text through platform services");
+
+        controller.RestartClient("box-a");
+        Assert(platform.ConfirmRequest != null, "RestartClient should route confirmation through platform services");
+        Assert(platform.ConfirmRequest!.Kind == DashboardConfirmKind.Warning, "platform confirmation should preserve warning kind");
+
+        controller.RequestSetOfflineMac("offline-box");
+        Assert(platform.PromptRequest != null, "RequestSetOfflineMac should route prompt through platform services");
+        Assert(platform.PromptRequest!.Label.Contains("offline-box"), "platform prompt should preserve machine label");
+
+        controller.PushUpdate("lnx");
+        Assert(platform.FilePickerRequest != null, "PushUpdate should route file picker through platform services");
+        Assert(platform.FilePickerRequest!.Filter.Contains("*.py"), "platform file picker should preserve Linux filter");
+    }
+
     static void TestDashboardControllerToggleExpandedFlipsClient()
     {
         var engine = new ServerEngine(noBroadcast: true);
@@ -643,5 +671,20 @@ internal static class Program
         public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cpumon-tests-" + Guid.NewGuid().ToString("N"));
         public TempDir() => Directory.CreateDirectory(Path);
         public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
+    }
+
+    sealed class FakeServerPlatformServices : IServerPlatformServices
+    {
+        public string? ClipboardText { get; private set; }
+        public DashboardMessageBoxRequest? ConfirmRequest { get; private set; }
+        public DashboardPromptRequest? PromptRequest { get; private set; }
+        public DashboardFilePickerRequest? FilePickerRequest { get; private set; }
+        public string? OpenExternalTarget { get; private set; }
+
+        public void SetClipboardText(string text) => ClipboardText = text;
+        public void Confirm(DashboardMessageBoxRequest request) => ConfirmRequest = request;
+        public void Prompt(DashboardPromptRequest request) => PromptRequest = request;
+        public void PickFile(DashboardFilePickerRequest request) => FilePickerRequest = request;
+        public void OpenExternal(string target) => OpenExternalTarget = target;
     }
 }

@@ -247,6 +247,15 @@ Tests:
 Suggested commit:
 - `refactor: add server platform service adapter`
 
+### Implementation note
+
+Phase 3 should land in more than one slice:
+- Phase 3a introduces `IServerPlatformServices` / `WinFormsServerPlatformServices` for the low-risk platform operations already represented by controller events: clipboard, confirmations, text prompts, file picker, and external open.
+- Phase 3b should move the remaining dialog launches (`approved`, `alerts`, `processes`, `health`, `terminal`, `files`, `rdp`, `send_message`) behind typed platform service methods instead of `DashboardDialogRequest.Kind`.
+- Phase 3c should remove callback-bearing request DTOs from the controller boundary. Prefer data-only request records plus result-returning platform methods, or typed service methods that keep UI callbacks wholly inside the WinForms adapter.
+
+Do not treat Phase 3a as the final platform boundary. It is a compatibility bridge so the behavior stays easy to verify before moving higher-risk dialog and RDP lifecycle code.
+
 ## Phase 4: Make ServerForm Render From State
 
 Purpose: reduce `ServerForm` to custom painting plus input forwarding.
