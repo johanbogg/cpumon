@@ -14,10 +14,10 @@ public interface IServerPlatformServices
     void ShowApprovedClients();
     void ShowAlerts();
     void ShowProcessDialog(string machineName);
-    void UpdateProcessDialog(string machineName);
-    void ShowSysInfoDialog(string machineName);
-    void ShowServicesDialog(string machineName);
-    void ShowEventsDialog(string machineName);
+    void UpdateProcessDialog(RemoteClient cl);
+    void ShowSysInfoDialog(RemoteClient cl);
+    void ShowServicesDialog(RemoteClient cl);
+    void ShowEventsDialog(RemoteClient cl);
     void ShowCpuDetailDialog(string machineName, CpuDetailReport detail);
     void ShowScreenshotDialog(string machineName, ScreenshotData shot);
     void ShowHealthDialog(string machineName);
@@ -134,43 +134,39 @@ public sealed class WinFormsServerPlatformServices : IServerPlatformServices
         });
     }
 
-    public void UpdateProcessDialog(string machineName)
+    public void UpdateProcessDialog(RemoteClient cl)
     {
         OnUi(() =>
         {
-            if (_procDialogs.TryGetValue(machineName, out var existing)
+            if (_procDialogs.TryGetValue(cl.MachineName, out var existing)
                 && !existing.IsDisposed
-                && _engine.Clients.TryGetValue(machineName, out var cl)
                 && cl.LastProcessList != null)
                 existing.UpdateList(cl.LastProcessList);
         });
     }
 
-    public void ShowSysInfoDialog(string machineName)
+    public void ShowSysInfoDialog(RemoteClient cl)
     {
         OnUi(() =>
         {
-            if (!_engine.Clients.TryGetValue(machineName, out var cl)) return;
             using var d = new SysInfoDialog(cl);
             d.ShowDialog(_owner);
         });
     }
 
-    public void ShowServicesDialog(string machineName)
+    public void ShowServicesDialog(RemoteClient cl)
     {
         OnUi(() =>
         {
-            if (!_engine.Clients.TryGetValue(machineName, out var cl)) return;
             using var d = new ServicesDialog(cl);
             d.ShowDialog(_owner);
         });
     }
 
-    public void ShowEventsDialog(string machineName)
+    public void ShowEventsDialog(RemoteClient cl)
     {
         OnUi(() =>
         {
-            if (!_engine.Clients.TryGetValue(machineName, out var cl)) return;
             using var d = new EventViewerDialog(cl);
             d.ShowDialog(_owner);
         });
@@ -251,8 +247,22 @@ public sealed class WinFormsServerPlatformServices : IServerPlatformServices
 
     void OnUi(Action action)
     {
-        if (_owner.IsDisposed) return;
-        if (_owner.InvokeRequired) _owner.BeginInvoke(action);
-        else action();
+        if (_owner.IsDisposed || _owner.Disposing || !_owner.IsHandleCreated) return;
+        try
+        {
+            if (_owner.InvokeRequired)
+            {
+                _owner.BeginInvoke(() =>
+                {
+                    if (_owner.IsDisposed || _owner.Disposing) return;
+                    action();
+                });
+            }
+            else
+            {
+                action();
+            }
+        }
+        catch (InvalidOperationException) { }
     }
 }

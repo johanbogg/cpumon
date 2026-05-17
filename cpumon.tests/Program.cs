@@ -728,10 +728,10 @@ internal static class Program
         public void ShowApprovedClients() => ShowApprovedCalled = true;
         public void ShowAlerts() => ShowAlertsCalled = true;
         public void ShowProcessDialog(string machineName) => ShowProcessMachine = machineName;
-        public void UpdateProcessDialog(string machineName) => UpdateProcessMachine = machineName;
-        public void ShowSysInfoDialog(string machineName) => ShowSysInfoMachine = machineName;
-        public void ShowServicesDialog(string machineName) => ShowServicesMachine = machineName;
-        public void ShowEventsDialog(string machineName) => ShowEventsMachine = machineName;
+        public void UpdateProcessDialog(RemoteClient cl) => UpdateProcessMachine = cl.MachineName;
+        public void ShowSysInfoDialog(RemoteClient cl) => ShowSysInfoMachine = cl.MachineName;
+        public void ShowServicesDialog(RemoteClient cl) => ShowServicesMachine = cl.MachineName;
+        public void ShowEventsDialog(RemoteClient cl) => ShowEventsMachine = cl.MachineName;
         public void ShowCpuDetailDialog(string machineName, CpuDetailReport detail) => ShowCpuDetailCall = (machineName, detail);
         public void ShowScreenshotDialog(string machineName, ScreenshotData shot) => ShowScreenshotCall = (machineName, shot);
         public void ShowHealthDialog(string machineName) => ShowHealthMachine = machineName;

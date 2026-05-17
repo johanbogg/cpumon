@@ -84,6 +84,19 @@ public sealed class ServerDashboardController
 
     public void ClearSelection() => _selectedMachineNames.Clear();
 
+    public void PurgeStaleClients(int staleSeconds = 120)
+    {
+        foreach (var machine in _engine.Clients
+            .Where(kv => (DateTime.UtcNow - kv.Value.LastSeen).TotalSeconds > staleSeconds)
+            .Select(kv => kv.Key)
+            .ToList())
+        {
+            if (_engine.Clients.TryRemove(machine, out var client))
+                client.Dispose();
+            _selectedMachineNames.Remove(machine);
+        }
+    }
+
     public void SelectAllVisible()
     {
         foreach (var client in GetState().Clients)
@@ -171,7 +184,11 @@ public sealed class ServerDashboardController
         Confirm(new DashboardMessageBoxRequest
         {
             Message = $"Forget {machineName}?",
-            OnConfirm = () => _engine.ForgetClient(machineName)
+            OnConfirm = () =>
+            {
+                _engine.ForgetClient(machineName);
+                _selectedMachineNames.Remove(machineName);
+            }
         });
     }
 
@@ -250,15 +267,15 @@ public sealed class ServerDashboardController
         {
             Title = linux ? "Select Linux cpumon.py or cpumon-linux release zip" : "Select new client exe to push",
             Filter = linux ? "Linux update|*.py;*.zip|Python script|*.py|Release zip|*.zip" : "Executable|*.exe",
-            OnFileSelected = path => DoPushUpdate(cl, linux, path)
+            OnFileSelected = path => DoPushUpdate(machineName, linux, path)
         });
     }
 
     public void PushUpdateToSelected()
     {
-        var snapshot = new HashSet<string>(_selectedMachineNames, StringComparer.OrdinalIgnoreCase);
-        var winClients = _engine.Clients.Where(kv => snapshot.Contains(kv.Key) && !ServerEngine.IsLinuxClient(kv.Value)).Select(kv => kv.Value).ToList();
-        var linuxClients = _engine.Clients.Where(kv => snapshot.Contains(kv.Key) && ServerEngine.IsLinuxClient(kv.Value)).Select(kv => kv.Value).ToList();
+        var snapshot = _selectedMachineNames.ToList();
+        var winClients = LiveSelectedClients(snapshot, linux: false);
+        var linuxClients = LiveSelectedClients(snapshot, linux: true);
         if (winClients.Count == 0 && linuxClients.Count == 0) return;
         string filter = winClients.Count > 0 && linuxClients.Count > 0
             ? "Client files|*.exe;*.py;*.zip|Executables|*.exe|Linux update|*.py;*.zip"
@@ -267,7 +284,7 @@ public sealed class ServerDashboardController
         {
             Title = $"Select file to push to {snapshot.Count} client(s)",
             Filter = filter,
-            OnFileSelected = path => DoPushMulti(winClients, linuxClients, path)
+            OnFileSelected = path => DoPushMulti(snapshot, path)
         });
     }
 
@@ -302,8 +319,13 @@ public sealed class ServerDashboardController
         else OpenExternalRequested?.Invoke(target);
     }
 
-    void DoPushUpdate(RemoteClient cl, bool linux, string path)
+    void DoPushUpdate(string machineName, bool linux, string path)
     {
+        if (!_engine.Clients.TryGetValue(machineName, out var cl))
+        {
+            _engine.Log.Add($"Update failed: {machineName} is no longer connected", Th.Red);
+            return;
+        }
         if (linux)
         {
             if (!LinuxUpdatePayload.TryRead(path, out var fileName, out var bytes, out var error))
@@ -319,9 +341,11 @@ public sealed class ServerDashboardController
         _engine.PushUpdate(cl, path);
     }
 
-    void DoPushMulti(List<RemoteClient> winClients, List<RemoteClient> linuxClients, string path)
+    void DoPushMulti(IReadOnlyList<string> machineNames, string path)
     {
         bool isLinuxPayload = path.EndsWith(".py", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+        var winClients = LiveSelectedClients(machineNames, linux: false);
+        var linuxClients = LiveSelectedClients(machineNames, linux: true);
         var targets = isLinuxPayload ? linuxClients : winClients;
         if (targets.Count == 0) { _engine.Log.Add("No matching clients for selected file type", Th.Org); return; }
         if (isLinuxPayload)
@@ -337,5 +361,14 @@ public sealed class ServerDashboardController
         }
         _engine.Log.Add($"Pushing update → {targets.Count} client(s)…", Th.Org);
         _engine.PushUpdateMulti(targets, path);
+    }
+
+    List<RemoteClient> LiveSelectedClients(IEnumerable<string> machineNames, bool linux)
+    {
+        var selected = new HashSet<string>(machineNames, StringComparer.OrdinalIgnoreCase);
+        return _engine.Clients
+            .Where(kv => selected.Contains(kv.Key) && ServerEngine.IsLinuxClient(kv.Value) == linux)
+            .Select(kv => kv.Value)
+            .ToList();
     }
 }

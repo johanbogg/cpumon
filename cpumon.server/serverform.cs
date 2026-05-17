@@ -1,10 +1,8 @@
 using System;
-using System.Globalization;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using Timer = System.Windows.Forms.Timer;
 
@@ -60,7 +58,7 @@ sealed class ServerForm : BorderlessForm
         _dashboard = new ServerDashboardController(_engine, _platform);
 
         _tm = new Timer { Interval = 500 };
-        _tm.Tick += (_, _) => _ct.Invalidate();
+        _tm.Tick += (_, _) => { _dashboard.PurgeStaleClients(); _ct.Invalidate(); };
 
         _engine.ProcessListReceived += OnEngineProcessList;
         _engine.SysInfoReceived += OnEngineSysInfo;
@@ -142,13 +140,13 @@ sealed class ServerForm : BorderlessForm
         Activate();
     }
 
-    void OnEngineProcessList(RemoteClient cl) => _platform.UpdateProcessDialog(cl.MachineName);
+    void OnEngineProcessList(RemoteClient cl) => _platform.UpdateProcessDialog(cl);
 
-    void OnEngineSysInfo(RemoteClient cl) => _platform.ShowSysInfoDialog(cl.MachineName);
+    void OnEngineSysInfo(RemoteClient cl) => _platform.ShowSysInfoDialog(cl);
 
-    void OnEngineServices(RemoteClient cl) => _platform.ShowServicesDialog(cl.MachineName);
+    void OnEngineServices(RemoteClient cl) => _platform.ShowServicesDialog(cl);
 
-    void OnEngineEvents(RemoteClient cl) => _platform.ShowEventsDialog(cl.MachineName);
+    void OnEngineEvents(RemoteClient cl) => _platform.ShowEventsDialog(cl);
 
     void OnEngineCpuDetail(RemoteClient cl, CpuDetailReport detail) => _platform.ShowCpuDetailDialog(cl.MachineName, detail);
 
@@ -373,10 +371,6 @@ sealed class ServerForm : BorderlessForm
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
         _btns.Clear();
-
-        // Purge stale clients
-        foreach (var k in _engine.Clients.Where(kv => (DateTime.UtcNow - kv.Value.LastSeen).TotalSeconds > 120).Select(kv => kv.Key).ToList())
-        { if (_engine.Clients.TryRemove(k, out var c)) { c.Dispose(); _dashboard.DeselectMachine(k); } }
 
         int x = 10, y, w = _ct.Width - 20;
 
@@ -641,7 +635,6 @@ sealed class ServerForm : BorderlessForm
     int DrawExpanded(Graphics g, int x, int y, int w, ClientCardState card, bool isSelected)
     {
         var r = card.Report!;
-        bool linux = card.IsLinux;
         const int BtnH = 26, BtnGap = 8;
         int hdrH = 100, h = hdrH + 6 + BtnH + BtnGap + BtnH + 6;
         Color brd = card.IsStale ? Th.Org : Th.Grn;
@@ -706,7 +699,7 @@ sealed class ServerForm : BorderlessForm
         DrawMetric(g, mx, my, "LOAD", Th.F(r.TotalLoadPercent, "0", "%"), Th.LdC(r.TotalLoadPercent ?? 0)); mx += 112;
         DrawMetric(g, mx, my, "FREQ", Th.FF(r.PackageFrequencyMHz), Th.Blu); mx += 112;
         DrawMetric(g, mx, my, "TEMP", Th.F(r.PackageTemperatureC, "0.0", "°C"), Th.TpC(r.PackageTemperatureC ?? 0)); mx += 112;
-        if (!linux) _btns.Add((new Rectangle(cpuMetricsX - 4, my - 13, Math.Min(336, w - 28), 32), card.MachineName, "cpu_detail"));
+        if (card.CanCpuDetail) _btns.Add((new Rectangle(cpuMetricsX - 4, my - 13, Math.Min(336, w - 28), 32), card.MachineName, "cpu_detail"));
         if (r.PackagePowerW is > 0) { DrawMetric(g, mx, my, "PWR", Th.F(r.PackagePowerW, "0.0", "W"), Th.Org); mx += 112; }
         if (r.GpuLoadPercent.HasValue) DrawMetric(g, mx, my, "GPU", Th.F(r.GpuLoadPercent, "0", "%"), Th.LdC(r.GpuLoadPercent ?? 0));
 
@@ -732,7 +725,7 @@ sealed class ServerForm : BorderlessForm
             return true;
         }
 
-        if (linux)
+        if (card.CanBash)
         {
             TryDrawTopBtn(78, 86, "Bash", Th.Cyan, "bash");
         }
@@ -742,8 +735,8 @@ sealed class ServerForm : BorderlessForm
             TryDrawTopBtn(104, 112, "PowerShell", Th.Blu, "powershell");
         }
         TryDrawTopBtn(74, 82, "Files", Th.Yel, "files");
-        TryDrawTopBtn(84, 92, "Services", Th.Grn, "services");
-        if (!linux)
+        if (card.CanServices) TryDrawTopBtn(84, 92, "Services", Th.Grn, "services");
+        if (card.CanRdp)
         {
             TryDrawTopBtn(68, 76, "RDP", Th.Cyan, "rdp");
         }
@@ -755,7 +748,7 @@ sealed class ServerForm : BorderlessForm
         int by2 = by + BtnH + BtnGap, bx2 = x + 14;
         bool isPaw = card.IsPaw;
         int rightStart = x + w - 14 - 74 - 68 - 82;
-        if (!linux) rightStart -= 14 + 78;
+        if (card.CanPaw) rightStart -= 14 + 78;
         bool TryDrawLeftBtn(int width, int step, string text, Color color, string action)
         {
             if (bx2 + width > rightStart - 8) return false;
@@ -767,9 +760,12 @@ sealed class ServerForm : BorderlessForm
         TryDrawLeftBtn(80, 88, "Procs", Th.Blu, "processes");
         TryDrawLeftBtn(60, 68, "Info", Th.Cyan, "sysinfo");
         TryDrawLeftBtn(70, 78, "Health", Th.Grn, "health");
-        if (!linux)
+        if (card.CanScreenshot)
         {
             TryDrawLeftBtn(92, 100, "Screenshot", Th.Cyan, "screenshot");
+        }
+        if (card.CanEvents)
+        {
             TryDrawLeftBtn(74, 82, "Events", Th.Yel, "events");
         }
         if (TryDrawLeftBtn(68, 76, "Msg", Th.Dim, "msg")) { }
@@ -780,7 +776,7 @@ sealed class ServerForm : BorderlessForm
         dx -= 74; DrawDangerBtn(g, dx, by2, 72, BtnH, "Forget", Th.Dim, card.MachineName, "forget");
         dx -= 68; DrawDangerBtn(g, dx, by2, 66, BtnH, "Off", Th.Red, card.MachineName, "shutdown");
         dx -= 82; DrawDangerBtn(g, dx, by2, 80, BtnH, "Restart", Th.Org, card.MachineName, "restart");
-        if (!linux)
+        if (card.CanPaw)
         {
             dx -= 14;
             using (var vsp = new Pen(Color.FromArgb(45, Th.Brd), 1f))
@@ -872,20 +868,6 @@ sealed class ServerForm : BorderlessForm
 
     static string FmtNet(double kbps) => kbps >= 1024 ? $"{kbps / 1024.0:0.0}M" : $"{kbps:0}K";
     static string FmtGb(double value, string format) => value.ToString(format);
-    static string ShortOsLabel(MachineReport r)
-    {
-        string os = r.OsVersion ?? "";
-        if (os.Contains("linux", StringComparison.OrdinalIgnoreCase)) return "Linux";
-        if (os.Contains("Windows", StringComparison.OrdinalIgnoreCase))
-        {
-            string clean = os.Replace("Microsoft", "", StringComparison.OrdinalIgnoreCase)
-                .Replace("Windows NT", "Windows", StringComparison.OrdinalIgnoreCase)
-                .Replace("  ", " ")
-                .Trim();
-            return clean.Length > 24 ? clean[..24].TrimEnd() : clean;
-        }
-        return string.IsNullOrWhiteSpace(os) ? "Unknown" : (os.Length > 24 ? os[..24].TrimEnd() : os);
-    }
     static void DrawMetric(Graphics g, int x, int y, string l, string v, Color c)
     {
         using var lf = new Font("Segoe UI", 6f); using var lb = new SolidBrush(Color.FromArgb(110, Th.Brt));

@@ -35,8 +35,12 @@ public sealed record ClientCardState(
     MachineReport? Report,
     bool CanRdp,
     bool CanTerminal,
+    bool CanBash,
     bool CanServices,
     bool CanScreenshot,
+    bool CanEvents,
+    bool CanCpuDetail,
+    bool CanPaw,
     string SendMode
 );
 
@@ -153,7 +157,11 @@ public sealed class ServerDashboardStateBuilder
             report,
             !isLinux,
             true,
+            isLinux,
             true,
+            !isLinux,
+            !isLinux,
+            !isLinux,
             !isLinux,
             cl.SendMode);
     }
