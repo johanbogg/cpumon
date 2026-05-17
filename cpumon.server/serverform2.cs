@@ -30,6 +30,7 @@ sealed class ServerForm2 : Form
     string? _selectedClient;
     string? _selectedOffline;
     string? _selectedPending;
+    string _lastActionKey = "";
 
     public ServerForm2(bool noBroadcast)
     {
@@ -139,17 +140,17 @@ sealed class ServerForm2 : Form
         _clients.SelectedIndexChanged += (_, _) =>
         {
             _selectedClient = _clients.SelectedItems.Count > 0 ? _clients.SelectedItems[0].Tag as string : null;
-            RebuildActions();
+            RebuildActionsIfChanged();
         };
         _pending.SelectedIndexChanged += (_, _) =>
         {
             _selectedPending = _pending.SelectedItems.Count > 0 ? _pending.SelectedItems[0].Tag as string : null;
-            RebuildActions();
+            RebuildActionsIfChanged();
         };
         _offline.SelectedIndexChanged += (_, _) =>
         {
             _selectedOffline = _offline.SelectedItems.Count > 0 ? _offline.SelectedItems[0].Tag as string : null;
-            RebuildActions();
+            RebuildActionsIfChanged();
         };
 
         _engine.SysInfoReceived += cl => _platform.ShowSysInfoDialog(cl);
@@ -182,6 +183,14 @@ sealed class ServerForm2 : Form
             _log.SelectionStart = _log.TextLength;
             _log.ScrollToCaret();
         }
+        RebuildActionsIfChanged();
+    }
+
+    void RebuildActionsIfChanged()
+    {
+        string key = (_selectedClient ?? "") + "|p:" + (_selectedPending ?? "") + "|o:" + (_selectedOffline ?? "");
+        if (key == _lastActionKey) return;
+        _lastActionKey = key;
         RebuildActions();
     }
 
