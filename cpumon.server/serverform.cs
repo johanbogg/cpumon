@@ -437,9 +437,17 @@ sealed class ServerForm : BorderlessForm
 
         _contentH = y + _sy - _scrollTop + 12;
         int logY = Math.Max(6, _ct.Height - logH - 4);
+        DrawFixedOverlayMasks(g, logY, logH);
         DrawLog(g, 10, logY, w, Math.Min(logH, _ct.Height - logY - 4), state);
         DrawStatusBar(g, x, 6, w, state);
         DrawScrollbar(g);
+    }
+
+    void DrawFixedOverlayMasks(Graphics g, int logY, int logH)
+    {
+        using var bg = new SolidBrush(Th.Bg);
+        g.FillRectangle(bg, 0, 0, _ct.Width, _scrollTop);
+        g.FillRectangle(bg, 0, logY - 4, _ct.Width, Math.Min(logH + 8, _ct.Height - logY + 4));
     }
 
     void DrawScrollbar(Graphics g)
