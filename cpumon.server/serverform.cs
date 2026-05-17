@@ -69,6 +69,13 @@ sealed class ServerForm : BorderlessForm
         _engine.UpdateAvailable += OnEngineUpdateAvailable;
         _engine.ReleaseStaged += OnEngineReleaseStaged;
 
+        _dashboard.ClipboardRequested += OnDashboardClipboard;
+        _dashboard.MessageBoxRequested += OnDashboardMessageBox;
+        _dashboard.PromptRequested += OnDashboardPrompt;
+        _dashboard.FilePickerRequested += OnDashboardFilePicker;
+        _dashboard.DialogRequested += OnDashboardDialog;
+        _dashboard.OpenExternalRequested += OnDashboardOpenExternal;
+
         var appIcon = Th.MakeHexIcon(Th.Grn);
         Icon = appIcon;
         _tray = new NotifyIcon
@@ -109,6 +116,12 @@ sealed class ServerForm : BorderlessForm
             _engine.ScreenshotReceived -= OnEngineScreenshot;
             _engine.UpdateAvailable -= OnEngineUpdateAvailable;
             _engine.ReleaseStaged -= OnEngineReleaseStaged;
+            _dashboard.ClipboardRequested -= OnDashboardClipboard;
+            _dashboard.MessageBoxRequested -= OnDashboardMessageBox;
+            _dashboard.PromptRequested -= OnDashboardPrompt;
+            _dashboard.FilePickerRequested -= OnDashboardFilePicker;
+            _dashboard.DialogRequested -= OnDashboardDialog;
+            _dashboard.OpenExternalRequested -= OnDashboardOpenExternal;
             _engine.Dispose();
         };
 
@@ -198,7 +211,6 @@ sealed class ServerForm : BorderlessForm
         if (_procDialogs.TryGetValue(cl.MachineName, out var existing) && !existing.IsDisposed)
         {
             existing.BringToFront();
-            _engine.RequestProcessList(machine);
             return;
         }
 
@@ -207,7 +219,75 @@ sealed class ServerForm : BorderlessForm
         _procDialogs[cl.MachineName] = d;
         d.FormClosed += (_, _) => _procDialogs.Remove(cl.MachineName);
         d.Show(this);
-        _engine.RequestProcessList(machine);
+    }
+
+    void OnDashboardClipboard(string text)
+    {
+        if (IsDisposed) return;
+        BeginInvoke(() => { try { Clipboard.SetText(text); } catch (Exception ex) { LogSink.Warn("Server.UI", "Clipboard.SetText failed", ex); } });
+    }
+
+    void OnDashboardMessageBox(DashboardMessageBoxRequest req)
+    {
+        if (IsDisposed) return;
+        var icon = req.Kind == DashboardConfirmKind.Warning ? MessageBoxIcon.Warning : MessageBoxIcon.None;
+        BeginInvoke(() =>
+        {
+            if (MessageBox.Show(req.Message, req.Title, MessageBoxButtons.YesNo, icon) == DialogResult.Yes)
+            {
+                req.OnConfirm();
+                _ct.Invalidate();
+            }
+        });
+    }
+
+    void OnDashboardPrompt(DashboardPromptRequest req)
+    {
+        if (IsDisposed) return;
+        BeginInvoke(() =>
+        {
+            using var dlg = new Form { Text = req.Title, Size = new Size(300, 112), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, BackColor = Th.Bg, ForeColor = Th.Brt };
+            var lbl = new Label { Text = req.Label, Location = new Point(12, 12), AutoSize = true, ForeColor = Th.Dim };
+            var txt = new TextBox { Location = new Point(12, 34), Width = 260, BackColor = Th.Card, ForeColor = Th.Brt, BorderStyle = BorderStyle.FixedSingle };
+            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(116, 62), Width = 75 };
+            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(197, 62), Width = 75 };
+            dlg.AcceptButton = ok; dlg.CancelButton = cancel;
+            dlg.Controls.AddRange(new Control[] { lbl, txt, ok, cancel });
+            if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
+            {
+                req.OnSubmit(txt.Text);
+                _ct.Invalidate();
+            }
+        });
+    }
+
+    void OnDashboardFilePicker(DashboardFilePickerRequest req)
+    {
+        if (IsDisposed) return;
+        BeginInvoke(() =>
+        {
+            using var ofd = new OpenFileDialog { Title = req.Title, Filter = req.Filter };
+            if (ofd.ShowDialog(this) != DialogResult.OK) return;
+            req.OnFileSelected(ofd.FileName);
+        });
+    }
+
+    void OnDashboardDialog(DashboardDialogRequest req)
+    {
+        if (IsDisposed) return;
+        BeginInvoke(() =>
+        {
+            switch (req.Kind)
+            {
+                case "processes": OpenProcessDialog(req.MachineName); break;
+            }
+        });
+    }
+
+    void OnDashboardOpenExternal(string target)
+    {
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true }); }
+        catch (Exception ex) { LogSink.Warn("Server.UI", $"Failed to open {target}", ex); }
     }
 
     void OnClick(object? sender, MouseEventArgs e)
@@ -219,56 +299,26 @@ sealed class ServerForm : BorderlessForm
         {
             if (!r.Contains(e.Location)) continue;
 
-            if (a == "newtoken") { _engine.RegenerateToken(); _ct.Invalidate(); break; }
-            if (a == "copytoken") { Clipboard.SetText(_engine.Token); _engine.Log.Add("Token copied", Th.Grn); break; }
+            if (a == "newtoken") { _dashboard.RegenerateToken(); _ct.Invalidate(); break; }
+            if (a == "copytoken") { _dashboard.CopyToken(); break; }
             if (a == "showapproved") { BeginInvoke(() => { using var d = new ApprovedClientsDialog(_engine.Store, _engine.Clients, _engine.Log); d.ShowDialog(this); }); break; }
             if (a == "theme") { Th.Toggle(); break; }
             if (a == "alerts") { BeginInvoke(() => { using var d = new AlertConfigDialog(_engine.Alerts); if (d.ShowDialog(this) == DialogResult.OK) _ct.Invalidate(); }); break; }
             if (a == "os_filter") { CycleOsFilter(); break; }
             if (a == "sort_mode") { CycleSortMode(); break; }
-            if (a == "openrelease")
-            {
-                // Prefer the locally staged folder when the release has been downloaded;
-                // fall back to the GitHub release page otherwise.
-                var staged = _engine.StagedReleaseDir;
-                string? target = staged != null && System.IO.Directory.Exists(staged) ? staged : _engine.AvailableUpdate?.ReleaseUrl;
-                if (target != null) { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true }); } catch (Exception ex) { LogSink.Warn("Server.UI", $"Failed to open update target {target}", ex); } }
-                break;
-            }
-            if (a == "openreleasenotes")
-            {
-                var url = _engine.AvailableUpdate?.ReleaseUrl;
-                if (url != null) { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); } catch (Exception ex) { LogSink.Warn("Server.UI", $"Failed to open release URL {url}", ex); } }
-                break;
-            }
+            if (a == "openrelease") { _dashboard.OpenStagedReleaseOrUrl(); break; }
+            if (a == "openreleasenotes") { _dashboard.OpenReleaseNotes(); break; }
             if (a == "approve_pending") { _dashboard.ApprovePending(m); _ct.Invalidate(); break; }
             if (a == "reject_pending") { _dashboard.RejectPending(m); _ct.Invalidate(); break; }
-            if (a == "forget_offline")
-            {
-                if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
-                { _engine.Store.Forget(m); _ct.Invalidate(); }
-                break;
-            }
-            if (a == "set_mac_offline")
-            {
-                using var dlg = new Form { Text = "Set MAC", Size = new Size(300, 112), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, BackColor = Th.Bg, ForeColor = Th.Brt };
-                var lbl = new Label { Text = $"MAC for {m} (e.g. AA:BB:CC:DD:EE:FF):", Location = new Point(12, 12), AutoSize = true, ForeColor = Th.Dim };
-                var txt = new TextBox { Location = new Point(12, 34), Width = 260, BackColor = Th.Card, ForeColor = Th.Brt, BorderStyle = BorderStyle.FixedSingle };
-                var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(116, 62), Width = 75 };
-                var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(197, 62), Width = 75 };
-                dlg.AcceptButton = ok; dlg.CancelButton = cancel;
-                dlg.Controls.AddRange(new Control[] { lbl, txt, ok, cancel });
-                if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
-                { _engine.SetMacForOffline(m, txt.Text.Trim()); _ct.Invalidate(); }
-                break;
-            }
-            if (a == "wake_offline") { _engine.WakeOffline(m); break; }
+            if (a == "forget_offline") { _dashboard.ForgetOffline(m); break; }
+            if (a == "set_mac_offline") { _dashboard.RequestSetOfflineMac(m); break; }
+            if (a == "wake_offline") { _dashboard.WakeOffline(m); break; }
 
             if (a == "select") { _dashboard.ToggleSelection(m); _ct.Invalidate(); break; }
             if (a == "clear_selection") { _dashboard.ClearSelection(); _ct.Invalidate(); break; }
             if (a == "select_all") { _dashboard.SelectAllVisible(); _ct.Invalidate(); break; }
             if (a == "select_outdated") { _dashboard.SelectOutdatedVisible(); _ct.Invalidate(); break; }
-            if (a == "push_update_selected") { PushUpdateToSelected(); break; }
+            if (a == "push_update_selected") { _dashboard.PushUpdateToSelected(); break; }
 
             if (!_engine.Clients.TryGetValue(m, out var cl)) continue;
 
@@ -280,26 +330,17 @@ sealed class ServerForm : BorderlessForm
 
             switch (a)
             {
-                case "toggle": cl.Expanded = !cl.Expanded; _ct.Invalidate(); break;
-                case "restart":
-                    if (MessageBox.Show($"Restart {m}?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
-                        _engine.RequestRestart(m);
-                    break;
-                case "processes": OpenProcessDialog(m); break;
-                case "shutdown":
-                    if (MessageBox.Show($"SHUT DOWN {m}?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
-                        _engine.RequestShutdown(m);
-                    break;
-                case "sysinfo": _engine.RequestSysInfo(m); break;
-                case "cpu_detail": _engine.RequestCpuDetail(m); break;
+                case "toggle": _dashboard.ToggleClientExpanded(m); _ct.Invalidate(); break;
+                case "restart": _dashboard.RestartClient(m); break;
+                case "processes": _dashboard.RequestProcesses(m); break;
+                case "shutdown": _dashboard.ShutdownClient(m); break;
+                case "sysinfo": _dashboard.RequestSysInfo(m); break;
+                case "cpu_detail": _dashboard.RequestCpuDetail(m); break;
                 case "health": BeginInvoke(() => new HealthDialog(cl, _engine.Store).Show(this)); break;
-                case "screenshot": _engine.RequestScreenshot(m); break;
-                case "forget":
-                    if (MessageBox.Show($"Forget {m}?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
-                    { _engine.ForgetClient(m); _ct.Invalidate(); }
-                    break;
-                case "services": _engine.RequestServices(m); break;
-                case "events": _engine.RequestEvents(m); break;
+                case "screenshot": _dashboard.RequestScreenshot(m); break;
+                case "forget": _dashboard.ForgetClient(m); break;
+                case "services": _dashboard.RequestServices(m); break;
+                case "events": _dashboard.RequestEvents(m); break;
                 case "msg":
                     BeginInvoke(() =>
                     {
@@ -327,32 +368,8 @@ sealed class ServerForm : BorderlessForm
                     BeginInvoke(() => rdpViewer.Show(this));
                     _engine.Log.Add($"RDP→{m}", Th.Cyan);
                     break;
-                case "paw": _engine.TogglePaw(m); _ct.Invalidate(); break;
-                case "update":
-                    BeginInvoke(() =>
-                    {
-                        bool linux = ServerEngine.IsLinuxClient(cl);
-                        using var ofd = new OpenFileDialog
-                        {
-                            Title = linux ? "Select Linux cpumon.py or cpumon-linux release zip" : "Select new client exe to push",
-                            Filter = linux ? "Linux update|*.py;*.zip|Python script|*.py|Release zip|*.zip" : "Executable|*.exe"
-                        };
-                        if (ofd.ShowDialog(this) != DialogResult.OK) return;
-                        if (linux)
-                        {
-                            if (!LinuxUpdatePayload.TryRead(ofd.FileName, out var fileName, out var bytes, out var error))
-                            {
-                                _engine.Log.Add($"Linux update failed: {error}", Th.Red);
-                                return;
-                            }
-                            _engine.Log.Add($"Pushing Linux update → {m}…", Th.Org);
-                            _engine.PushUpdatePayload(cl, fileName, bytes);
-                            return;
-                        }
-                        _engine.Log.Add($"Pushing update → {m}…", Th.Org);
-                        _engine.PushUpdate(cl, ofd.FileName);
-                    });
-                    break;
+                case "paw": _dashboard.TogglePaw(m); _ct.Invalidate(); break;
+                case "update": _dashboard.PushUpdate(m); break;
             }
             break;
         }
@@ -502,39 +519,6 @@ sealed class ServerForm : BorderlessForm
         }
     }
 
-    void PushUpdateToSelected()
-    {
-        var selectedMachines = _dashboard.SelectedMachineNames;
-        var winClients = _engine.Clients.Where(kv => selectedMachines.Contains(kv.Key) && !ServerEngine.IsLinuxClient(kv.Value)).Select(kv => kv.Value).ToList();
-        var linuxClients = _engine.Clients.Where(kv => selectedMachines.Contains(kv.Key) && ServerEngine.IsLinuxClient(kv.Value)).Select(kv => kv.Value).ToList();
-        if (winClients.Count == 0 && linuxClients.Count == 0) return;
-        BeginInvoke(() =>
-        {
-            string filter = winClients.Count > 0 && linuxClients.Count > 0
-                ? "Client files|*.exe;*.py;*.zip|Executables|*.exe|Linux update|*.py;*.zip"
-                : winClients.Count > 0 ? "Executable|*.exe" : "Linux update|*.py;*.zip|Python script|*.py|Release zip|*.zip";
-            using var ofd = new OpenFileDialog { Title = $"Select file to push to {selectedMachines.Count} client(s)", Filter = filter };
-            if (ofd.ShowDialog(this) != DialogResult.OK) return;
-            string path = ofd.FileName;
-            bool isLinuxPayload = path.EndsWith(".py", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
-            var targets = isLinuxPayload ? linuxClients : winClients;
-            if (targets.Count == 0) { _engine.Log.Add("No matching clients for selected file type", Th.Org); return; }
-            if (isLinuxPayload)
-            {
-                if (!LinuxUpdatePayload.TryRead(path, out var fileName, out var bytes, out var error))
-                {
-                    _engine.Log.Add($"Linux update failed: {error}", Th.Red);
-                    return;
-                }
-                _engine.Log.Add($"Pushing Linux update → {targets.Count} client(s)…", Th.Org);
-                _engine.PushUpdateMultiPayload(targets, fileName, bytes);
-                return;
-            }
-            _engine.Log.Add($"Pushing update → {targets.Count} client(s)…", Th.Org);
-            _engine.PushUpdateMulti(targets, path);
-        });
-    }
-
     // ── Painting ──
 
     void PaintContent(object? sender, PaintEventArgs e)
@@ -546,7 +530,7 @@ sealed class ServerForm : BorderlessForm
 
         // Purge stale clients
         foreach (var k in _engine.Clients.Where(kv => (DateTime.UtcNow - kv.Value.LastSeen).TotalSeconds > 120).Select(kv => kv.Key).ToList())
-        { if (_engine.Clients.TryRemove(k, out var c)) { c.Dispose(); if (_dashboard.SelectedMachineNames.Contains(k)) _dashboard.ToggleSelection(k); } }
+        { if (_engine.Clients.TryRemove(k, out var c)) { c.Dispose(); _dashboard.DeselectMachine(k); } }
 
         int x = 10, y, w = _ct.Width - 20;
 

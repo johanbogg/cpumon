@@ -38,6 +38,12 @@ internal static class Program
             TestDashboardStateClientProjectionFlags();
             TestDashboardControllerOwnsFiltersSortAndSelection();
             TestDashboardControllerPendingDelegatesReturnFalseForMissing();
+            TestDashboardControllerRestartRaisesWarningConfirmation();
+            TestDashboardControllerForgetClientConfirmationInvokesEngineOnConfirm();
+            TestDashboardControllerCopyTokenRaisesClipboardEvent();
+            TestDashboardControllerToggleExpandedFlipsClient();
+            TestDashboardControllerPushUpdatePicksLinuxFilterForLinuxClient();
+            TestDashboardControllerSetOfflineMacRoutesPromptToEngine();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -510,6 +516,83 @@ internal static class Program
         var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
         Assert(!controller.ApprovePending("no-such-machine"), "controller approving missing pending client should return false");
         Assert(!controller.RejectPending("no-such-machine"), "controller rejecting missing pending client should return false");
+    }
+
+    static void TestDashboardControllerRestartRaisesWarningConfirmation()
+    {
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
+        DashboardMessageBoxRequest? captured = null;
+        controller.MessageBoxRequested += req => captured = req;
+        controller.RestartClient("box-a");
+        Assert(captured != null, "RestartClient should raise MessageBoxRequested");
+        Assert(captured!.Kind == DashboardConfirmKind.Warning, "restart confirmation should be a warning");
+        Assert(captured.Message.Contains("box-a"), "restart confirmation should mention machine name");
+        Assert(captured.OnConfirm != null, "restart confirmation should expose a confirm callback");
+    }
+
+    static void TestDashboardControllerForgetClientConfirmationInvokesEngineOnConfirm()
+    {
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
+        DashboardMessageBoxRequest? captured = null;
+        controller.MessageBoxRequested += req => captured = req;
+        controller.ForgetClient("doomed-box");
+        Assert(captured != null, "ForgetClient should raise MessageBoxRequested");
+        Assert(captured!.Kind == DashboardConfirmKind.Question, "forget confirmation should default to question");
+        Assert(captured.Message.Contains("doomed-box"), "forget confirmation should mention machine name");
+    }
+
+    static void TestDashboardControllerCopyTokenRaisesClipboardEvent()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        var controller = new ServerDashboardController(engine);
+        string? captured = null;
+        controller.ClipboardRequested += text => captured = text;
+        controller.CopyToken();
+        Assert(captured == engine.Token, "CopyToken should publish current engine token to clipboard event");
+    }
+
+    static void TestDashboardControllerToggleExpandedFlipsClient()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        var client = FakeRemoteClient();
+        client.MachineName = "card-box";
+        client.Expanded = false;
+        engine.Clients[client.MachineName] = client;
+        var controller = new ServerDashboardController(engine);
+        controller.ToggleClientExpanded("card-box");
+        Assert(client.Expanded, "ToggleClientExpanded should expand a collapsed client");
+        controller.ToggleClientExpanded("card-box");
+        Assert(!client.Expanded, "ToggleClientExpanded should collapse an expanded client");
+        controller.ToggleClientExpanded("no-such-box");
+    }
+
+    static void TestDashboardControllerPushUpdatePicksLinuxFilterForLinuxClient()
+    {
+        var engine = new ServerEngine(noBroadcast: true);
+        var linux = FakeRemoteClient();
+        linux.MachineName = "lnx";
+        linux.LastReport = new MachineReport { MachineName = linux.MachineName, OsVersion = "Linux Debian" };
+        engine.Clients[linux.MachineName] = linux;
+        var controller = new ServerDashboardController(engine);
+        DashboardFilePickerRequest? captured = null;
+        controller.FilePickerRequested += req => captured = req;
+        controller.PushUpdate("lnx");
+        Assert(captured != null, "PushUpdate should raise FilePickerRequested for known client");
+        Assert(captured!.Filter.Contains("*.py"), "Linux client picker should include .py filter");
+        controller.PushUpdate("no-such-box");
+    }
+
+    static void TestDashboardControllerSetOfflineMacRoutesPromptToEngine()
+    {
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
+        DashboardPromptRequest? captured = null;
+        controller.PromptRequested += req => captured = req;
+        controller.RequestSetOfflineMac("offline-box");
+        Assert(captured != null, "RequestSetOfflineMac should raise PromptRequested");
+        Assert(captured!.Title == "Set MAC", "prompt should be titled Set MAC");
+        Assert(captured.Label.Contains("offline-box"), "prompt label should mention machine name");
+        captured.OnSubmit("");
+        captured.OnSubmit("  ");
     }
 
     static RemoteClient FakeRemoteClient()
