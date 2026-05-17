@@ -277,10 +277,9 @@ sealed class ServerForm2 : Form
                 AddAction("Terminal", Th.Cyan, () => _dashboard.OpenTerminal(card.MachineName, card.IsLinux ? "bash" : "powershell"));
                 if (card.CanRdp) AddAction("RDP", Th.Cyan, () => _dashboard.OpenRdp(card.MachineName));
                 AddAction("Msg", Th.Dim, () => _dashboard.SendUserMessage(card.MachineName));
-                AddSep();
                 AddAction("Restart", Th.Org, () => _dashboard.RestartClient(card.MachineName));
                 AddAction("Shutdown", Th.Red, () => _dashboard.ShutdownClient(card.MachineName));
-                AddAction("Push Update", Th.Org, () => _dashboard.PushUpdate(card.MachineName));
+                AddAction("Update", Th.Org, () => _dashboard.PushUpdate(card.MachineName));
                 AddAction("Forget", Th.Dim, () => _dashboard.ForgetClient(card.MachineName));
             }
         }
@@ -304,10 +303,17 @@ sealed class ServerForm2 : Form
         _actions.ResumeLayout();
     }
 
+    const int ActionBtnW = 110;
+    const int ActionBtnH = 34;
+
     void AddAction(string text, Color accent, Action onClick)
     {
         var b = new Button { Text = text };
         StyleButton(b, accent);
+        b.AutoSize = false;
+        b.AutoSizeMode = AutoSizeMode.GrowOnly;
+        b.MinimumSize = Size.Empty;
+        b.Size = new Size(ActionBtnW, ActionBtnH);
         b.Click += (_, _) => onClick();
         _actions.Controls.Add(b);
     }
@@ -341,5 +347,4 @@ sealed class ServerForm2 : Form
         return Color.FromArgb(r, g, bl);
     }
 
-    void AddSep() => _actions.Controls.Add(new Label { Text = "|", ForeColor = Th.Brd, AutoSize = true, Margin = new Padding(8, 10, 8, 0) });
 }
