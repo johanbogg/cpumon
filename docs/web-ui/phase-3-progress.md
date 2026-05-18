@@ -6,7 +6,7 @@ Owner: Codex for this slice. Claude should treat this file as the coordination n
 
 ## Current Slice: Static Shell + First Dashboard Wiring
 
-Status: in progress.
+Status: first slice pushed as `686b982`; slice 2 interaction alignment in progress.
 
 Goals:
 - Serve `/login` and authenticated `/` from embedded web assets.
@@ -43,6 +43,23 @@ Known deferrals for later Phase 3 slices:
 - Better empty/error/loading states.
 - Full visual polish pass against the mockup after real data is tested.
 - Browser screenshot/manual layout verification.
+
+## Slice 2: Card Interaction + Mockup Alignment
+
+Status: in progress.
+
+Implemented:
+- Client cards now expand/collapse from a normal single click on card empty space.
+- Collapsed cards stay clean; no action buttons were added to the collapsed surface.
+- A tiny right-edge `v` / `^` indicator shows expand state.
+- Expanded action row remains the only place for client command buttons.
+- Added a subtle scanline overlay and slightly tightened the wordmark feel toward the mockup.
+
+Still deferred:
+- Deeper pixel/spacing pass against `mockup.html`.
+- Proper iconography/wordmark typography beyond the simple text logo.
+- Selection affordance redesign; current `Select` stays in the expanded action row.
+- Snapshot dialogs and alert/approved management UI.
 
 Testing plan for this slice:
 - Smoke tests: static routes auth behavior, assets served, pending endpoints.

@@ -117,6 +117,7 @@ function clientCard(client) {
   tpl.classList.toggle('stale-card', client.isStale);
   tpl.classList.toggle('paw-card', client.isPaw);
   tpl.dataset.machine = client.machineName;
+  tpl.querySelector('.expand-indicator').textContent = expanded ? '^' : 'v';
 
   const badge = tpl.querySelector('.os-badge');
   badge.textContent = linux ? 'L' : 'W';
@@ -148,14 +149,16 @@ function clientCard(client) {
   );
   tpl.querySelector('.card-actions').replaceChildren(
     action('Select', () => post('/api/state/select', { machineNames: selected ? [...state.selected].filter(x => x !== client.machineName) : [...state.selected, client.machineName] })),
-    action(expanded ? 'Collapse' : 'Expand', () => post(`/api/clients/${encodeURIComponent(client.machineName)}/expand`)),
     action('PAW', () => post(`/api/clients/${encodeURIComponent(client.machineName)}/paw`)),
     action('Msg', () => sendMessage(client.machineName)),
     action('Restart', () => confirmAction('Restart client?', `/api/clients/${encodeURIComponent(client.machineName)}/restart`), 'warn'),
     action('Off', () => confirmAction('Shutdown client?', `/api/clients/${encodeURIComponent(client.machineName)}/shutdown`), 'danger'),
     action('Forget', () => confirmAction('Forget client?', `/api/clients/${encodeURIComponent(client.machineName)}/forget`), 'danger'),
   );
-  tpl.addEventListener('dblclick', () => post(`/api/clients/${encodeURIComponent(client.machineName)}/expand`));
+  tpl.addEventListener('click', (event) => {
+    if (event.target.closest('button, a, input, select, textarea')) return;
+    post(`/api/clients/${encodeURIComponent(client.machineName)}/expand`);
+  });
   return tpl;
 }
 

@@ -29,6 +29,20 @@ body {
   font-size: 13px;
   line-height: 1.45;
 }
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.014) 0,
+    rgba(255, 255, 255, 0.014) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
 button, input { font: inherit; }
 button { cursor: pointer; }
 
@@ -51,7 +65,7 @@ button { cursor: pointer; }
   color: var(--grn);
   font-size: 21px;
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.18em;
   text-shadow: 0 0 12px rgba(78, 192, 122, 0.42);
 }
 .brand .version {
@@ -167,6 +181,12 @@ button { cursor: pointer; }
   border-left: 2px solid var(--grn);
   margin-bottom: 8px;
   padding: 12px 14px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.card:hover {
+  background: var(--card-hi);
+  border-color: var(--brd-hi);
 }
 .card.selected {
   background: rgba(78, 192, 122, 0.08);
@@ -177,9 +197,19 @@ button { cursor: pointer; }
 .card.paw-card { border-left-color: var(--mag); }
 .card-head {
   display: grid;
-  grid-template-columns: 24px minmax(150px, 1.6fr) 86px 128px repeat(4, minmax(70px, 1fr));
+  grid-template-columns: 24px minmax(150px, 1.6fr) 86px 128px repeat(4, minmax(70px, 1fr)) 18px;
   align-items: center;
   gap: 12px;
+}
+.expand-indicator {
+  color: var(--dim);
+  justify-self: end;
+  font-size: 11px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.card.expanded .expand-indicator {
+  color: var(--grn);
 }
 .os-badge {
   width: 22px;
@@ -237,6 +267,7 @@ button { cursor: pointer; }
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 12px;
+  cursor: default;
 }
 .card.expanded .card-actions { display: flex; }
 .a-btn.primary { color: var(--grn); border-color: rgba(78, 192, 122, 0.4); }
@@ -349,6 +380,6 @@ button { cursor: pointer; }
 @media (max-width: 1060px) {
   .workspace { grid-template-columns: 1fr; }
   .side-pane { border-left: 0; border-top: 1px solid var(--brd); }
-  .card-head { grid-template-columns: 24px minmax(140px, 1fr) 82px 120px; }
+  .card-head { grid-template-columns: 24px minmax(140px, 1fr) 82px 120px 18px; }
   .metric { display: none; }
 }
