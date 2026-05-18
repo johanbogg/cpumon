@@ -15,6 +15,9 @@ public sealed class SnapshotCache : IDisposable
     public static readonly TimeSpan TtlServices  = TimeSpan.FromSeconds(10);
     public static readonly TimeSpan TtlEvents    = TimeSpan.FromSeconds(10);
     public static readonly TimeSpan TtlCpuDetail = TimeSpan.FromSeconds(5);
+    // SPA polls ~1Hz while waiting for data; without a throttle each empty/stale
+    // poll would re-issue the agent request and saturate slow/offline clients.
+    public static readonly TimeSpan TriggerThrottle = TimeSpan.FromSeconds(1);
 
     public SnapshotCache(ServerEngine engine)
     {
@@ -55,6 +58,8 @@ public sealed class SnapshotCache : IDisposable
     public bool TryTriggerFetch(string machine, SnapshotKind kind)
     {
         if (!_engine.Clients.TryGetValue(machine, out _)) return false;
+        var last = TriggeredAt(machine, kind);
+        if (last != null && (DateTime.UtcNow - last.Value) < TriggerThrottle) return false;
         _triggered[(machine, kind)] = DateTime.UtcNow;
         switch (kind)
         {

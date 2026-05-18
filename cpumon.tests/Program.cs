@@ -104,6 +104,7 @@ internal static class Program
             TestSnapshotTriggersFetchWhenStale();
             TestSnapshotForceBypassesTtl();
             TestSnapshotHealthDerivesFromReportWithoutTriggering();
+            TestSnapshotFetchTriggerIsThrottled();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -1400,6 +1401,22 @@ internal static class Program
         using var resp = h.Get("/api/clients/box/sysinfo?force=true");
         Assert((int)resp.StatusCode == 200, "force=true should still return cached body");
         Assert(h.Snapshots.TriggeredAt("box", SnapshotKind.SysInfo) != null, "force=true should trigger fetch despite fresh cache");
+    }
+
+    static void TestSnapshotFetchTriggerIsThrottled()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        using var r1 = h.Get("/api/clients/box/processes");
+        Assert((int)r1.StatusCode == 204, "first GET on empty snapshot should return 204");
+        var t1 = h.Snapshots.TriggeredAt("box", SnapshotKind.Processes);
+        Assert(t1 != null, "first GET should record a trigger");
+        using var r2 = h.Get("/api/clients/box/processes");
+        Assert((int)r2.StatusCode == 204, "second GET on empty snapshot should still return 204");
+        Assert(h.Snapshots.TriggeredAt("box", SnapshotKind.Processes) == t1, "rapid re-GET within throttle window must not re-trigger fetch");
+        using var r3 = h.Get("/api/clients/box/processes?force=true");
+        Assert(h.Snapshots.TriggeredAt("box", SnapshotKind.Processes) == t1, "force=true within throttle window also must not re-trigger");
     }
 
     static void TestSnapshotHealthDerivesFromReportWithoutTriggering()
