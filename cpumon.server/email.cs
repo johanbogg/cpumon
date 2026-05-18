@@ -43,23 +43,25 @@ public sealed class AlertConfig
 
 public static class AlertConfigStore
 {
-    static readonly string _path = AppPaths.DataFile("alerts.json");
+    static readonly string _defaultPath = AppPaths.DataFile("alerts.json");
     static readonly JsonSerializerOptions _jso = new() { WriteIndented = true };
 
-    public static AlertConfig Load()
+    public static AlertConfig Load(string? path = null)
     {
-        try { if (File.Exists(_path)) return JsonSerializer.Deserialize<AlertConfig>(File.ReadAllText(_path), _jso) ?? new(); }
+        var p = path ?? _defaultPath;
+        try { if (File.Exists(p)) return JsonSerializer.Deserialize<AlertConfig>(File.ReadAllText(p), _jso) ?? new(); }
         catch { }
         return new AlertConfig();
     }
 
-    public static void Save(AlertConfig cfg)
+    public static void Save(AlertConfig cfg, string? path = null)
     {
+        var p = path ?? _defaultPath;
         try
         {
-            string tmp = _path + ".tmp";
+            string tmp = p + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(cfg, _jso));
-            File.Move(tmp, _path, overwrite: true);
+            File.Move(tmp, p, overwrite: true);
         }
         catch { }
     }
@@ -79,13 +81,15 @@ public sealed class AlertService
     AlertConfig _cfg;
     readonly ConcurrentDictionary<string, DateTime> _lastAlert = new();
     readonly CLog _log;
+    readonly string? _path;
 
-    public AlertService(CLog log) { _log = log; _cfg = AlertConfigStore.Load(); }
+    public AlertService(CLog log, string? path = null) { _log = log; _path = path; _cfg = AlertConfigStore.Load(_path); }
 
     public bool ThresholdsConfigured => _cfg.AlertRamPct.HasValue || _cfg.AlertDiskPct.HasValue || _cfg.AlertTempC.HasValue;
     public string IdleMode => ThresholdsConfigured ? "monitor" : "keepalive";
     public AlertConfig Config => _cfg;
-    public void Reload() { _cfg = AlertConfigStore.Load(); }
+    public void Reload() { _cfg = AlertConfigStore.Load(_path); }
+    public void SaveConfig(AlertConfig cfg) { _cfg = cfg; AlertConfigStore.Save(cfg, _path); }
 
     public void Check(string machine, MachineReport r)
     {

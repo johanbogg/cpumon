@@ -105,6 +105,12 @@ internal static class Program
             TestSnapshotForceBypassesTtl();
             TestSnapshotHealthDerivesFromReportWithoutTriggering();
             TestSnapshotFetchTriggerIsThrottled();
+            TestApprovedListReturnsProjectedEntries();
+            TestApprovedPatchUpdatesAliasAndPaw();
+            TestApprovedDeleteRemovesFromStore();
+            TestOfflineWakeReturns404ForUnknownMachine();
+            TestOfflineMacValidatesFormat();
+            TestAlertsGetPutRoundTripUpdatesService();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -1329,6 +1335,100 @@ internal static class Program
         Assert(h.Body(ghost).Contains("\"error\":\"not_found\""), "unknown machine error should be not_found");
     }
 
+    static void TestApprovedListReturnsProjectedEntries()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        h.Engine.Store.Approve("alpha", "k1", "10.0.0.1");
+        h.Engine.Store.Approve("beta",  "k2", "10.0.0.2");
+        h.Engine.Store.SetAlias("alpha", "Alpha box");
+        h.Engine.Store.SetPaw("beta", true);
+        using var resp = h.Get("/api/approved");
+        Assert((int)resp.StatusCode == 200, "GET /api/approved should return 200");
+        var body = h.Body(resp);
+        Assert(body.Contains("\"name\":\"alpha\""), "approved list should include alpha");
+        Assert(body.Contains("\"alias\":\"Alpha box\""), "approved list should include alpha's alias");
+        Assert(body.Contains("\"name\":\"beta\""), "approved list should include beta");
+        Assert(body.Contains("\"isPaw\":true"), "approved list should include beta's paw flag");
+        Assert(!body.Contains("\"key\""), "approved list must not leak key");
+        Assert(!body.Contains("\"salt\""), "approved list must not leak salt");
+    }
+
+    static void TestApprovedPatchUpdatesAliasAndPaw()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        h.Engine.Store.Approve("box", "k", "10.0.0.5");
+        using var ok = h.Patch("/api/approved/box", new { alias = "renamed", isPaw = true }, csrfHeader: h.Csrf);
+        Assert((int)ok.StatusCode == 204, "PATCH should return 204");
+        Assert(h.Engine.Store.GetAlias("box") == "renamed", "alias should be persisted");
+        Assert(h.Engine.Store.IsPaw("box"), "paw flag should flip on");
+        using var ghost = h.Patch("/api/approved/ghost", new { alias = "x" }, csrfHeader: h.Csrf);
+        Assert((int)ghost.StatusCode == 404, "PATCH on unknown machine should return 404");
+        using var noCsrf = h.Patch("/api/approved/box", new { alias = "blocked" }, csrfHeader: null);
+        Assert((int)noCsrf.StatusCode == 403, "PATCH without csrf should return 403");
+        Assert(h.Engine.Store.GetAlias("box") == "renamed", "alias should not change on csrf failure");
+    }
+
+    static void TestApprovedDeleteRemovesFromStore()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        h.Engine.Store.Approve("doomed", "k", "10.0.0.6");
+        Assert(h.Engine.Store.All().Any(c => c.Name == "doomed"), "fixture: doomed should be approved");
+        using var resp = h.Delete("/api/approved/doomed", csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 204, "DELETE should return 204");
+        Assert(!h.Engine.Store.All().Any(c => c.Name == "doomed"), "doomed should be gone from store");
+    }
+
+    static void TestOfflineWakeReturns404ForUnknownMachine()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var resp = h.Post("/api/offline/ghost/wake", body: null, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 404, "wake on unknown machine should return 404");
+        Assert(h.Body(resp).Contains("\"error\":\"not_found\""), "error code should be not_found");
+    }
+
+    static void TestOfflineMacValidatesFormat()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        h.Engine.Store.Approve("box", "k", "10.0.0.7");
+        using var bad = h.Post("/api/offline/box/mac", new { mac = "not-a-mac" }, csrfHeader: h.Csrf);
+        Assert((int)bad.StatusCode == 400, "invalid mac should return 400");
+        Assert(h.Body(bad).Contains("\"error\":\"validation_failed\""), "invalid mac error should be validation_failed");
+        Assert(h.Engine.Store.GetMac("box") == "", "invalid mac must not be persisted");
+        using var ok = h.Post("/api/offline/box/mac", new { mac = "AA:BB:CC:DD:EE:FF" }, csrfHeader: h.Csrf);
+        Assert((int)ok.StatusCode == 204, "valid mac should return 204");
+        Assert(h.Engine.Store.GetMac("box") == "AA:BB:CC:DD:EE:FF", "mac should be persisted");
+    }
+
+    static void TestAlertsGetPutRoundTripUpdatesService()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var get = h.Get("/api/alerts");
+        Assert((int)get.StatusCode == 200, "GET /api/alerts should return 200");
+        Assert(h.Body(get).Contains("\"cool\":30"), "default cooldown should be 30 minutes");
+        var update = new
+        {
+            host = "smtp.example.com",
+            port = 587,
+            from = "ops@example.com",
+            to   = "ops@example.com",
+            ram  = 90,
+            cool = 15,
+        };
+        using var put = h.Put("/api/alerts", update, csrfHeader: h.Csrf);
+        Assert((int)put.StatusCode == 204, "PUT /api/alerts should return 204");
+        Assert(h.Alerts.Config.SmtpHost == "smtp.example.com", "alert host should be updated in-memory");
+        Assert(h.Alerts.Config.AlertRamPct == 90, "alert ram pct should be updated");
+        Assert(h.Alerts.Config.CooldownMinutes == 15, "cooldown should be updated");
+        using var bad = h.Put("/api/alerts", new { port = -1 }, csrfHeader: h.Csrf);
+        Assert((int)bad.StatusCode == 400, "invalid port should return 400");
+    }
+
     static readonly string[] SnapshotPaths =
     {
         "/api/clients/box/processes",
@@ -1445,6 +1545,7 @@ internal static class Program
         public ServerEngine              Engine     { get; }
         public ServerDashboardController Controller { get; }
         public SnapshotCache             Snapshots  { get; }
+        public AlertService              Alerts     { get; }
         readonly TempDir _td;
         readonly CookieContainer _cookies;
 
@@ -1458,6 +1559,7 @@ internal static class Program
             Engine     = new ServerEngine(noBroadcast: true);
             Controller = new ServerDashboardController(Engine, new FakeServerPlatformServices());
             Snapshots  = new SnapshotCache(Engine);
+            Alerts     = new AlertService(new CLog(), Path.Combine(_td.Path, "alerts.json"));
             Host       = new WebHost();
             Host.StartAsync(new WebHostOptions
             {
@@ -1468,6 +1570,9 @@ internal static class Program
                     WebDashboardApi.Map(app, Engine, Controller, Sessions, ctx);
                     WebClientActionsApi.Map(app, Engine, Controller, Sessions, ctx);
                     WebSnapshotApi.Map(app, Engine, Snapshots, Sessions, ctx);
+                    WebOfflineApi.Map(app, Engine, Sessions, ctx);
+                    WebApprovedApi.Map(app, Engine, Sessions, ctx);
+                    WebAlertsApi.Map(app, Alerts, Sessions, ctx);
                 }
             }).GetAwaiter().GetResult();
             _cookies = new CookieContainer();
@@ -1487,15 +1592,27 @@ internal static class Program
         public string Csrf => CookieValue("cpumon_csrf");
 
         public HttpResponseMessage Post(string path, object? body = null, string? csrfHeader = null)
+            => Send(HttpMethod.Post, path, body, csrfHeader);
+
+        public HttpResponseMessage Put(string path, object? body = null, string? csrfHeader = null)
+            => Send(HttpMethod.Put, path, body, csrfHeader);
+
+        public HttpResponseMessage Patch(string path, object? body = null, string? csrfHeader = null)
+            => Send(new HttpMethod("PATCH"), path, body, csrfHeader);
+
+        public HttpResponseMessage Delete(string path, string? csrfHeader = null)
+            => Send(HttpMethod.Delete, path, body: null, csrfHeader);
+
+        public HttpResponseMessage Get(string path) => Client.GetAsync(path).GetAwaiter().GetResult();
+
+        HttpResponseMessage Send(HttpMethod method, string path, object? body, string? csrfHeader)
         {
-            var req = new HttpRequestMessage(HttpMethod.Post, path);
+            var req = new HttpRequestMessage(method, path);
             if (body != null)
                 req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
             if (csrfHeader != null) req.Headers.Add("X-CSRF-Token", csrfHeader);
             return Client.SendAsync(req).GetAwaiter().GetResult();
         }
-
-        public HttpResponseMessage Get(string path) => Client.GetAsync(path).GetAwaiter().GetResult();
 
         public string Body(HttpResponseMessage resp) => resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
 
