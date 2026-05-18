@@ -161,6 +161,71 @@ def build_report(machine: str, cpu_name: str) -> dict:
                 pass
     return r
 
+def _cpu_temperatures():
+    package_temp = None
+    core_temps = {}
+    if not _PSUTIL:
+        return package_temp, core_temps
+    try:
+        temps = psutil.sensors_temperatures(fahrenheit=False)
+    except Exception:
+        return package_temp, core_temps
+    samples = []
+    for entries in temps.values():
+        for entry in entries:
+            current = getattr(entry, "current", None)
+            if current is None or current <= 0:
+                continue
+            label = (getattr(entry, "label", "") or "").lower()
+            samples.append(float(current))
+            if "package" in label or "tdie" in label or "tctl" in label:
+                package_temp = float(current) if package_temp is None else max(package_temp, float(current))
+            if "core" in label:
+                digits = "".join(ch for ch in label if ch.isdigit())
+                if digits:
+                    core_temps[int(digits)] = float(current)
+    if package_temp is None and samples:
+        package_temp = max(samples)
+    return package_temp, core_temps
+
+def collect_cpu_detail(machine: str, cpu_name: str) -> dict:
+    core_count = os.cpu_count() or 1
+    detail = {
+        "name": machine,
+        "cpuName": cpu_name,
+        "coreCount": core_count,
+        "cores": [],
+        "ts": int(time.time() * 1000),
+    }
+    if not _PSUTIL:
+        return detail
+
+    total_load = psutil.cpu_percent(interval=0.25)
+    per_core = psutil.cpu_percent(interval=None, percpu=True)
+    freq = psutil.cpu_freq()
+    try:
+        per_freq = psutil.cpu_freq(percpu=True)
+    except TypeError:
+        per_freq = []
+    package_temp, core_temps = _cpu_temperatures()
+
+    detail["load"] = total_load
+    if freq:
+        detail["freq"] = freq.current
+    if package_temp is not None:
+        detail["temp"] = package_temp
+
+    for i, load in enumerate(per_core):
+        core = {"i": i, "l": load}
+        if i < len(per_freq) and per_freq[i]:
+            core["f"] = per_freq[i].current
+        elif freq:
+            core["f"] = freq.current
+        if i in core_temps:
+            core["t"] = core_temps[i]
+        detail["cores"].append(core)
+    return detail
+
 def collect_sysinfo(machine: str, cpu_name: str) -> dict:
     si: dict = {
         "hostname":    machine,
@@ -181,6 +246,52 @@ def collect_sysinfo(machine: str, cpu_name: str) -> dict:
         "dotnetVersion": "",
     }
     return si
+
+def _event_level(priority: int) -> str:
+    if priority <= 3:
+        return "Error"
+    if priority == 4:
+        return "Warning"
+    return "Info"
+
+def collect_events() -> list:
+    if not shutil.which("journalctl"):
+        return [{
+            "level": "Warning",
+            "src": "cpumon",
+            "msg": "journalctl is not available on this Linux client",
+            "ts": int(time.time() * 1000),
+        }]
+    try:
+        r = subprocess.run(
+            ["journalctl", "--no-pager", "--output=json", "--lines=200", "--priority=warning"],
+            capture_output=True, text=True, timeout=12
+        )
+        if r.returncode != 0:
+            msg = (r.stderr or r.stdout or "journalctl failed").strip()
+            return [{"level": "Warning", "src": "journalctl", "msg": msg, "ts": int(time.time() * 1000)}]
+        events = []
+        for line in r.stdout.splitlines():
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            msg = entry.get("MESSAGE") or ""
+            if not msg:
+                continue
+            try:
+                priority = int(entry.get("PRIORITY", 6))
+            except Exception:
+                priority = 6
+            try:
+                ts = int(int(entry.get("__REALTIME_TIMESTAMP", "0")) / 1000)
+            except Exception:
+                ts = int(time.time() * 1000)
+            src = entry.get("SYSLOG_IDENTIFIER") or entry.get("_SYSTEMD_UNIT") or entry.get("_COMM") or "journal"
+            events.append({"level": _event_level(priority), "src": src, "msg": msg, "ts": ts})
+        return events
+    except Exception as e:
+        return [{"level": "Warning", "src": "journalctl", "msg": str(e), "ts": int(time.time() * 1000)}]
 
 def collect_processes() -> list:
     if not _PSUTIL:
@@ -597,6 +708,12 @@ class Client:
             except Exception as e:
                 self._res(cid, False, str(e))
 
+        elif c == "cpu_detail":
+            try:
+                self._send({"type": "cpu_detail", "cpuDetail": collect_cpu_detail(self._machine, self._cpu_name), "cmdId": cid})
+            except Exception as e:
+                self._res(cid, False, str(e))
+
         elif c == "terminal_open":
             tid   = cmd.get("termId")
             shell = cmd.get("shell") or "bash"
@@ -624,6 +741,13 @@ class Client:
         elif c == "list_services":
             try:
                 self._send({"type": "servicelist", "serviceList": list_services(),
+                            "machine": self._machine, "cmdId": cid})
+            except Exception as e:
+                self._res(cid, False, str(e))
+
+        elif c == "list_events":
+            try:
+                self._send({"type": "events", "events": collect_events(),
                             "machine": self._machine, "cmdId": cid})
             except Exception as e:
                 self._res(cid, False, str(e))

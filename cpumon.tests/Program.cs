@@ -553,8 +553,8 @@ internal static class Program
         Assert(linux.CanBash, "Linux clients should expose Bash launcher capability");
         Assert(linux.CanServices, "Linux clients should expose services capability");
         Assert(!linux.CanScreenshot, "Linux clients should not expose screenshot capability");
-        Assert(!linux.CanEvents, "Linux clients should not expose Windows event viewer capability");
-        Assert(!linux.CanCpuDetail, "Linux clients should not expose CPU detail capability");
+        Assert(linux.CanEvents, "Linux clients should expose journal event capability");
+        Assert(linux.CanCpuDetail, "Linux clients should expose CPU detail capability");
     }
 
     static void TestDashboardControllerOwnsFiltersSortAndSelection()

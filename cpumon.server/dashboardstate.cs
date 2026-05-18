@@ -160,8 +160,8 @@ public sealed class ServerDashboardStateBuilder
             isLinux,
             true,
             !isLinux,
-            !isLinux,
-            !isLinux,
+            true,
+            true,
             !isLinux,
             cl.SendMode);
     }
