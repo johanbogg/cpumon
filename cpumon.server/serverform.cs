@@ -83,7 +83,7 @@ sealed class ServerForm : BorderlessForm
         var trayMenu = new ContextMenuStrip();
         trayMenu.Items.Add("Show", null, (_, _) => RestoreFromTray());
         trayMenu.Items.Add(new ToolStripSeparator());
-        trayMenu.Items.Add("Exit", null, (_, _) => { _exitRequested = true; Close(); });
+        trayMenu.Items.Add("Exit", null, (_, _) => ExitFromTray());
         _tray.ContextMenuStrip = trayMenu;
         _tray.DoubleClick += (_, _) => RestoreFromTray();
 
@@ -107,23 +107,7 @@ sealed class ServerForm : BorderlessForm
             }
         };
 
-        FormClosed += (_, _) =>
-        {
-            _tm.Stop(); _tm.Dispose();
-            _toolTip.Dispose();
-            _tray.Visible = false;
-            _tray.Dispose();
-            try { _web?.Dispose(); } catch { }
-            _engine.ProcessListReceived -= OnEngineProcessList;
-            _engine.SysInfoReceived -= OnEngineSysInfo;
-            _engine.ServicesReceived -= OnEngineServices;
-            _engine.EventsReceived -= OnEngineEvents;
-            _engine.CpuDetailReceived -= OnEngineCpuDetail;
-            _engine.ScreenshotReceived -= OnEngineScreenshot;
-            _engine.UpdateAvailable -= OnEngineUpdateAvailable;
-            _engine.ReleaseStaged -= OnEngineReleaseStaged;
-            _engine.Dispose();
-        };
+        FormClosed += (_, _) => Cleanup();
 
         Action? onTh = null;
         onTh = () => { if (!IsDisposed) BeginInvoke(() => { BackColor = Th.Bg; _ct.BackColor = Th.Bg; _ct.Invalidate(); }); };
@@ -141,6 +125,33 @@ sealed class ServerForm : BorderlessForm
             _trayBalloonShown = true;
             _tray.ShowBalloonTip(3000, "CPU Monitor Server", "Still running in the tray. Double-click to restore.", ToolTipIcon.Info);
         }
+    }
+
+    void ExitFromTray()
+    {
+        _exitRequested = true;
+        try { _tray.Visible = false; } catch { }
+        try { System.Diagnostics.Process.GetCurrentProcess().Kill(entireProcessTree: true); }
+        catch { Environment.Exit(0); }
+    }
+
+    void Cleanup()
+    {
+        try { _tm.Stop(); } catch { }
+        try { _tm.Dispose(); } catch { }
+        try { _toolTip.Dispose(); } catch { }
+        try { _tray.Visible = false; } catch { }
+        try { _tray.Dispose(); } catch { }
+        try { _web?.Dispose(); _web = null; } catch { }
+        _engine.ProcessListReceived -= OnEngineProcessList;
+        _engine.SysInfoReceived -= OnEngineSysInfo;
+        _engine.ServicesReceived -= OnEngineServices;
+        _engine.EventsReceived -= OnEngineEvents;
+        _engine.CpuDetailReceived -= OnEngineCpuDetail;
+        _engine.ScreenshotReceived -= OnEngineScreenshot;
+        _engine.UpdateAvailable -= OnEngineUpdateAvailable;
+        _engine.ReleaseStaged -= OnEngineReleaseStaged;
+        try { _engine.Dispose(); } catch { }
     }
 
     void RestoreFromTray()
