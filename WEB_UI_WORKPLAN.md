@@ -187,15 +187,25 @@ Verify:
 Suggested commit:
 - `feat: web UI shell with state push and core actions`.
 
-## Phase 4: Onboarding Bundle
+## Phase 4: HTTP Release Delivery (Onboarding Bundle + Staged Updates)
 
-Purpose: self-service client install via download link. Independent of Phases 5–7; could land any time after Phase 3.
+Purpose: serve release artifacts to clients over HTTPS — both for self-service onboarding (operator generates link → user installs) and for in-place updates (operator clicks "Update" → connected client pulls the staged release). Both endpoints share a signed-token helper. See `docs/web-ui/adr-006-update-delivery.md` for the update flow design.
+
+Independent of Phases 5–7; could land any time after Phase 3.
+
+### 4a — Shared signed-token + release-file serving
+
+Add:
+- `cpumon.server/releasetokens.cs` — HMAC-signed token helper. Tokens carry `{ purpose, machineName?, version?, asset?, expiresAt }`. HMAC key persisted alongside `cpumon.pfx`. Used by both 4b and 4c.
+- `cpumon.server/webrelease.cs` — file-serving helpers backed by `ReleaseStager`'s staged folder. Range support, content-type by extension, 404 when the requested version isn't staged yet.
+
+### 4b — Onboarding bundle
 
 Add:
 - `cpumon.server/onboardstore.cs` — `OnboardLinkStore`: one-time tokens (Base32, ~22 chars) with expiry (default 24h), optional machine-name binding, optional pre-minted auth key for zero-friction install (skips the pending-approval step).
 - `POST /api/onboard/generate` `{ machineName?, expiryHours?, preApprove? }` → `{ url, token, expiresAt }`.
 - `GET /onboard/:token` — serves a zip containing:
-  - `cpumon.client.exe` (or `cpumon.py` + `install.sh` for Linux variant)
+  - `cpumon.client.exe` (or `cpumon.py` + `install.sh` for Linux variant) — sourced from the latest staged release.
   - `config.json`: `{ serverHost, serverPort, certThumbprint, inviteToken | preApprovedAuthKey, machineName? }`
   - `README.txt` — install instructions
   - Single-use: token consumed on download (or after first agent connect, configurable).
@@ -208,17 +218,33 @@ Security notes:
 - Default expiry 24h, max 7 days.
 - Pre-approved bundles must include `machineName` binding (the auth key is keyed to that name via the existing `GenSalt`+`SHA256` derivation).
 
+### 4c — Staged update delivery (per ADR-006)
+
+Add:
+- `GET /updates/:version/:asset` — serves a file from `ReleaseStager`'s staged folder, gated by a short-lived signed token (HMAC over `{ machineName, version, asset, expiresAt }`, ~15 min expiry).
+- New protocol command `ServerCommand { Cmd = "update_fetch", FetchUrl, ExpectedSha256, AuthToken }`.
+- `ServerDashboardController.UpdateClient(machine)` — chooses fetch-based delivery when a staged release matches the client's OS; falls back to existing `PushUpdate` / `PushLinuxUpdate` chunk-stream for custom builds (file-picker path stays alive).
+- Windows client: handle `update_fetch` via `HttpClient` GET with cert thumbprint pin, SHA256 validation, then existing `CmdExec.Run` apply path.
+- Linux client: same flow via `urllib` from stdlib.
+- Web UI: per-card `Update` button (becomes `Update to vX.Y.Z ↑` orange when outdated); toolbar `Update selected (N)`. `Update with file…` secondary item preserves the chunk-stream path for custom builds.
+
 Tests:
-- `OnboardLinkExpires`.
-- `OnboardLinkSingleUse`.
-- `OnboardBundleContainsConfig`.
-- `ClientReadsConfigJsonOnFirstRun` — client unit test.
+- `OnboardLinkExpires`, `OnboardLinkSingleUse`, `OnboardBundleContainsConfig`, `ClientReadsConfigJsonOnFirstRun`.
+- `UpdateFetchTokenExpires`, `UpdateFetchRejectsWrongMachine`, `UpdateFetchRejectsWrongVersion`, `UpdateFetch404WhenNotStaged`.
+- `ControllerUpdateClientChoosesFetchWhenStaged`, `ControllerUpdateClientFallsBackToChunkStream`.
+- `ClientUpdateFetchValidatesSha256`, `ClientUpdateFetchValidatesCertThumbprint`.
 
 Verify:
-- Click "Generate install link" in web UI, paste URL into a fresh VM's browser, download, run installer, watch the client appear in the dashboard automatically.
+- Onboarding: click "Generate install link", paste URL into a fresh VM's browser, download, run installer, watch the client appear in the dashboard automatically.
+- Update: outdated client shows `Update to vX.Y.Z ↑`; clicking it completes without any file dialog and applies in roughly the time of a single HTTPS GET.
+- Fallback: `Update with file…` still works for custom builds.
 
-Suggested commit:
-- `feat: one-time onboarding bundle download`.
+Suggested commits:
+- `feat: HMAC signed token helper for release endpoints`
+- `feat: onboarding bundle download endpoint + web UI integration`
+- `feat: staged update fetch endpoint + update_fetch protocol command`
+- `feat: client-side update_fetch handler (Windows + Linux)`
+- `feat: web UI Update button uses staged release with file-picker fallback`
 
 ## Phase 5: Terminal In Browser
 
