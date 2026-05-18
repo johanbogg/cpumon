@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -97,6 +98,12 @@ internal static class Program
             TestPerClientExpandTogglesClientFlag();
             TestPerClientPawTogglesStoreFlag();
             TestPerClientMessageValidatesBody();
+            TestSnapshotEndpointsRequireAuth();
+            TestSnapshotReturns204AndTriggersFetchWhenEmpty();
+            TestSnapshotReturnsCachedAndDoesNotTriggerWhenFresh();
+            TestSnapshotTriggersFetchWhenStale();
+            TestSnapshotForceBypassesTtl();
+            TestSnapshotHealthDerivesFromReportWithoutTriggering();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -1321,6 +1328,95 @@ internal static class Program
         Assert(h.Body(ghost).Contains("\"error\":\"not_found\""), "unknown machine error should be not_found");
     }
 
+    static readonly string[] SnapshotPaths =
+    {
+        "/api/clients/box/processes",
+        "/api/clients/box/sysinfo",
+        "/api/clients/box/services",
+        "/api/clients/box/events",
+        "/api/clients/box/cpu-detail",
+        "/api/clients/box/health",
+    };
+
+    static void TestSnapshotEndpointsRequireAuth()
+    {
+        using var h = new WebApiTestHost();
+        foreach (var path in SnapshotPaths)
+        {
+            using var resp = h.Get(path);
+            Assert((int)resp.StatusCode == 401, $"GET {path} without auth should return 401");
+            Assert(h.Body(resp).Contains("\"error\":\"auth_required\""), $"GET {path} should report auth_required");
+        }
+    }
+
+    static void TestSnapshotReturns204AndTriggersFetchWhenEmpty()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        Assert(h.Snapshots.TriggeredAt("box", SnapshotKind.Processes) == null, "no fetch should be recorded yet");
+        using var resp = h.Get("/api/clients/box/processes");
+        Assert((int)resp.StatusCode == 204, "empty snapshot should return 204");
+        Assert(h.Snapshots.TriggeredAt("box", SnapshotKind.Processes) != null, "empty snapshot GET should trigger a fetch");
+    }
+
+    static void TestSnapshotReturnsCachedAndDoesNotTriggerWhenFresh()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        var client = AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        client.LastProcessList = new List<ProcessInfo> { new() { Pid = 42, Name = "explorer.exe" } };
+        h.Snapshots.MarkReceivedAt("box", SnapshotKind.Processes, DateTime.UtcNow.AddSeconds(-1));
+        using var resp = h.Get("/api/clients/box/processes");
+        Assert((int)resp.StatusCode == 200, "fresh snapshot should return 200");
+        var body = h.Body(resp);
+        Assert(body.Contains("\"pid\":42"), "response should contain the cached process entry");
+        Assert(body.Contains("\"snapshot\":"), "response should wrap the payload under snapshot");
+        Assert(body.Contains("\"receivedAt\":"), "response should include receivedAt");
+        Assert(h.Snapshots.TriggeredAt("box", SnapshotKind.Processes) == null, "fresh snapshot should not trigger fetch");
+    }
+
+    static void TestSnapshotTriggersFetchWhenStale()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        var client = AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        client.LastServiceList = new List<ServiceInfo> { new() { Name = "spooler", Status = "Running" } };
+        h.Snapshots.MarkReceivedAt("box", SnapshotKind.Services, DateTime.UtcNow.AddSeconds(-30));
+        using var resp = h.Get("/api/clients/box/services");
+        Assert((int)resp.StatusCode == 200, "stale snapshot should still return cached body with 200");
+        Assert(h.Body(resp).Contains("\"n\":\"spooler\""), "response should contain cached service entry");
+        Assert(h.Snapshots.TriggeredAt("box", SnapshotKind.Services) != null, "stale snapshot GET should trigger a fetch");
+    }
+
+    static void TestSnapshotForceBypassesTtl()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        var client = AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        client.LastSysInfo = new SystemInfoReport { Hostname = "box" };
+        h.Snapshots.MarkReceivedAt("box", SnapshotKind.SysInfo, DateTime.UtcNow);
+        Assert(!h.Snapshots.IsStale("box", SnapshotKind.SysInfo), "snapshot should be fresh before force");
+        using var resp = h.Get("/api/clients/box/sysinfo?force=true");
+        Assert((int)resp.StatusCode == 200, "force=true should still return cached body");
+        Assert(h.Snapshots.TriggeredAt("box", SnapshotKind.SysInfo) != null, "force=true should trigger fetch despite fresh cache");
+    }
+
+    static void TestSnapshotHealthDerivesFromReportWithoutTriggering()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        using var resp = h.Get("/api/clients/box/health");
+        Assert((int)resp.StatusCode == 200, "health should return 200 with a connected client");
+        var body = h.Body(resp);
+        Assert(body.Contains("\"machineName\":\"box\""), "health response should echo machine name");
+        Assert(body.Contains("\"hasReport\":true"), "health should reflect a present report");
+        Assert(body.Contains("\"ramTotalGB\":8"), "health should expose ram from latest report");
+        foreach (var kind in new[] { SnapshotKind.Processes, SnapshotKind.SysInfo, SnapshotKind.Services, SnapshotKind.Events, SnapshotKind.CpuDetail })
+            Assert(h.Snapshots.TriggeredAt("box", kind) == null, $"health GET must not trigger a fetch for {kind}");
+    }
+
     sealed class WebApiTestHost : IDisposable
     {
         public WebHost                   Host       { get; }
@@ -1331,6 +1427,7 @@ internal static class Program
         public RateLimiter               RateLimit  { get; }
         public ServerEngine              Engine     { get; }
         public ServerDashboardController Controller { get; }
+        public SnapshotCache             Snapshots  { get; }
         readonly TempDir _td;
         readonly CookieContainer _cookies;
 
@@ -1343,6 +1440,7 @@ internal static class Program
             RateLimit  = new RateLimiter();
             Engine     = new ServerEngine(noBroadcast: true);
             Controller = new ServerDashboardController(Engine, new FakeServerPlatformServices());
+            Snapshots  = new SnapshotCache(Engine);
             Host       = new WebHost();
             Host.StartAsync(new WebHostOptions
             {
@@ -1352,6 +1450,7 @@ internal static class Program
                     WebAuthApi.Map(app, Operators, Sessions, Bootstrap, RateLimit, ctx);
                     WebDashboardApi.Map(app, Engine, Controller, Sessions, ctx);
                     WebClientActionsApi.Map(app, Engine, Controller, Sessions, ctx);
+                    WebSnapshotApi.Map(app, Engine, Snapshots, Sessions, ctx);
                 }
             }).GetAwaiter().GetResult();
             _cookies = new CookieContainer();
@@ -1394,6 +1493,7 @@ internal static class Program
         {
             Client.Dispose();
             Host.DisposeAsync().GetAwaiter().GetResult();
+            Snapshots.Dispose();
             Sessions.Dispose();
             Bootstrap.Dispose();
             _td.Dispose();
@@ -1406,6 +1506,16 @@ internal static class Program
         client.LastSeen = DateTime.UtcNow;
         client.ClientVersion = Proto.AppVersion;
         client.SendMode = "full";
+        // Hydrate just enough readonly state so engine RequestX paths can lock,
+        // serialize, and Send into a sink. Tests that observe "fetch triggered"
+        // rely on Send completing without throwing — a disconnected real client
+        // would queue or drop the cmd, never throw an unhandled exception.
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var t = typeof(RemoteClient);
+        t.GetField("_wl",        flags)!.SetValue(client, new object());
+        t.GetField("PendingCmds", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)!
+            .SetValue(client, new ConcurrentQueue<ServerCommand>());
+        t.GetField("_wr",        flags)!.SetValue(client, new StreamWriter(Stream.Null, new UTF8Encoding(false)) { AutoFlush = true });
         return client;
     }
 
