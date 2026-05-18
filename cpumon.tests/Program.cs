@@ -1011,7 +1011,9 @@ internal static class Program
             Assert(GetHeader(resp, "X-Content-Type-Options") == "nosniff", "X-Content-Type-Options should be nosniff");
             Assert(GetHeader(resp, "X-Frame-Options") == "DENY", "X-Frame-Options should be DENY");
             Assert(GetHeader(resp, "Referrer-Policy") == "no-referrer", "Referrer-Policy should be no-referrer");
-            Assert(GetHeader(resp, "Content-Security-Policy").Contains("default-src 'self'"), "CSP should restrict default-src to self");
+            var csp = GetHeader(resp, "Content-Security-Policy");
+            Assert(csp.Contains("default-src 'self'"), "CSP should restrict default-src to self");
+            Assert(csp.Contains("script-src 'self' 'unsafe-inline'"), "script-src must allow inline so /setup's bootstrap form works; tighten with nonces in Phase 3");
             Assert(GetHeader(resp, "Server") == "cpumon/hdrtest", "Server header should embed ServerVersion");
             Assert(GetHeader(resp, "Strict-Transport-Security") == "", "HSTS must NOT be set in plain-HTTP mode");
         }
@@ -1430,7 +1432,9 @@ internal static class Program
         var formBody = h.Body(withToken);
         Assert(formBody.Contains("<form"), "token branch should render the form");
         Assert(formBody.Contains("value=\"ABCDEF1234567890\""), "form should embed the supplied bootstrap token");
-        Assert(formBody.Contains("/api/auth/bootstrap"), "form should POST to /api/auth/bootstrap");
+        Assert(formBody.Contains("method=\"post\""), "form must POST so a no-JS fallback can't leak credentials into a URL");
+        Assert(formBody.Contains("action=\"/api/auth/bootstrap\""), "form action must target the bootstrap endpoint, not the current URL");
+        Assert(formBody.Contains("autocomplete=\"off\""), "form should opt out of browser autofill");
 
         h.Operators.Create("admin", "correctpassword12");
         using var done = h.Get("/setup?t=ABCDEF1234567890");

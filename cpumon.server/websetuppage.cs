@@ -17,8 +17,13 @@ public static class WebSetupPage
                 "<p>Open the one-time URL printed by the server console (or the modal dialog) — it carries the <code>?t=…</code> parameter required to create the operator account.</p>");
 
         var tok = WebUtility.HtmlEncode(token);
+        // method=post + action=/api/auth/bootstrap is the defence against the inline JS
+        // failing for any reason (CSP, disabled scripts, syntax error). Without it the
+        // browser falls back to GET-to-current-URL and the password ends up in the address
+        // bar + history. The bootstrap endpoint will reject form-encoded bodies (it wants
+        // JSON), but the password never reaches a URL.
         return Wrap("First-run setup", $@"
-<form id=""f"">
+<form id=""f"" method=""post"" action=""/api/auth/bootstrap"" autocomplete=""off"">
   <input type=""hidden"" name=""bootstrapToken"" value=""{tok}"">
   <label>Username
     <input name=""username"" required minlength=""3"" maxlength=""32"" pattern=""[A-Za-z0-9_\-]+"" autocomplete=""username"" autofocus>
@@ -28,6 +33,7 @@ public static class WebSetupPage
   </label>
   <button type=""submit"">Create operator account</button>
   <p id=""msg"" class=""msg""></p>
+  <p class=""msg dim"">JavaScript is required to complete setup; without it the POST will return 400 but no credentials leak to a URL.</p>
 </form>
 <script>
 document.getElementById('f').addEventListener('submit', async (ev) => {{
@@ -83,6 +89,7 @@ document.getElementById('f').addEventListener('submit', async (ev) => {{
   .msg {{ margin-top:14px; min-height:1.4em; font-size:13px; }}
   .msg.ok  {{ color:#50dc8c; }}
   .msg.err {{ color:#ff5050; }}
+  .msg.dim {{ color:#8c8c9b; font-size:11px; margin-top:18px; }}
   code {{ background:#121216; padding:2px 5px; border-radius:3px; color:#ffdc50; font-size:13px; }}
 </style>
 </head><body><main>

@@ -94,7 +94,11 @@ public sealed class WebHost : IAsyncDisposable
                 h["X-Content-Type-Options"] = "nosniff";
                 h["X-Frame-Options"]        = "DENY";
                 h["Referrer-Policy"]        = "no-referrer";
-                h["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'";
+                // 'unsafe-inline' on script-src is here only so the /setup page's bootstrap form
+                // can run its inline submit handler. Phase 3 will replace this with per-request
+                // nonces once the SPA assets land and inline script becomes the exception, not
+                // the rule.
+                h["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'";
                 if (options.UseTls)
                     h["Strict-Transport-Security"] = "max-age=31536000";
                 h["Server"] = $"cpumon/{options.ServerVersion}";
