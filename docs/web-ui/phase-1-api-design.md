@@ -30,22 +30,29 @@ This doc nails down the API surface, auth model, error shape, and edge cases. On
 
 ## 2. Bootstrap (first-run)
 
-The operator account is provisioned via a one-time URL printed to the server log and the WinForms log pane.
+The operator account is provisioned via a one-time URL **surfaced ephemerally** at startup — not logged, not written to disk, not persisted anywhere.
 
 ### Flow
 
 1. `--web` mode boots and `operator.json` is missing.
 2. Server generates a 22-char Base32 bootstrap token, valid for 10 minutes, single-use, kept in memory only.
-3. Server writes a single log line at info level:
-   ```
-   * Web UI: open https://<host>:47202/setup?t=BOOTSTRAP-TOKEN to set the initial operator password (valid 10 min)
-   ```
+3. Server surfaces the URL through `IServerPlatformServices.ShowBootstrapUrl(url)`:
+   - **WinForms host**: one-shot modal dialog with the URL and a Copy button. Operator dismisses after copying. A "Show setup URL" button remains in the WinForms log pane area while the token is alive so a dismissed dialog can be re-summoned.
+   - **Headless / Linux daemon (Phase 9)**: print to stdout (`* Web UI setup: https://<host>:47202/setup?t=… (valid 10 min)`) and stderr. No file written.
+   - Either way, the **standard log file (CLog jsonl) never sees the token**. A redacted entry is written: `Web UI: bootstrap token issued (expires 14:12:18)` — useful for audit, leaks nothing.
 4. Operator opens the URL. Server serves a minimal HTML form (no SPA assets needed yet — Phase 3 adds those).
 5. Operator submits `POST /api/auth/bootstrap` with `{ username, password, bootstrapToken }`. Constraints:
    - username: 3–32 chars, `[A-Za-z0-9_-]`
    - password: 12+ chars, no other complexity rule (argon2id is the moat)
-6. Server validates token, hashes password (argon2id m=64MiB, t=3, p=1), writes `%ProgramData%\CpuMon\operator.json` atomically (`.tmp` + `File.Move(overwrite:true)`), invalidates the bootstrap token, issues a session cookie, returns 200.
+6. Server validates token, hashes password (argon2id m=64MiB, t=3, p=1), writes `%ProgramData%\CpuMon\operator.json` atomically (`.tmp` + `File.Move(overwrite:true)`), invalidates the bootstrap token, issues a session cookie, returns 200. Logs `Web UI: operator created (<username>)` — name, not credentials.
 7. Subsequent runs skip bootstrap because `operator.json` exists.
+
+### Token lifecycle
+
+- Held only in `WebAuth._activeBootstrap`, cleared on consume or expiry.
+- If the server restarts before consumption, a new token is generated and re-surfaced through `ShowBootstrapUrl`.
+- The 10-minute expiry timer is a `Timer` callback that clears the in-memory slot and updates the UI ("Setup URL expired — restart to regenerate").
+- No filesystem footprint at any point.
 
 ### `operator.json` shape
 
@@ -301,6 +308,12 @@ The controller's platform-services dependency is non-null (per Phase 3c-5). For 
 | `ShowTerminal` / `ShowFileBrowser` / `ShowRdp`         | no-op; Phase 5–7 handle these as WS endpoints         |
 | `PromptUserMessage`          | throw — message endpoint accepts `{ text }` directly                     |
 
+New method added to `IServerPlatformServices` for Phase 1:
+
+| method                                   | WinForms impl                                                        | Web/headless impl                                       |
+|------------------------------------------|----------------------------------------------------------------------|---------------------------------------------------------|
+| `ShowBootstrapUrl(string url, DateTime expiresAt)` | Modal dialog with URL + Copy button + expiry countdown; "Show setup URL" button stays in the log pane until consumed/expired | Print to stdout+stderr; no-op for `WebPlatformServices` (not its job — only the original host UI surfaces this) |
+
 Phase 1 routes don't go through the platform-services facade for the operations that would prompt — `POST /api/clients/:machine/restart` calls the engine's `RequestRestart` directly (the controller's `RestartClient` exists for UI flows that need a Confirm dialog; web doesn't). Controller methods that don't touch platform services (selection, filters, approve, regenerate) are wrapped as-is.
 
 This means the controller surface that the web API uses is roughly: the engine's existing public methods + selection/filter state on the controller. The "platform-confirms-then-engine-acts" pattern collapses to "endpoint-validates-then-engine-acts."
@@ -333,8 +346,8 @@ No config file in Phase 1; flags only. A `webconfig.json` may follow later if th
 ## 11. Logging
 
 - All HTTP requests logged to the existing `CLog` with structured fields: method, path, status, duration, remoteIp, user (if authenticated), session prefix.
-- Sensitive values redacted: passwords never logged; tokens shown as `A7K2****`; cookies never logged; bootstrap tokens shown as `BOOT****`.
-- The setup URL log line for first-run bootstrap is the **one exception** — it must contain the full token because that's its purpose. Documented in ADR-002.
+- Sensitive values redacted: passwords never logged; agent tokens shown as `A7K2****`; cookies never logged.
+- Bootstrap tokens **never appear in any log** (file or in-memory). Issuance and consumption are logged by event only: `Web UI: bootstrap token issued (expires 14:12:18)`, `Web UI: operator created (admin)`. The full URL is surfaced via `IServerPlatformServices.ShowBootstrapUrl` instead — modal dialog (WinForms) or stdout/stderr (headless). See §2.
 
 ---
 
@@ -343,7 +356,7 @@ No config file in Phase 1; flags only. A `webconfig.json` may follow later if th
 After this doc is accepted, code lands in the following order. Each is its own commit with a "Verify:" line.
 
 1. `cpumon.server.csproj`: add `<FrameworkReference Include="Microsoft.AspNetCore.App" />`, `<PackageReference Include="Konscious.Security.Cryptography.Argon2" />`. Verify: `build.ps1 -ServerOnly` still green.
-2. `webauth.cs`: argon2id helper, `OperatorStore` (load/save `operator.json`), bootstrap-token issuer, password verify. Tests: 6 around store roundtrip, bootstrap-token expiry, password verify. Verify: tests pass.
+2. `webauth.cs`: argon2id helper, `OperatorStore` (load/save `operator.json`), bootstrap-token issuer (in-memory only, expiry timer), password verify. Tests: 6 around store roundtrip, bootstrap-token expiry, single-use consumption, password verify. Verify: tests pass.
 3. `websessions.cs`: `SessionStore` (in-memory), CSRF token issuance, sliding expiry, background pruning timer. Tests: 5 (issue, validate, expire, touch-refresh, prune-removes-expired). Verify: tests pass.
 4. `webhost.cs`: Kestrel scaffold, TLS load, security-header middleware, start/stop. Tests: 2 (binds and stops cleanly). Verify: `--web` flag starts, `curl https://localhost:47202/api/healthz -k` returns 200.
 5. Auth endpoints (`/api/auth/*`) + rate limiter. Tests: 8. Verify: end-to-end login + whoami via `curl`.
@@ -352,7 +365,8 @@ After this doc is accepted, code lands in the following order. Each is its own c
 8. Snapshot GET endpoints (processes, sysinfo, services, events, cpu-detail, health) + engine snapshot cache with per-endpoint TTL + auto-trigger-on-stale. Tests: 6 (returns-cached, triggers-fetch-when-stale, respects-TTL-window, force-bypasses-TTL, 204-when-empty, health-no-trigger).
 9. Offline / approved / alerts endpoints. Tests: 6.
 10. Log endpoint. Tests: 2.
-11. `WebPlatformServices` stub + `--web` flag wiring in `program.cs`. Tests: smoke. Verify: server starts in `--web` mode with WinForms UI still functional; full manual sweep per Phase 1 verify in workplan.
+11. `IServerPlatformServices.ShowBootstrapUrl` interface method + WinForms modal dialog impl + stdout fallback for `WebPlatformServices` / headless. Tests: 2 (dialog shown when operator missing, not shown when operator exists). Verify: first run pops the modal; second run goes straight to login.
+12. `WebPlatformServices` stub + `--web` flag wiring in `program.cs`. Tests: smoke. Verify: server starts in `--web` mode with WinForms UI still functional; full manual sweep per Phase 1 verify in workplan.
 
 Total: ~11 commits, target 30–60 mins of review each. Tests count ~45 added.
 

@@ -24,7 +24,7 @@ Requirements:
   { "username": "admin", "passwordHash": "<argon2id>", "passwordSalt": "<base64>" }
   ```
   Use **argon2id** (via `Konscious.Security.Cryptography` or equivalent) with sensible defaults (m=64 MiB, t=3, p=1).
-- First-run bootstrap: if `operator.json` is missing, the server prints a one-time setup URL to the log on startup containing a short-lived token; visiting it lets the operator set the initial password. No default credentials.
+- First-run bootstrap: if `operator.json` is missing, the server surfaces a one-time setup URL through `IServerPlatformServices.ShowBootstrapUrl` — modal dialog in the WinForms host, stdout/stderr in headless mode. The URL **never appears in the log file** (only a redacted "bootstrap token issued" event). Token lives in memory only, single-use, 10-minute expiry. See `docs/web-ui/phase-1-api-design.md` §2 for the full flow.
 - `POST /api/auth/login { username, password }` → sets `cpumon_session` cookie:
   - `HttpOnly`
   - `Secure` (only over HTTPS)
@@ -47,7 +47,7 @@ Requirements:
 
 - One operator account, set during first-run bootstrap. Multi-operator support deferred (would need a real user table, role checks, audit log).
 - Password reset = delete `operator.json` and rebootstrap. Acceptable for a personal tool.
-- The setup URL printed at first run is a sensitive log line; document that the log shouldn't be shipped to third parties.
+- The setup URL is **never logged or persisted** — surfaced ephemerally via `ShowBootstrapUrl` (WinForms modal / stdout). Reduces blast radius if logs are exfiltrated during the bootstrap window.
 - Argon2id keeps the dependency surface small (one nuget) and gives memory-hard resistance without ceremony.
 - If the operator wants stronger auth later, TOTP (`Otp.NET`) can be layered in via a `POST /api/auth/totp` step before issuing the session cookie. The cookie shape doesn't change.
 - WebSocket auth via cookie is simple but means the WS connection inherits the session — explicit close-on-logout is required in the host.
