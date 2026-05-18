@@ -89,6 +89,14 @@ internal static class Program
             TestDashboardFilterOsSetsValue();
             TestDashboardFilterRequiresCsrf();
             TestDashboardTokenRegenerateChangesToken();
+            TestPerClientActionsRequireAuth();
+            TestPerClientActionsRequireCsrf();
+            TestPerClientRestartReturns404ForUnknownMachine();
+            TestPerClientShutdownReturns404ForUnknownMachine();
+            TestPerClientForgetReturns404ForUnknownMachine();
+            TestPerClientExpandTogglesClientFlag();
+            TestPerClientPawTogglesStoreFlag();
+            TestPerClientMessageValidatesBody();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -1204,6 +1212,115 @@ internal static class Program
         Assert(h.Body(resp).Contains($"\"token\":\"{h.Engine.Token}\""), "response should echo new token");
     }
 
+    static readonly (string Path, bool HasBody)[] PerClientActionPaths =
+    {
+        ("/api/clients/box/restart",    false),
+        ("/api/clients/box/shutdown",   false),
+        ("/api/clients/box/forget",     false),
+        ("/api/clients/box/paw",        false),
+        ("/api/clients/box/message",    true),
+        ("/api/clients/box/screenshot", false),
+        ("/api/clients/box/expand",     false),
+    };
+
+    static void TestPerClientActionsRequireAuth()
+    {
+        using var h = new WebApiTestHost();
+        foreach (var (path, hasBody) in PerClientActionPaths)
+        {
+            using var resp = h.Post(path, body: hasBody ? new { text = "hi" } : null);
+            Assert((int)resp.StatusCode == 401, $"POST {path} without auth should return 401");
+            Assert(h.Body(resp).Contains("\"error\":\"auth_required\""), $"POST {path} should report auth_required");
+        }
+    }
+
+    static void TestPerClientActionsRequireCsrf()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        foreach (var (path, hasBody) in PerClientActionPaths)
+        {
+            using var resp = h.Post(path, body: hasBody ? new { text = "hi" } : null, csrfHeader: null);
+            Assert((int)resp.StatusCode == 403, $"POST {path} without csrf should return 403");
+            Assert(h.Body(resp).Contains("\"error\":\"csrf_failed\""), $"POST {path} should report csrf_failed");
+        }
+    }
+
+    static void TestPerClientRestartReturns404ForUnknownMachine()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var resp = h.Post("/api/clients/ghost/restart", body: null, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 404, "restart on unknown machine should return 404");
+        Assert(h.Body(resp).Contains("\"error\":\"not_found\""), "error code should be not_found");
+    }
+
+    static void TestPerClientShutdownReturns404ForUnknownMachine()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var resp = h.Post("/api/clients/ghost/shutdown", body: null, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 404, "shutdown on unknown machine should return 404");
+        Assert(h.Body(resp).Contains("\"error\":\"not_found\""), "error code should be not_found");
+    }
+
+    static void TestPerClientForgetReturns404ForUnknownMachine()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var resp = h.Post("/api/clients/ghost/forget", body: null, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 404, "forget on unknown machine should return 404");
+        Assert(h.Body(resp).Contains("\"error\":\"not_found\""), "error code should be not_found");
+    }
+
+    static void TestPerClientExpandTogglesClientFlag()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        var client = AddReportedClient(h.Engine, "win-box", "Microsoft Windows 11", Proto.AppVersion);
+        Assert(!client.Expanded, "expanded should start false");
+        using var r1 = h.Post("/api/clients/win-box/expand", body: null, csrfHeader: h.Csrf);
+        Assert((int)r1.StatusCode == 200, "expand should return 200");
+        Assert(client.Expanded, "expand should flip the client expanded flag on");
+        Assert(h.Body(r1).Contains("\"expanded\":true"), "response should echo expanded=true");
+        using var r2 = h.Post("/api/clients/win-box/expand", body: null, csrfHeader: h.Csrf);
+        Assert((int)r2.StatusCode == 200, "second expand should return 200");
+        Assert(!client.Expanded, "expand should flip the client expanded flag off");
+        Assert(h.Body(r2).Contains("\"expanded\":false"), "response should echo expanded=false");
+    }
+
+    static void TestPerClientPawTogglesStoreFlag()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "paw-box", "Microsoft Windows 11", Proto.AppVersion);
+        h.Engine.Store.Approve("paw-box", "k", "127.0.0.1");
+        Assert(!h.Engine.Store.IsPaw("paw-box"), "paw should start false");
+        using var r1 = h.Post("/api/clients/paw-box/paw", body: null, csrfHeader: h.Csrf);
+        Assert((int)r1.StatusCode == 200, "paw should return 200");
+        Assert(h.Engine.Store.IsPaw("paw-box"), "paw flag should flip on");
+        Assert(h.Body(r1).Contains("\"isPaw\":true"), "response should echo isPaw=true");
+        using var r2 = h.Post("/api/clients/paw-box/paw", body: null, csrfHeader: h.Csrf);
+        Assert((int)r2.StatusCode == 200, "second paw should return 200");
+        Assert(!h.Engine.Store.IsPaw("paw-box"), "paw flag should flip off");
+        Assert(h.Body(r2).Contains("\"isPaw\":false"), "response should echo isPaw=false");
+    }
+
+    static void TestPerClientMessageValidatesBody()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var blank = h.Post("/api/clients/box/message", new { text = "" }, csrfHeader: h.Csrf);
+        Assert((int)blank.StatusCode == 400, "blank message body should return 400");
+        Assert(h.Body(blank).Contains("\"error\":\"validation_failed\""), "blank message error should be validation_failed");
+        using var oversized = h.Post("/api/clients/box/message", new { text = new string('x', 501) }, csrfHeader: h.Csrf);
+        Assert((int)oversized.StatusCode == 400, "oversized message body should return 400");
+        Assert(h.Body(oversized).Contains("\"error\":\"validation_failed\""), "oversized message error should be validation_failed");
+        using var ghost = h.Post("/api/clients/ghost/message", new { text = "hi" }, csrfHeader: h.Csrf);
+        Assert((int)ghost.StatusCode == 404, "message to unknown machine should return 404");
+        Assert(h.Body(ghost).Contains("\"error\":\"not_found\""), "unknown machine error should be not_found");
+    }
+
     sealed class WebApiTestHost : IDisposable
     {
         public WebHost                   Host       { get; }
@@ -1234,6 +1351,7 @@ internal static class Program
                 {
                     WebAuthApi.Map(app, Operators, Sessions, Bootstrap, RateLimit, ctx);
                     WebDashboardApi.Map(app, Engine, Controller, Sessions, ctx);
+                    WebClientActionsApi.Map(app, Engine, Controller, Sessions, ctx);
                 }
             }).GetAwaiter().GetResult();
             _cookies = new CookieContainer();
