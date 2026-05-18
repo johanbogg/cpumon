@@ -32,8 +32,12 @@ sealed class ServerForm2 : Form
     string? _selectedPending;
     string _lastActionKey = "";
 
-    public ServerForm2(bool noBroadcast)
+    readonly WebStartupOptions? _webOpts;
+    WebStartup? _web;
+
+    public ServerForm2(bool noBroadcast, WebStartupOptions? webOpts = null)
     {
+        _webOpts = webOpts;
         Text = $"CPU Monitor — Server (NEW UI)  v{Proto.AppVersion}";
         ClientSize = new Size(1100, 720);
         MinimumSize = new Size(820, 520);
@@ -54,8 +58,23 @@ sealed class ServerForm2 : Form
         _tm = new Timer { Interval = 500 };
         _tm.Tick += (_, _) => Refresh();
 
-        Load += (_, _) => { _engine.Start(); _tm.Start(); Refresh(); };
-        FormClosed += (_, _) => { _tm.Stop(); _tm.Dispose(); _engine.Dispose(); };
+        Load += (_, _) =>
+        {
+            _engine.Start();
+            _tm.Start();
+            Refresh();
+            if (_webOpts != null)
+            {
+                try { _web = WebStartup.StartAsync(_engine, _dashboard, _platform, _webOpts).GetAwaiter().GetResult(); }
+                catch (Exception ex) { _engine.Log.Add($"Web UI failed to start: {ex.Message}", Th.Red); }
+            }
+        };
+        FormClosed += (_, _) =>
+        {
+            _tm.Stop(); _tm.Dispose();
+            try { _web?.Dispose(); } catch { }
+            _engine.Dispose();
+        };
     }
 
     void BuildLayout()

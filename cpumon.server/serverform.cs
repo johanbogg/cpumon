@@ -15,6 +15,8 @@ sealed class ServerForm : BorderlessForm
     readonly Timer _tm;
     readonly ToolTip _toolTip = new();
     readonly NotifyIcon _tray;
+    readonly WebStartupOptions? _webOpts;
+    WebStartup? _web;
     bool _exitRequested;
     bool _trayBalloonShown;
     int _sy, _contentH;
@@ -26,9 +28,10 @@ sealed class ServerForm : BorderlessForm
     readonly List<(Rectangle R, string M, string A)> _btns = new();
     string _currentToolTip = "";
 
-    public ServerForm(bool noBroadcast)
+    public ServerForm(bool noBroadcast, WebStartupOptions? webOpts = null)
     {
         _engine = new ServerEngine(noBroadcast);
+        _webOpts = webOpts;
 
         Text = $"CPU Monitor — Server  v{Proto.AppVersion}";
         StartPosition = FormStartPosition.Manual;
@@ -93,7 +96,16 @@ sealed class ServerForm : BorderlessForm
             }
         };
 
-        Load += (_, _) => { _engine.Start(); _tm.Start(); };
+        Load += (_, _) =>
+        {
+            _engine.Start();
+            _tm.Start();
+            if (_webOpts != null)
+            {
+                try { _web = WebStartup.StartAsync(_engine, _dashboard, _platform, _webOpts).GetAwaiter().GetResult(); }
+                catch (Exception ex) { _engine.Log.Add($"Web UI failed to start: {ex.Message}", Th.Red); }
+            }
+        };
 
         FormClosed += (_, _) =>
         {
@@ -101,6 +113,7 @@ sealed class ServerForm : BorderlessForm
             _toolTip.Dispose();
             _tray.Visible = false;
             _tray.Dispose();
+            try { _web?.Dispose(); } catch { }
             _engine.ProcessListReceived -= OnEngineProcessList;
             _engine.SysInfoReceived -= OnEngineSysInfo;
             _engine.ServicesReceived -= OnEngineServices;

@@ -119,6 +119,8 @@ internal static class Program
             TestLogSinceAndLimitFilterEntries();
             TestWebBootstrapIssuesAndShowsWhenOperatorMissing();
             TestWebBootstrapSkippedWhenOperatorExists();
+            TestWebStartupComposesAllRoutesAndSurfacesBootstrapUrl();
+            TestWebPlatformServicesShowBootstrapUrlPrintsToStdout();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -1410,6 +1412,62 @@ internal static class Program
         using var ok = h.Post("/api/offline/box/mac", new { mac = "AA:BB:CC:DD:EE:FF" }, csrfHeader: h.Csrf);
         Assert((int)ok.StatusCode == 204, "valid mac should return 204");
         Assert(h.Engine.Store.GetMac("box") == "AA:BB:CC:DD:EE:FF", "mac should be persisted");
+    }
+
+    static void TestWebStartupComposesAllRoutesAndSurfacesBootstrapUrl()
+    {
+        using var td = new TempDir();
+        using var engine = new ServerEngine(noBroadcast: true,
+            store: new ApprovedClientStore(Path.Combine(td.Path, "approved.json")),
+            alerts: new AlertService(new CLog(), Path.Combine(td.Path, "alerts.json")));
+        var platform = new FakeServerPlatformServices();
+        var controller = new ServerDashboardController(engine, platform);
+        var opts = new WebStartupOptions
+        {
+            Port         = 0,
+            UseTls       = false,
+            BindAddress  = "127.0.0.1",
+            OperatorPath = Path.Combine(td.Path, "operator.json"),
+        };
+        using var web = WebStartup.StartAsync(engine, controller, platform, opts).GetAwaiter().GetResult();
+        Assert(web.Host.IsRunning, "WebStartup should leave the host running");
+        Assert(web.Host.Port > 0, "WebHost should bind to an OS-picked port");
+        Assert(platform.ShowBootstrapUrlCalls.Count == 1, "first-run with no operator should surface bootstrap URL");
+        Assert(platform.ShowBootstrapUrlCalls[0].Url.Contains($":{web.Host.Port}/setup?t="), "bootstrap URL should embed the bound port");
+        Assert(web.Bootstrap.IsActive, "bootstrap issuer should hold an active token after startup");
+
+        using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{web.Host.Port}") };
+        using var healthz = http.GetAsync("/api/healthz").GetAwaiter().GetResult();
+        Assert((int)healthz.StatusCode == 200, "/api/healthz should be reachable through the composed host");
+        using var state = http.GetAsync("/api/state").GetAwaiter().GetResult();
+        Assert((int)state.StatusCode == 401, "/api/state should require auth and respond through the composed dashboard route");
+        using var approved = http.GetAsync("/api/approved").GetAwaiter().GetResult();
+        Assert((int)approved.StatusCode == 401, "/api/approved should be wired and require auth");
+        using var alerts = http.GetAsync("/api/alerts").GetAwaiter().GetResult();
+        Assert((int)alerts.StatusCode == 401, "/api/alerts should be wired and require auth");
+        using var log = http.GetAsync("/api/log").GetAwaiter().GetResult();
+        Assert((int)log.StatusCode == 401, "/api/log should be wired and require auth");
+    }
+
+    static void TestWebPlatformServicesShowBootstrapUrlPrintsToStdout()
+    {
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        var outSink = new System.IO.StringWriter();
+        var errSink = new System.IO.StringWriter();
+        try
+        {
+            Console.SetOut(outSink);
+            Console.SetError(errSink);
+            new WebPlatformServices().ShowBootstrapUrl("https://localhost:47202/setup?t=ABC", DateTime.UtcNow.AddMinutes(10));
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+        }
+        Assert(outSink.ToString().Contains("https://localhost:47202/setup?t=ABC"), "stub should print URL to stdout");
+        Assert(errSink.ToString().Contains("https://localhost:47202/setup?t=ABC"), "stub should also print URL to stderr");
     }
 
     static void TestWebBootstrapIssuesAndShowsWhenOperatorMissing()
