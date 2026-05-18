@@ -4,28 +4,6 @@ using System.Linq;
 
 public enum DashboardConfirmKind { Question, Warning }
 
-public sealed class DashboardMessageBoxRequest
-{
-    public string Message { get; init; } = "";
-    public string Title { get; init; } = "Confirm";
-    public DashboardConfirmKind Kind { get; init; } = DashboardConfirmKind.Question;
-    public Action OnConfirm { get; init; } = static () => { };
-}
-
-public sealed class DashboardPromptRequest
-{
-    public string Title { get; init; } = "";
-    public string Label { get; init; } = "";
-    public Action<string> OnSubmit { get; init; } = static _ => { };
-}
-
-public sealed class DashboardFilePickerRequest
-{
-    public string Title { get; init; } = "";
-    public string Filter { get; init; } = "";
-    public Action<string> OnFileSelected { get; init; } = static _ => { };
-}
-
 public sealed class DashboardDialogRequest
 {
     public string Kind { get; init; } = "";
@@ -42,12 +20,7 @@ public sealed class ServerDashboardController
     string _osFilter = "all";
     string _sortMode = "name";
 
-    public event Action<string>? ClipboardRequested;
-    public event Action<DashboardMessageBoxRequest>? MessageBoxRequested;
-    public event Action<DashboardPromptRequest>? PromptRequested;
-    public event Action<DashboardFilePickerRequest>? FilePickerRequested;
     public event Action<DashboardDialogRequest>? DialogRequested;
-    public event Action<string>? OpenExternalRequested;
 
     public ServerDashboardController(ServerEngine engine, IServerPlatformServices? platform = null)
     {
@@ -122,8 +95,7 @@ public sealed class ServerDashboardController
     {
         var token = _engine.Token;
         if (string.IsNullOrEmpty(token)) return;
-        if (_platform != null) _platform.SetClipboardText(token);
-        else ClipboardRequested?.Invoke(token);
+        _platform?.SetClipboardText(token);
         _engine.Log.Add("Token copied", Th.Grn);
     }
 
@@ -143,56 +115,33 @@ public sealed class ServerDashboardController
 
     public void RequestSetOfflineMac(string machineName)
     {
-        var request = new DashboardPromptRequest
-        {
-            Title = "Set MAC",
-            Label = $"MAC for {machineName} (e.g. AA:BB:CC:DD:EE:FF):",
-            OnSubmit = mac => SetOfflineMac(machineName, mac)
-        };
-        if (_platform != null) _platform.Prompt(request);
-        else PromptRequested?.Invoke(request);
+        if (_platform == null) return;
+        var mac = _platform.Prompt("Set MAC", $"MAC for {machineName} (e.g. AA:BB:CC:DD:EE:FF):");
+        if (mac != null) SetOfflineMac(machineName, mac);
     }
 
     public void ForgetOffline(string machineName)
     {
-        Confirm(new DashboardMessageBoxRequest
-        {
-            Message = $"Forget {machineName}?",
-            OnConfirm = () => _engine.Store.Forget(machineName)
-        });
+        if (Confirm($"Forget {machineName}?")) _engine.Store.Forget(machineName);
     }
 
     public void RestartClient(string machineName)
     {
-        Confirm(new DashboardMessageBoxRequest
-        {
-            Message = $"Restart {machineName}?",
-            Kind = DashboardConfirmKind.Warning,
-            OnConfirm = () => _engine.RequestRestart(machineName)
-        });
+        if (Confirm($"Restart {machineName}?", DashboardConfirmKind.Warning))
+            _engine.RequestRestart(machineName);
     }
 
     public void ShutdownClient(string machineName)
     {
-        Confirm(new DashboardMessageBoxRequest
-        {
-            Message = $"SHUT DOWN {machineName}?",
-            Kind = DashboardConfirmKind.Warning,
-            OnConfirm = () => _engine.RequestShutdown(machineName)
-        });
+        if (Confirm($"SHUT DOWN {machineName}?", DashboardConfirmKind.Warning))
+            _engine.RequestShutdown(machineName);
     }
 
     public void ForgetClient(string machineName)
     {
-        Confirm(new DashboardMessageBoxRequest
-        {
-            Message = $"Forget {machineName}?",
-            OnConfirm = () =>
-            {
-                _engine.ForgetClient(machineName);
-                _selectedMachineNames.Remove(machineName);
-            }
-        });
+        if (!Confirm($"Forget {machineName}?")) return;
+        _engine.ForgetClient(machineName);
+        _selectedMachineNames.Remove(machineName);
     }
 
     public void RequestProcesses(string machineName)
@@ -264,18 +213,17 @@ public sealed class ServerDashboardController
 
     public void PushUpdate(string machineName)
     {
-        if (!_engine.Clients.TryGetValue(machineName, out var cl)) return;
+        if (_platform == null || !_engine.Clients.TryGetValue(machineName, out var cl)) return;
         bool linux = ServerEngine.IsLinuxClient(cl);
-        PickFile(new DashboardFilePickerRequest
-        {
-            Title = linux ? "Select Linux cpumon.py or cpumon-linux release zip" : "Select new client exe to push",
-            Filter = linux ? "Linux update|*.py;*.zip|Python script|*.py|Release zip|*.zip" : "Executable|*.exe",
-            OnFileSelected = path => DoPushUpdate(machineName, linux, path)
-        });
+        var path = _platform.PickFile(
+            linux ? "Select Linux cpumon.py or cpumon-linux release zip" : "Select new client exe to push",
+            linux ? "Linux update|*.py;*.zip|Python script|*.py|Release zip|*.zip" : "Executable|*.exe");
+        if (path != null) DoPushUpdate(machineName, linux, path);
     }
 
     public void PushUpdateToSelected()
     {
+        if (_platform == null) return;
         var snapshot = _selectedMachineNames.ToList();
         var winClients = LiveSelectedClients(snapshot, linux: false);
         var linuxClients = LiveSelectedClients(snapshot, linux: true);
@@ -283,12 +231,8 @@ public sealed class ServerDashboardController
         string filter = winClients.Count > 0 && linuxClients.Count > 0
             ? "Client files|*.exe;*.py;*.zip|Executables|*.exe|Linux update|*.py;*.zip"
             : winClients.Count > 0 ? "Executable|*.exe" : "Linux update|*.py;*.zip|Python script|*.py|Release zip|*.zip";
-        PickFile(new DashboardFilePickerRequest
-        {
-            Title = $"Select file to push to {snapshot.Count} client(s)",
-            Filter = filter,
-            OnFileSelected = path => DoPushMulti(snapshot, path)
-        });
+        var path = _platform.PickFile($"Select file to push to {snapshot.Count} client(s)", filter);
+        if (path != null) DoPushMulti(snapshot, path);
     }
 
     public void OpenStagedReleaseOrUrl()
@@ -304,23 +248,10 @@ public sealed class ServerDashboardController
         if (url != null) OpenExternal(url);
     }
 
-    void Confirm(DashboardMessageBoxRequest request)
-    {
-        if (_platform != null) _platform.Confirm(request);
-        else MessageBoxRequested?.Invoke(request);
-    }
+    bool Confirm(string message, DashboardConfirmKind kind = DashboardConfirmKind.Question)
+        => _platform != null && _platform.Confirm(message, "Confirm", kind);
 
-    void PickFile(DashboardFilePickerRequest request)
-    {
-        if (_platform != null) _platform.PickFile(request);
-        else FilePickerRequested?.Invoke(request);
-    }
-
-    void OpenExternal(string target)
-    {
-        if (_platform != null) _platform.OpenExternal(target);
-        else OpenExternalRequested?.Invoke(target);
-    }
+    void OpenExternal(string target) => _platform?.OpenExternal(target);
 
     void DoPushUpdate(string machineName, bool linux, string path)
     {

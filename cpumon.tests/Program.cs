@@ -615,35 +615,31 @@ internal static class Program
 
     static void TestDashboardControllerRestartRaisesWarningConfirmation()
     {
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
-        DashboardMessageBoxRequest? captured = null;
-        controller.MessageBoxRequested += req => captured = req;
+        var platform = new FakeServerPlatformServices { ConfirmReturn = false };
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
         controller.RestartClient("box-a");
-        Assert(captured != null, "RestartClient should raise MessageBoxRequested");
-        Assert(captured!.Kind == DashboardConfirmKind.Warning, "restart confirmation should be a warning");
-        Assert(captured.Message.Contains("box-a"), "restart confirmation should mention machine name");
-        Assert(captured.OnConfirm != null, "restart confirmation should expose a confirm callback");
+        Assert(platform.LastConfirm != null, "RestartClient should route confirmation through platform services");
+        Assert(platform.LastConfirm!.Value.Kind == DashboardConfirmKind.Warning, "restart confirmation should be a warning");
+        Assert(platform.LastConfirm.Value.Message.Contains("box-a"), "restart confirmation should mention machine name");
     }
 
     static void TestDashboardControllerForgetClientConfirmationInvokesEngineOnConfirm()
     {
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
-        DashboardMessageBoxRequest? captured = null;
-        controller.MessageBoxRequested += req => captured = req;
+        var platform = new FakeServerPlatformServices { ConfirmReturn = false };
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
         controller.ForgetClient("doomed-box");
-        Assert(captured != null, "ForgetClient should raise MessageBoxRequested");
-        Assert(captured!.Kind == DashboardConfirmKind.Question, "forget confirmation should default to question");
-        Assert(captured.Message.Contains("doomed-box"), "forget confirmation should mention machine name");
+        Assert(platform.LastConfirm != null, "ForgetClient should route confirmation through platform services");
+        Assert(platform.LastConfirm!.Value.Kind == DashboardConfirmKind.Question, "forget confirmation should default to question");
+        Assert(platform.LastConfirm.Value.Message.Contains("doomed-box"), "forget confirmation should mention machine name");
     }
 
     static void TestDashboardControllerCopyTokenRaisesClipboardEvent()
     {
         var engine = new ServerEngine(noBroadcast: true);
-        var controller = new ServerDashboardController(engine);
-        string? captured = null;
-        controller.ClipboardRequested += text => captured = text;
+        var platform = new FakeServerPlatformServices();
+        var controller = new ServerDashboardController(engine, platform);
         controller.CopyToken();
-        Assert(captured == engine.Token, "CopyToken should publish current engine token to clipboard event");
+        Assert(platform.ClipboardText == engine.Token, "CopyToken should publish current engine token to clipboard");
     }
 
     static void TestDashboardControllerUsesPlatformServicesWhenProvided()
@@ -660,17 +656,18 @@ internal static class Program
         controller.CopyToken();
         Assert(platform.ClipboardText == engine.Token, "CopyToken should route clipboard text through platform services");
 
+        platform.ConfirmReturn = false;
         controller.RestartClient("box-a");
-        Assert(platform.ConfirmRequest != null, "RestartClient should route confirmation through platform services");
-        Assert(platform.ConfirmRequest!.Kind == DashboardConfirmKind.Warning, "platform confirmation should preserve warning kind");
+        Assert(platform.LastConfirm != null, "RestartClient should route confirmation through platform services");
+        Assert(platform.LastConfirm!.Value.Kind == DashboardConfirmKind.Warning, "platform confirmation should preserve warning kind");
 
         controller.RequestSetOfflineMac("offline-box");
-        Assert(platform.PromptRequest != null, "RequestSetOfflineMac should route prompt through platform services");
-        Assert(platform.PromptRequest!.Label.Contains("offline-box"), "platform prompt should preserve machine label");
+        Assert(platform.LastPrompt != null, "RequestSetOfflineMac should route prompt through platform services");
+        Assert(platform.LastPrompt!.Value.Label.Contains("offline-box"), "platform prompt should preserve machine label");
 
         controller.PushUpdate("lnx");
-        Assert(platform.FilePickerRequest != null, "PushUpdate should route file picker through platform services");
-        Assert(platform.FilePickerRequest!.Filter.Contains("*.py"), "platform file picker should preserve Linux filter");
+        Assert(platform.LastPickFile != null, "PushUpdate should route file picker through platform services");
+        Assert(platform.LastPickFile!.Value.Filter.Contains("*.py"), "platform file picker should preserve Linux filter");
 
         controller.ShowApprovedClients();
         Assert(platform.ShowApprovedCalled, "ShowApprovedClients should route through platform services");
@@ -720,12 +717,11 @@ internal static class Program
         linux.MachineName = "lnx";
         linux.LastReport = new MachineReport { MachineName = linux.MachineName, OsVersion = "Linux Debian" };
         engine.Clients[linux.MachineName] = linux;
-        var controller = new ServerDashboardController(engine);
-        DashboardFilePickerRequest? captured = null;
-        controller.FilePickerRequested += req => captured = req;
+        var platform = new FakeServerPlatformServices();
+        var controller = new ServerDashboardController(engine, platform);
         controller.PushUpdate("lnx");
-        Assert(captured != null, "PushUpdate should raise FilePickerRequested for known client");
-        Assert(captured!.Filter.Contains("*.py"), "Linux client picker should include .py filter");
+        Assert(platform.LastPickFile != null, "PushUpdate should route file picker through platform services for known client");
+        Assert(platform.LastPickFile!.Value.Filter.Contains("*.py"), "Linux client picker should include .py filter");
         controller.PushUpdate("no-such-box");
     }
 
@@ -751,15 +747,12 @@ internal static class Program
 
     static void TestDashboardControllerSetOfflineMacRoutesPromptToEngine()
     {
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
-        DashboardPromptRequest? captured = null;
-        controller.PromptRequested += req => captured = req;
+        var platform = new FakeServerPlatformServices();
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
         controller.RequestSetOfflineMac("offline-box");
-        Assert(captured != null, "RequestSetOfflineMac should raise PromptRequested");
-        Assert(captured!.Title == "Set MAC", "prompt should be titled Set MAC");
-        Assert(captured.Label.Contains("offline-box"), "prompt label should mention machine name");
-        captured.OnSubmit("");
-        captured.OnSubmit("  ");
+        Assert(platform.LastPrompt != null, "RequestSetOfflineMac should route prompt through platform services");
+        Assert(platform.LastPrompt!.Value.Title == "Set MAC", "prompt should be titled Set MAC");
+        Assert(platform.LastPrompt.Value.Label.Contains("offline-box"), "prompt label should mention machine name");
     }
 
     static RemoteClient FakeRemoteClient()
@@ -810,9 +803,12 @@ internal static class Program
     sealed class FakeServerPlatformServices : IServerPlatformServices
     {
         public string? ClipboardText { get; private set; }
-        public DashboardMessageBoxRequest? ConfirmRequest { get; private set; }
-        public DashboardPromptRequest? PromptRequest { get; private set; }
-        public DashboardFilePickerRequest? FilePickerRequest { get; private set; }
+        public (string Message, string Title, DashboardConfirmKind Kind)? LastConfirm { get; private set; }
+        public bool ConfirmReturn { get; set; } = true;
+        public (string Title, string Label)? LastPrompt { get; private set; }
+        public string? PromptReturn { get; set; }
+        public (string Title, string Filter)? LastPickFile { get; private set; }
+        public string? PickFileReturn { get; set; }
         public string? OpenExternalTarget { get; private set; }
         public bool ShowApprovedCalled { get; private set; }
         public bool ShowAlertsCalled { get; private set; }
@@ -830,9 +826,9 @@ internal static class Program
         public (string Machine, Action<string> OnSubmit)? PromptSendUserMessageCall { get; private set; }
 
         public void SetClipboardText(string text) => ClipboardText = text;
-        public void Confirm(DashboardMessageBoxRequest request) => ConfirmRequest = request;
-        public void Prompt(DashboardPromptRequest request) => PromptRequest = request;
-        public void PickFile(DashboardFilePickerRequest request) => FilePickerRequest = request;
+        public bool Confirm(string message, string title, DashboardConfirmKind kind) { LastConfirm = (message, title, kind); return ConfirmReturn; }
+        public string? Prompt(string title, string label) { LastPrompt = (title, label); return PromptReturn; }
+        public string? PickFile(string title, string filter) { LastPickFile = (title, filter); return PickFileReturn; }
         public void OpenExternal(string target) => OpenExternalTarget = target;
         public void ShowApprovedClients() => ShowApprovedCalled = true;
         public void ShowAlerts() => ShowAlertsCalled = true;

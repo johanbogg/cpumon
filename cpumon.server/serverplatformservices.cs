@@ -6,9 +6,9 @@ using System.Windows.Forms;
 public interface IServerPlatformServices
 {
     void SetClipboardText(string text);
-    void Confirm(DashboardMessageBoxRequest request);
-    void Prompt(DashboardPromptRequest request);
-    void PickFile(DashboardFilePickerRequest request);
+    bool Confirm(string message, string title, DashboardConfirmKind kind);
+    string? Prompt(string title, string label);
+    string? PickFile(string title, string filter);
     void OpenExternal(string target);
 
     void ShowApprovedClients();
@@ -50,46 +50,38 @@ public sealed class WinFormsServerPlatformServices : IServerPlatformServices
         });
     }
 
-    public void Confirm(DashboardMessageBoxRequest request)
+    public bool Confirm(string message, string title, DashboardConfirmKind kind)
     {
-        var icon = request.Kind == DashboardConfirmKind.Warning ? MessageBoxIcon.Warning : MessageBoxIcon.None;
-        OnUi(() =>
-        {
-            if (MessageBox.Show(request.Message, request.Title, MessageBoxButtons.YesNo, icon) == DialogResult.Yes)
-            {
-                request.OnConfirm();
-                _invalidateDashboard();
-            }
-        });
+        var icon = kind == DashboardConfirmKind.Warning ? MessageBoxIcon.Warning : MessageBoxIcon.None;
+        bool ok = OnUiSync(() => MessageBox.Show(_owner, message, title, MessageBoxButtons.YesNo, icon) == DialogResult.Yes);
+        if (ok) _invalidateDashboard();
+        return ok;
     }
 
-    public void Prompt(DashboardPromptRequest request)
+    public string? Prompt(string title, string label)
     {
-        OnUi(() =>
+        string? text = OnUiSync<string?>(() =>
         {
-            using var dlg = new Form { Text = request.Title, Size = new Size(300, 112), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, BackColor = Th.Bg, ForeColor = Th.Brt };
+            using var dlg = new Form { Text = title, Size = new Size(300, 112), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, BackColor = Th.Bg, ForeColor = Th.Brt };
             DwmDark.Hook(dlg);
-            var lbl = new Label { Text = request.Label, Location = new Point(12, 12), AutoSize = true, ForeColor = Th.Dim };
+            var lbl = new Label { Text = label, Location = new Point(12, 12), AutoSize = true, ForeColor = Th.Dim };
             var txt = new TextBox { Location = new Point(12, 34), Width = 260, BackColor = Th.Card, ForeColor = Th.Brt, BorderStyle = BorderStyle.FixedSingle };
-            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(116, 62), Width = 75 };
+            var btnOk = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(116, 62), Width = 75 };
             var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(197, 62), Width = 75 };
-            dlg.AcceptButton = ok; dlg.CancelButton = cancel;
-            dlg.Controls.AddRange(new Control[] { lbl, txt, ok, cancel });
-            if (dlg.ShowDialog(_owner) == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text))
-            {
-                request.OnSubmit(txt.Text);
-                _invalidateDashboard();
-            }
+            dlg.AcceptButton = btnOk; dlg.CancelButton = cancel;
+            dlg.Controls.AddRange(new Control[] { lbl, txt, btnOk, cancel });
+            return dlg.ShowDialog(_owner) == DialogResult.OK && !string.IsNullOrWhiteSpace(txt.Text) ? txt.Text : null;
         });
+        if (text != null) _invalidateDashboard();
+        return text;
     }
 
-    public void PickFile(DashboardFilePickerRequest request)
+    public string? PickFile(string title, string filter)
     {
-        OnUi(() =>
+        return OnUiSync<string?>(() =>
         {
-            using var ofd = new OpenFileDialog { Title = request.Title, Filter = request.Filter };
-            if (ofd.ShowDialog(_owner) != DialogResult.OK) return;
-            request.OnFileSelected(ofd.FileName);
+            using var ofd = new OpenFileDialog { Title = title, Filter = filter };
+            return ofd.ShowDialog(_owner) == DialogResult.OK ? ofd.FileName : null;
         });
     }
 
@@ -266,5 +258,17 @@ public sealed class WinFormsServerPlatformServices : IServerPlatformServices
             }
         }
         catch (InvalidOperationException) { }
+    }
+
+    T OnUiSync<T>(Func<T> func)
+    {
+        if (_owner.IsDisposed || _owner.Disposing || !_owner.IsHandleCreated) return default!;
+        try
+        {
+            if (_owner.InvokeRequired)
+                return (T)_owner.Invoke(func);
+            return func();
+        }
+        catch (InvalidOperationException) { return default!; }
     }
 }
