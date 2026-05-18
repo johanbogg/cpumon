@@ -214,23 +214,37 @@ All paths under `/api/*` require auth except where noted. All state-changing met
 
 ### Snapshot retrieval (the dialog-data endpoints)
 
-Dialogs in the WinForms UI render data that arrives asynchronously after a request. For HTTP, the controller method *requests* the data and returns immediately; the SPA polls or subscribes via WS for the snapshot. To support both:
+Dialogs in the WinForms UI render data that arrives asynchronously after a request. For HTTP, a single GET serves the cached snapshot **and** triggers a fresh fetch in the background when the cache is older than the endpoint's TTL. SPA logic is "open dialog → GET → poll/subscribe" — no client-side orchestration of which endpoint to hit first.
 
-| Method | Path                                       | Body | Response                          |
-|--------|--------------------------------------------|------|-----------------------------------|
-| POST   | `/api/clients/:machine/processes/request`  | —    | `204` (triggers fetch)            |
-| GET    | `/api/clients/:machine/processes`          | —    | `ProcessListSnapshot` or `204`    |
-| POST   | `/api/clients/:machine/sysinfo/request`    | —    | `204`                             |
-| GET    | `/api/clients/:machine/sysinfo`            | —    | `SysInfoSnapshot` or `204`        |
-| POST   | `/api/clients/:machine/services/request`   | —    | `204`                             |
-| GET    | `/api/clients/:machine/services`           | —    | `ServiceListSnapshot` or `204`    |
-| POST   | `/api/clients/:machine/events/request`     | —    | `204`                             |
-| GET    | `/api/clients/:machine/events`             | —    | `EventListSnapshot` or `204`      |
-| POST   | `/api/clients/:machine/cpu-detail/request` | —    | `204`                             |
-| GET    | `/api/clients/:machine/cpu-detail`         | —    | `CpuDetailReport` or `204`        |
-| GET    | `/api/clients/:machine/health`             | —    | `HealthSummary`                   |
+| Method | Path                                       | Query        | Response                                 |
+|--------|--------------------------------------------|--------------|------------------------------------------|
+| GET    | `/api/clients/:machine/processes`          | `?force=true`| `ProcessListSnapshot` or `204`           |
+| GET    | `/api/clients/:machine/sysinfo`            | `?force=true`| `SysInfoSnapshot` or `204`               |
+| GET    | `/api/clients/:machine/services`           | `?force=true`| `ServiceListSnapshot` or `204`           |
+| GET    | `/api/clients/:machine/events`             | `?force=true`| `EventListSnapshot` or `204`             |
+| GET    | `/api/clients/:machine/cpu-detail`         | `?force=true`| `CpuDetailReport` or `204`               |
+| GET    | `/api/clients/:machine/health`             | —            | `HealthSummary`                          |
 
-The "request then GET" split keeps the engine's existing async event model (`ProcessListReceived`, `SysInfoReceived`, etc.) intact. The engine gains a `LatestSnapshot` cache per client per dialog kind; GET returns the cached value or `204` if nothing is cached yet. Phase 2's WS push will deliver snapshots as they arrive.
+Per-endpoint TTL governs when a GET triggers a background fetch:
+
+| endpoint    | TTL  | notes                                                         |
+|-------------|------|---------------------------------------------------------------|
+| processes   | 5s   | changes fast; operator opens dialog and expects live data     |
+| cpu-detail  | 5s   | live telemetry                                                |
+| services    | 10s  | service state changes infrequently but is observable          |
+| events      | 10s  | event log appended continuously                               |
+| sysinfo     | 30s  | mostly static (CPU model, RAM total, OS version)              |
+| health      | 5s   | derived from latest report; cheap                             |
+
+Semantics on each GET:
+- If `cache.Age < TTL`: return cached snapshot, do not trigger fetch.
+- If `cache.Age >= TTL` or cache empty: return cached snapshot **or** `204` if empty, kick off background fetch via existing `ServerEngine.Request*` methods.
+- If `?force=true`: trigger fetch regardless of TTL; return current cache (don't wait).
+- `204` is the explicit "no data yet" signal — SPA shows a spinner and polls (~1s interval) until a body arrives.
+
+Underlying mechanics unchanged: engine still receives `ProcessListReceived` / `SysInfoReceived` / etc. and writes into the per-client typed snapshot cache. The HTTP handler reads the cache and decides whether to trigger; the agent round-trip is the engine's existing flow.
+
+Phase 2's WS push removes the polling loop entirely — the cache update emits a WS frame, SPA stops polling and listens.
 
 ### Offline clients
 
@@ -335,7 +349,7 @@ After this doc is accepted, code lands in the following order. Each is its own c
 5. Auth endpoints (`/api/auth/*`) + rate limiter. Tests: 8. Verify: end-to-end login + whoami via `curl`.
 6. State + filter + selection + token endpoints. Tests: 6.
 7. Per-client action endpoints (restart, shutdown, forget, message, screenshot, paw, expand). Tests: 8.
-8. Snapshot request/GET endpoints (processes, sysinfo, services, events, cpu-detail, health) + engine snapshot cache. Tests: 6.
+8. Snapshot GET endpoints (processes, sysinfo, services, events, cpu-detail, health) + engine snapshot cache with per-endpoint TTL + auto-trigger-on-stale. Tests: 6 (returns-cached, triggers-fetch-when-stale, respects-TTL-window, force-bypasses-TTL, 204-when-empty, health-no-trigger).
 9. Offline / approved / alerts endpoints. Tests: 6.
 10. Log endpoint. Tests: 2.
 11. `WebPlatformServices` stub + `--web` flag wiring in `program.cs`. Tests: smoke. Verify: server starts in `--web` mode with WinForms UI still functional; full manual sweep per Phase 1 verify in workplan.
