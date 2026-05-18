@@ -84,6 +84,7 @@ public sealed class WebHost : IAsyncDisposable
         });
 
         var app = builder.Build();
+        app.UseWebSockets();
 
         // Security headers — apply before any handler writes a response.
         app.Use(async (ctx, next) =>

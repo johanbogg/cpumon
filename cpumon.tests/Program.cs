@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -122,6 +123,9 @@ internal static class Program
             TestWebStartupComposesAllRoutesAndSurfacesBootstrapUrl();
             TestWebPlatformServicesShowBootstrapUrlPrintsToStdout();
             TestSetupPageBranches();
+            TestWebSocketStateSentOnConnect();
+            TestWebSocketStateUpdatedOnControllerAction();
+            TestWebSocketLogStreamsNewEntries();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -1500,6 +1504,45 @@ internal static class Program
         Assert(errSink.ToString().Contains("https://localhost:47202/setup?t=ABC"), "stub should also print URL to stderr");
     }
 
+    static void TestWebSocketStateSentOnConnect()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var ws = h.ConnectWebSocket("/ws/state");
+        string msg = ReceiveWsText(ws);
+        using var doc = JsonDocument.Parse(msg);
+        Assert(doc.RootElement.GetProperty("type").GetString() == "state", "state websocket should send a state frame");
+        Assert(doc.RootElement.GetProperty("state").GetProperty("token").GetString() == h.Controller.GetState().Token, "state frame should contain dashboard state");
+    }
+
+    static void TestWebSocketStateUpdatedOnControllerAction()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var ws = h.ConnectWebSocket("/ws/state");
+        ReceiveWsText(ws);
+        using var resp = h.Post("/api/state/filter/os", new { value = "linux" }, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 200, "fixture filter mutation should return 200");
+        string msg = ReceiveWsText(ws, timeoutMs: 2000);
+        using var doc = JsonDocument.Parse(msg);
+        Assert(doc.RootElement.GetProperty("type").GetString() == "state", "updated state websocket frame should have type=state");
+        Assert(doc.RootElement.GetProperty("state").GetProperty("osFilter").GetString() == "linux", "state websocket should reflect controller mutations");
+    }
+
+    static void TestWebSocketLogStreamsNewEntries()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var ws = h.ConnectWebSocket("/ws/log");
+        h.Engine.Log.Add("ws-log-entry", System.Drawing.Color.FromArgb(0x12, 0x34, 0x56));
+        string msg = ReceiveWsText(ws, timeoutMs: 2000);
+        using var doc = JsonDocument.Parse(msg);
+        Assert(doc.RootElement.GetProperty("type").GetString() == "log", "log websocket should send log frames");
+        var entry = doc.RootElement.GetProperty("entry");
+        Assert(entry.GetProperty("message").GetString() == "ws-log-entry", "log websocket should stream newly added log entry");
+        Assert(entry.GetProperty("color").GetString() == "#123456", "log websocket should include hex colour");
+    }
+
     static void TestWebBootstrapIssuesAndShowsWhenOperatorMissing()
     {
         using var td = new TempDir();
@@ -1825,6 +1868,7 @@ internal static class Program
                     WebApprovedApi.Map(app, Engine, Sessions, ctx);
                     WebAlertsApi.Map(app, Alerts, Sessions, ctx);
                     WebLogApi.Map(app, Engine, Sessions, ctx);
+                    WebSocketApi.Map(app, Engine, Controller, Sessions, ctx);
                 }
             }).GetAwaiter().GetResult();
             _cookies = new CookieContainer();
@@ -1870,6 +1914,18 @@ internal static class Program
         }
 
         public string Body(HttpResponseMessage resp) => resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+        public ClientWebSocket ConnectWebSocket(string path)
+        {
+            var ws = new ClientWebSocket();
+            var cookies = _cookies.GetCookieHeader(Client.BaseAddress!);
+            if (!string.IsNullOrEmpty(cookies))
+                ws.Options.SetRequestHeader("Cookie", cookies);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var uri = new Uri($"ws://127.0.0.1:{Host.Port}{path}");
+            ws.ConnectAsync(uri, cts.Token).GetAwaiter().GetResult();
+            return ws;
+        }
 
         public string CookieValue(string name)
         {
@@ -1935,6 +1991,26 @@ internal static class Program
         try { action(); }
         catch (T) { return; }
         throw new InvalidOperationException(message);
+    }
+
+    static string ReceiveWsText(ClientWebSocket ws, int timeoutMs = 1000)
+    {
+        var buffer = new byte[8192];
+        using var ms = new MemoryStream();
+        using var cts = new CancellationTokenSource(timeoutMs);
+        while (true)
+        {
+            var result = ws.ReceiveAsync(buffer, cts.Token).GetAwaiter().GetResult();
+            if (result.MessageType == WebSocketMessageType.Close)
+                throw new InvalidOperationException("websocket closed before a text message was received");
+            ms.Write(buffer, 0, result.Count);
+            if (result.EndOfMessage)
+            {
+                if (result.MessageType != WebSocketMessageType.Text)
+                    throw new InvalidOperationException("websocket returned a non-text frame");
+                return Encoding.UTF8.GetString(ms.ToArray());
+            }
+        }
     }
 
     sealed class TempDir : IDisposable

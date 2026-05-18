@@ -87,6 +87,7 @@ public sealed class CLog
     readonly object _l = new();
     readonly int _mx;
     readonly StreamWriter? _fw;
+    public event Action<DateTime, string, Color>? EntryAdded;
 
     public CLog(int mx = 50, string? file = null)
     {
@@ -120,6 +121,7 @@ public sealed class CLog
             if (_e.Count > _mx) _e.Dequeue();
             try { _fw?.WriteLine($"{now:yyyy-MM-dd HH:mm:ss} {m}"); } catch { }
         }
+        try { EntryAdded?.Invoke(now, m, c); } catch { }
     }
 
     public List<(DateTime T, string M, Color C)> Recent(int n) { lock (_l) { return _e.TakeLast(n).ToList(); } }

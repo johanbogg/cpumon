@@ -1,0 +1,111 @@
+using System;
+using System.Drawing;
+using System.Linq;
+using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
+using System.Threading.Channels;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+
+public static class WebSocketApi
+{
+    static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy        = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition      = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    static readonly TimeSpan StateInterval = TimeSpan.FromMilliseconds(250);
+
+    public static void Map(IEndpointRouteBuilder app,
+                           ServerEngine engine,
+                           ServerDashboardController controller,
+                           SessionStore sessions,
+                           WebApiContext apiCtx)
+    {
+        app.Map("/ws/state", async (HttpContext ctx) =>
+        {
+            if (!await TryAccept(ctx, sessions).ConfigureAwait(false)) return;
+            using var ws = await ctx.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
+            await StreamState(ws, controller, ctx.RequestAborted).ConfigureAwait(false);
+        });
+
+        app.Map("/ws/log", async (HttpContext ctx) =>
+        {
+            if (!await TryAccept(ctx, sessions).ConfigureAwait(false)) return;
+            var sinceUtc = DateTime.UtcNow;
+            using var ws = await ctx.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
+            await StreamLog(ws, engine.Log, sinceUtc, ctx.RequestAborted).ConfigureAwait(false);
+        });
+    }
+
+    static async Task<bool> TryAccept(HttpContext ctx, SessionStore sessions)
+    {
+        if (!ctx.WebSockets.IsWebSocketRequest)
+        {
+            ctx.Response.StatusCode = 400;
+            await ctx.Response.WriteAsJsonAsync(new { error = "websocket_required", message = "WebSocket upgrade required." }).ConfigureAwait(false);
+            return false;
+        }
+        if (WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: false, out _, out var fail)) return true;
+        await fail!.ExecuteAsync(ctx).ConfigureAwait(false);
+        return false;
+    }
+
+    static async Task StreamState(WebSocket ws, ServerDashboardController controller, CancellationToken ct)
+    {
+        await SendJson(ws, new { type = "state", state = controller.GetState() }, ct).ConfigureAwait(false);
+        using var timer = new PeriodicTimer(StateInterval);
+        while (ws.State == WebSocketState.Open && await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            await SendJson(ws, new { type = "state", state = controller.GetState() }, ct).ConfigureAwait(false);
+    }
+
+    static async Task StreamLog(WebSocket ws, CLog log, DateTime sinceUtc, CancellationToken ct)
+    {
+        var queue = Channel.CreateUnbounded<LogEntryDto>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false,
+        });
+
+        void OnEntry(DateTime ts, string message, Color color)
+        {
+            queue.Writer.TryWrite(new LogEntryDto
+            {
+                Ts = ts.ToUniversalTime(),
+                Message = message,
+                Color = ColorHex(color),
+            });
+        }
+
+        log.EntryAdded += OnEntry;
+        try
+        {
+            foreach (var e in log.Recent(WebLogApi.MaxLimit).Where(e => e.T.ToUniversalTime() >= sinceUtc))
+                OnEntry(e.T, e.M, e.C);
+
+            while (ws.State == WebSocketState.Open && await queue.Reader.WaitToReadAsync(ct).ConfigureAwait(false))
+                while (queue.Reader.TryRead(out var entry))
+                    await SendJson(ws, new { type = "log", entry }, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            log.EntryAdded -= OnEntry;
+        }
+    }
+
+    static async Task SendJson(WebSocket ws, object payload, CancellationToken ct)
+    {
+        var json = JsonSerializer.Serialize(payload, JsonOpts);
+        var bytes = Encoding.UTF8.GetBytes(json);
+        await ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct).ConfigureAwait(false);
+    }
+
+    static string ColorHex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+}

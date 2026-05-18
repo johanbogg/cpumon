@@ -69,6 +69,7 @@ public sealed class WebStartup : IDisposable
                 WebApprovedApi.Map(app, engine, sessions, ctx);
                 WebAlertsApi.Map(app, engine.Alerts, sessions, ctx);
                 WebLogApi.Map(app, engine, sessions, ctx);
+                WebSocketApi.Map(app, engine, controller, sessions, ctx);
             },
         }).ConfigureAwait(false);
 
