@@ -117,6 +117,8 @@ internal static class Program
             TestSlice9EndpointsRequireCsrf();
             TestLogRequiresAuth();
             TestLogSinceAndLimitFilterEntries();
+            TestWebBootstrapIssuesAndShowsWhenOperatorMissing();
+            TestWebBootstrapSkippedWhenOperatorExists();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -1410,6 +1412,44 @@ internal static class Program
         Assert(h.Engine.Store.GetMac("box") == "AA:BB:CC:DD:EE:FF", "mac should be persisted");
     }
 
+    static void TestWebBootstrapIssuesAndShowsWhenOperatorMissing()
+    {
+        using var td = new TempDir();
+        var operators = new OperatorStore(Path.Combine(td.Path, "operator.json"));
+        using var issuer = new BootstrapTokenIssuer();
+        var platform = new FakeServerPlatformServices();
+        bool buildCalled = false;
+        var log = new CLog();
+        bool issued = WebBootstrap.MaybeIssueAndShow(operators, issuer, platform, token =>
+        {
+            buildCalled = true;
+            Assert(!string.IsNullOrEmpty(token), "issued token should be non-empty");
+            return $"https://localhost:47202/setup?t={token}";
+        }, log);
+        Assert(issued, "MaybeIssueAndShow should return true when no operator account exists");
+        Assert(buildCalled, "url builder should run once an operator is missing");
+        Assert(platform.ShowBootstrapUrlCalls.Count == 1, "platform.ShowBootstrapUrl should be called exactly once");
+        var (url, expiresAt) = platform.ShowBootstrapUrlCalls[0];
+        Assert(url.StartsWith("https://localhost:47202/setup?t="), "URL should embed the built setup link");
+        Assert((expiresAt - DateTime.UtcNow).TotalMinutes > 5, "expiry should be at least 5 min in the future");
+        Assert(issuer.IsActive, "issuer should hold an active token after MaybeIssueAndShow");
+    }
+
+    static void TestWebBootstrapSkippedWhenOperatorExists()
+    {
+        using var td = new TempDir();
+        var operators = new OperatorStore(Path.Combine(td.Path, "operator.json"));
+        operators.Create("admin", "correctpassword12");
+        using var issuer = new BootstrapTokenIssuer();
+        var platform = new FakeServerPlatformServices();
+        bool buildCalled = false;
+        bool issued = WebBootstrap.MaybeIssueAndShow(operators, issuer, platform, _ => { buildCalled = true; return ""; });
+        Assert(!issued, "MaybeIssueAndShow should return false once an operator account exists");
+        Assert(!buildCalled, "url builder must not run when bootstrap is skipped");
+        Assert(platform.ShowBootstrapUrlCalls.Count == 0, "platform.ShowBootstrapUrl must not be called when operator exists");
+        Assert(!issuer.IsActive, "issuer should NOT mint a token when bootstrap is skipped");
+    }
+
     static void TestLogRequiresAuth()
     {
         using var h = new WebApiTestHost();
@@ -1841,6 +1881,7 @@ internal static class Program
         public string? ShowRdpMachine { get; private set; }
         public string? PromptUserMessageMachine { get; private set; }
         public string? PromptUserMessageReturn { get; set; }
+        public List<(string Url, DateTime ExpiresAt)> ShowBootstrapUrlCalls { get; } = new();
 
         public void SetClipboardText(string text) => ClipboardText = text;
         public bool Confirm(string message, string title, DashboardConfirmKind kind) { LastConfirm = (message, title, kind); return ConfirmReturn; }
@@ -1861,5 +1902,6 @@ internal static class Program
         public void ShowFileBrowser(string machineName, string? initialPath) => ShowFileBrowserCall = (machineName, initialPath);
         public void ShowRdp(string machineName) => ShowRdpMachine = machineName;
         public string? PromptUserMessage(string machineName) { PromptUserMessageMachine = machineName; return PromptUserMessageReturn; }
+        public void ShowBootstrapUrl(string url, DateTime expiresAt) => ShowBootstrapUrlCalls.Add((url, expiresAt));
     }
 }

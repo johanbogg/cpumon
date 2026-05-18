@@ -25,6 +25,7 @@ public interface IServerPlatformServices
     void ShowFileBrowser(string machineName, string? initialPath);
     void ShowRdp(string machineName);
     string? PromptUserMessage(string machineName);
+    void ShowBootstrapUrl(string url, DateTime expiresAt);
 }
 
 public sealed class WinFormsServerPlatformServices : IServerPlatformServices
@@ -223,6 +224,14 @@ public sealed class WinFormsServerPlatformServices : IServerPlatformServices
         });
     }
 
+    public void ShowBootstrapUrl(string url, DateTime expiresAt)
+    {
+        var localExpiry = expiresAt.ToLocalTime().ToString("HH:mm:ss");
+        Console.Out.WriteLine($"* Web UI setup: {url} (valid until {localExpiry})");
+        Console.Error.WriteLine($"* Web UI setup: {url} (valid until {localExpiry})");
+        OnUi(() => new BootstrapUrlDialog(url, expiresAt).Show(_owner));
+    }
+
     public string? PromptUserMessage(string machineName)
     {
         return OnUiSync<string?>(() =>
@@ -269,5 +278,110 @@ public sealed class WinFormsServerPlatformServices : IServerPlatformServices
             return func();
         }
         catch (InvalidOperationException) { return default!; }
+    }
+}
+
+sealed class BootstrapUrlDialog : Form
+{
+    readonly Timer _timer;
+    readonly Label _countdown;
+    readonly DateTime _expiresAt;
+
+    public BootstrapUrlDialog(string url, DateTime expiresAt)
+    {
+        _expiresAt = expiresAt;
+        DwmDark.Hook(this);
+        Text = "cpumon Web UI — first-run setup";
+        Size = new Size(640, 240);
+        StartPosition = FormStartPosition.CenterParent;
+        BackColor = Th.Bg;
+        ForeColor = Th.Brt;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        TopMost = true;
+
+        var intro = new Label
+        {
+            Text = "Open this one-time URL in a browser to create the operator account.\nThe link is single-use and only valid for a few minutes.",
+            ForeColor = Th.Dim,
+            Font = new Font("Segoe UI", 9.5f),
+            Location = new Point(16, 16),
+            Size = new Size(600, 40),
+        };
+
+        var urlBox = new TextBox
+        {
+            Text = url,
+            ReadOnly = true,
+            Location = new Point(16, 64),
+            Size = new Size(600, 26),
+            BackColor = Th.Card,
+            ForeColor = Th.Cyan,
+            BorderStyle = BorderStyle.FixedSingle,
+            Font = new Font("Consolas", 10f),
+        };
+        urlBox.GotFocus += (_, _) => urlBox.SelectAll();
+
+        var copy = new Button
+        {
+            Text = "Copy",
+            Location = new Point(16, 104),
+            Size = new Size(110, 32),
+            BackColor = Color.FromArgb(30, 60, 30),
+            ForeColor = Th.Grn,
+            FlatStyle = FlatStyle.Flat,
+        };
+        copy.FlatAppearance.BorderColor = Th.Grn;
+        copy.Click += (_, _) =>
+        {
+            try { Clipboard.SetText(url); copy.Text = "Copied ✓"; }
+            catch (Exception ex) { copy.Text = "Copy failed"; LogSink.Warn("Server.UI", "Clipboard.SetText failed", ex); }
+        };
+
+        var dismiss = new Button
+        {
+            Text = "Dismiss",
+            DialogResult = DialogResult.OK,
+            Location = new Point(506, 104),
+            Size = new Size(110, 32),
+            BackColor = Th.Card,
+            ForeColor = Th.Dim,
+            FlatStyle = FlatStyle.Flat,
+        };
+
+        _countdown = new Label
+        {
+            ForeColor = Th.Yel,
+            Font = new Font("Segoe UI", 9f),
+            Location = new Point(16, 156),
+            Size = new Size(600, 24),
+        };
+        UpdateCountdown();
+        _timer = new Timer { Interval = 1000 };
+        _timer.Tick += (_, _) => UpdateCountdown();
+        _timer.Start();
+
+        AcceptButton = dismiss;
+        Controls.AddRange(new Control[] { intro, urlBox, copy, dismiss, _countdown });
+    }
+
+    void UpdateCountdown()
+    {
+        var remaining = _expiresAt - DateTime.UtcNow;
+        if (remaining <= TimeSpan.Zero)
+        {
+            _countdown.Text = "Token expired — restart cpumon to regenerate.";
+            _countdown.ForeColor = Th.Red;
+            _timer.Stop();
+            return;
+        }
+        _countdown.Text = $"Expires in {(int)remaining.TotalMinutes:00}:{remaining.Seconds:00}";
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _timer?.Dispose();
+        base.Dispose(disposing);
     }
 }
