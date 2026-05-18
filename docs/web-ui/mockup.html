@@ -49,6 +49,7 @@
   header .meta { color: var(--dim); font-size: 12px; display: flex; gap: 14px; }
   header .meta .ok { color: var(--grn); }
   header .meta .warn { color: var(--org); }
+  header .meta .off { color: var(--red); }
 
   button, .btn {
     background: var(--card); color: var(--brt); border: 1px solid var(--brd);
@@ -136,6 +137,28 @@
   }
   .card.collapsed .card-body, .card.collapsed .card-actions { display: none; }
 
+  /* Offline row — compact one-liner; metrics omitted because they're stale. */
+  .offline-row {
+    display: grid;
+    grid-template-columns: 22px 1.4fr 1fr 100px 1fr auto;
+    align-items: center; gap: 10px;
+    background: var(--card); border: 1px solid var(--brd); border-left: 2px solid var(--dim);
+    border-radius: 3px; padding: 6px 12px; margin-bottom: 4px;
+    opacity: 0.82;
+  }
+  .offline-row .name-block .name { color: var(--dim); font-weight: 600; }
+  .offline-row .name-block .ip   { color: var(--dim); font-size: 11px; }
+  .offline-row .seen      { color: var(--dim); font-size: 12px; }
+  .offline-row .seen .ago { color: var(--red); }
+  .offline-row .ver       { color: var(--dim); font-size: 12px; }
+  .offline-row .mac       { color: var(--dim); font-family: 'Consolas', monospace; font-size: 11px; }
+  .offline-row .actions   { display: flex; gap: 4px; }
+
+  .section-label {
+    color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    margin: 14px 0 6px 0; font-weight: 600;
+  }
+
   /* Drive bars */
   .drives { grid-column: span 4; display: flex; gap: 10px; flex-wrap: wrap; }
   .drive { background: var(--bg); border: 1px solid var(--brd); border-radius: 3px;
@@ -205,7 +228,7 @@
   <div class="meta">
     <span><span class="ok">●</span> 7 connected</span>
     <span><span class="warn">●</span> 2 pending</span>
-    <span>1 offline</span>
+    <span><span class="off">●</span> 3 offline</span>
   </div>
   <div class="btn-row">
     <button>Alerts</button>
@@ -222,10 +245,11 @@
     <div class="toolbar">
       <button>OS: all ▾</button>
       <button>Sort: name ▾</button>
+      <button>Show: all ▾</button>
       <button>Select all visible</button>
       <button>Select outdated</button>
       <button class="primary">Update selected (2)</button>
-      <span class="count">7 clients · 2 selected</span>
+      <span class="count">7 connected · 3 offline · 2 selected</span>
     </div>
 
     <!-- Connected, expanded -->
@@ -352,6 +376,46 @@
       </div>
     </article>
 
+    <div class="section-label">Offline · 3</div>
+
+    <div class="offline-row">
+      <span class="os-badge os-win">W</span>
+      <div class="name-block"><span class="name">tower-02</span><span class="ip">last 10.0.4.13</span></div>
+      <span class="seen">seen <span class="ago">3d ago</span></span>
+      <span class="ver">1.1.65</span>
+      <span class="mac">AA:BB:CC:11:22:33</span>
+      <div class="actions">
+        <button class="small">Wake</button>
+        <button class="small">Set MAC</button>
+        <button class="small danger">Forget</button>
+      </div>
+    </div>
+
+    <div class="offline-row">
+      <span class="os-badge os-lnx">L</span>
+      <div class="name-block"><span class="name">backup-pi</span><span class="ip">last 10.0.4.45</span></div>
+      <span class="seen">seen <span class="ago">8h ago</span></span>
+      <span class="ver">1.1.68-linux</span>
+      <span class="mac">DE:AD:BE:EF:00:01</span>
+      <div class="actions">
+        <button class="small">Wake</button>
+        <button class="small">Set MAC</button>
+        <button class="small danger">Forget</button>
+      </div>
+    </div>
+
+    <div class="offline-row">
+      <span class="os-badge os-win">W</span>
+      <div class="name-block"><span class="name">old-lab-pc</span><span class="ip">last 10.0.4.99</span></div>
+      <span class="seen">seen <span class="ago">21d ago</span></span>
+      <span class="ver">1.1.19</span>
+      <span class="mac">— no MAC set —</span>
+      <div class="actions">
+        <button class="small">Set MAC</button>
+        <button class="small danger">Forget</button>
+      </div>
+    </div>
+
   </section>
 
   <aside class="col-side">
@@ -377,22 +441,10 @@
     </div>
 
     <div class="side-section">
-      <h3>Offline <span class="count">1</span></h3>
-      <div class="offline-card">
-        <div class="name">tower-02</div>
-        <div class="meta">last seen 3d ago · AA:BB:CC:11:22:33</div>
-        <div class="actions">
-          <button class="small">Wake</button>
-          <button class="small">Set MAC</button>
-          <button class="small danger">Forget</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="side-section">
       <h3>Activity</h3>
       <div style="color: var(--dim); font-size: 11px; line-height: 1.6">
-        Live activity / chart sketch goes here — connect/disconnect rate, push update queue, alert count.
+        Live activity / chart sketch goes here — connect/disconnect rate, update queue, alert count.
+        With offline moved into the main pane, this area has room for a sparkline or two.
       </div>
     </div>
 
