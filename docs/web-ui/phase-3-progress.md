@@ -6,7 +6,7 @@ Owner: Codex for this slice. Claude should treat this file as the coordination n
 
 ## Current Slice: Static Shell + First Dashboard Wiring
 
-Status: first slice pushed as `686b982`; slice 2 interaction alignment in progress.
+Status: first slice pushed as `686b982`; slice 2 interaction alignment and early bug fixes pushed through `f3fcd0f`.
 
 Goals:
 - Serve `/login` and authenticated `/` from embedded web assets.
@@ -46,7 +46,7 @@ Known deferrals for later Phase 3 slices:
 
 ## Slice 2: Card Interaction + Mockup Alignment
 
-Status: in progress.
+Status: pushed; ready for more manual testing.
 
 Implemented:
 - Client cards now expand/collapse from a normal single click on card empty space.
@@ -54,14 +54,23 @@ Implemented:
 - A tiny right-edge `v` / `^` indicator shows expand state.
 - Expanded action row remains the only place for client command buttons.
 - Added a subtle scanline overlay and slightly tightened the wordmark feel toward the mockup.
+- Fixed frontend state field reads so expanded cards and report/waiting status reflect the API payload correctly.
+- Reduced live-update redraw churn so hovered cards do not rebuild on telemetry-only WebSocket updates.
+- Moved web dashboard view state into the authenticated web session:
+  - browser A expanding/filtering/selecting no longer changes browser B;
+  - browser actions no longer toggle the local WinForms card expansion state;
+  - `/ws/state` now streams each browser session's own view state.
+- Added smoke tests covering session-local web expansion/filtering and the non-mutating web expand path.
 
 Still deferred:
 - Deeper pixel/spacing pass against `mockup.html`.
 - Proper iconography/wordmark typography beyond the simple text logo.
 - Selection affordance redesign; current `Select` stays in the expanded action row.
 - Snapshot dialogs and alert/approved management UI.
+- Minor one-frame hover/active visual blink on expand may remain and should be checked during the next manual UI pass.
 
 Testing plan for this slice:
 - Smoke tests: static routes auth behavior, assets served, pending endpoints.
-- Build: `.\build.ps1 -ServerOnly`.
+- Build: `.\build.ps1`.
 - Manual: run `cpumon.server.exe --web --web-no-tls`, open `http://localhost:47202/login`, sign in, confirm dashboard renders and WS status changes to live.
+- Manual multi-session check: open two browsers or normal/private windows, expand/filter/select in one, and confirm the other browser and local WinForms UI do not follow that view-only state.
