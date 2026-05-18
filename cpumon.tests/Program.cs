@@ -83,6 +83,12 @@ internal static class Program
             TestAuthBootstrapWhenOperatorExistsReturns409();
             TestAuthBootstrapSucceedsAndIssuesCookies();
             TestAuthRateLimitBlocksAfterFiveFailedLogins();
+            TestDashboardStateRequiresAuth();
+            TestDashboardStateReturnsJsonWithToken();
+            TestDashboardSelectReplacesSelection();
+            TestDashboardFilterOsSetsValue();
+            TestDashboardFilterRequiresCsrf();
+            TestDashboardTokenRegenerateChangesToken();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -1027,7 +1033,7 @@ internal static class Program
 
     static void TestAuthLoginRejectsBlankBody()
     {
-        using var h = new AuthTestHost();
+        using var h = new WebApiTestHost();
         h.Operators.Create("admin", "correctpassword12");
         using var resp = h.Post("/api/auth/login", body: null);
         Assert((int)resp.StatusCode == 400, "blank body should return 400");
@@ -1036,7 +1042,7 @@ internal static class Program
 
     static void TestAuthLoginRejectsWrongPassword()
     {
-        using var h = new AuthTestHost();
+        using var h = new WebApiTestHost();
         h.Operators.Create("admin", "correctpassword12");
         using var resp = h.Post("/api/auth/login", new { username = "admin", password = "wrongpasswordwrong" });
         Assert((int)resp.StatusCode == 401, "wrong password should return 401");
@@ -1046,7 +1052,7 @@ internal static class Program
 
     static void TestAuthLoginSuccessIssuesCookies()
     {
-        using var h = new AuthTestHost();
+        using var h = new WebApiTestHost();
         h.Operators.Create("admin", "correctpassword12");
         using var resp = h.Post("/api/auth/login", new { username = "admin", password = "correctpassword12" });
         Assert((int)resp.StatusCode == 204, "successful login should return 204");
@@ -1058,7 +1064,7 @@ internal static class Program
 
     static void TestAuthLogoutWithCsrfClearsCookies()
     {
-        using var h = new AuthTestHost();
+        using var h = new WebApiTestHost();
         h.Operators.Create("admin", "correctpassword12");
         h.Post("/api/auth/login", new { username = "admin", password = "correctpassword12" }).Dispose();
         var csrf = h.CookieValue("cpumon_csrf");
@@ -1070,7 +1076,7 @@ internal static class Program
 
     static void TestAuthLogoutWithoutCsrfReturns403()
     {
-        using var h = new AuthTestHost();
+        using var h = new WebApiTestHost();
         h.Operators.Create("admin", "correctpassword12");
         h.Post("/api/auth/login", new { username = "admin", password = "correctpassword12" }).Dispose();
         using var resp = h.Post("/api/auth/logout", body: null, csrfHeader: null);
@@ -1081,7 +1087,7 @@ internal static class Program
 
     static void TestAuthWhoamiReturnsUsername()
     {
-        using var h = new AuthTestHost();
+        using var h = new WebApiTestHost();
         h.Operators.Create("admin", "correctpassword12");
         h.Post("/api/auth/login", new { username = "admin", password = "correctpassword12" }).Dispose();
         using var resp = h.Get("/api/auth/whoami");
@@ -1093,7 +1099,7 @@ internal static class Program
 
     static void TestAuthBootstrapWhenOperatorExistsReturns409()
     {
-        using var h = new AuthTestHost();
+        using var h = new WebApiTestHost();
         h.Operators.Create("admin", "preexistingpwd12");
         var (token, _) = h.Bootstrap.Issue();
         using var resp = h.Post("/api/auth/bootstrap", new { username = "two", password = "anotherpassword12", bootstrapToken = token });
@@ -1103,7 +1109,7 @@ internal static class Program
 
     static void TestAuthBootstrapSucceedsAndIssuesCookies()
     {
-        using var h = new AuthTestHost();
+        using var h = new WebApiTestHost();
         Assert(!h.Operators.Exists, "operator should not exist initially");
         var (token, _) = h.Bootstrap.Issue();
         using var resp = h.Post("/api/auth/bootstrap", new { username = "admin", password = "freshpassword12", bootstrapToken = token });
@@ -1116,7 +1122,7 @@ internal static class Program
 
     static void TestAuthRateLimitBlocksAfterFiveFailedLogins()
     {
-        using var h = new AuthTestHost();
+        using var h = new WebApiTestHost();
         h.Operators.Create("admin", "rightpassword12345");
         for (int i = 0; i < 5; i++)
         {
@@ -1129,29 +1135,106 @@ internal static class Program
         Assert(h.Body(resp).Contains("\"error\":\"rate_limited\""), "error code should be rate_limited");
     }
 
-    sealed class AuthTestHost : IDisposable
+    // ── dashboard API ───────────────────────────────────────────────
+
+    static void TestDashboardStateRequiresAuth()
     {
-        public WebHost              Host      { get; }
-        public HttpClient           Client    { get; }
-        public OperatorStore        Operators { get; }
-        public SessionStore         Sessions  { get; }
-        public BootstrapTokenIssuer Bootstrap { get; }
-        public RateLimiter          RateLimit { get; }
+        using var h = new WebApiTestHost();
+        using var resp = h.Get("/api/state");
+        Assert((int)resp.StatusCode == 401, "GET /api/state without auth should return 401");
+        Assert(h.Body(resp).Contains("\"error\":\"auth_required\""), "error code should be auth_required");
+    }
+
+    static void TestDashboardStateReturnsJsonWithToken()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var resp = h.Get("/api/state");
+        Assert((int)resp.StatusCode == 200, "GET /api/state after auth should return 200");
+        var body = h.Body(resp);
+        Assert(body.Contains($"\"token\":\"{h.Engine.Token}\""), "state body should contain current engine token");
+        Assert(body.Contains("\"clients\":"), "state body should contain clients array");
+        Assert(body.Contains("\"pendingApprovals\":"), "state body should contain pendingApprovals array");
+        Assert(body.Contains("\"offlineClients\":"), "state body should contain offlineClients array");
+        Assert(body.Contains("\"osFilter\":\"all\""), "default osFilter should be all");
+    }
+
+    static void TestDashboardSelectReplacesSelection()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var r1 = h.Post("/api/state/select", new { machineNames = new[] { "alpha", "beta" } }, csrfHeader: h.Csrf);
+        Assert((int)r1.StatusCode == 204, "select should return 204");
+        Assert(h.Controller.SelectedMachineNames.SetEquals(new[] { "alpha", "beta" }), "selection should reflect posted machines");
+        using var r2 = h.Post("/api/state/select", new { machineNames = new[] { "gamma" } }, csrfHeader: h.Csrf);
+        Assert((int)r2.StatusCode == 204, "second select should return 204");
+        Assert(h.Controller.SelectedMachineNames.SetEquals(new[] { "gamma" }), "select should replace, not merge");
+    }
+
+    static void TestDashboardFilterOsSetsValue()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var r = h.Post("/api/state/filter/os", new { value = "linux" }, csrfHeader: h.Csrf);
+        Assert((int)r.StatusCode == 200, "filter set should return 200");
+        Assert(h.Body(r).Contains("\"value\":\"linux\""), "response should echo new filter value");
+        Assert(h.Controller.OsFilter == "linux", "controller osFilter should be updated");
+        using var bad = h.Post("/api/state/filter/os", new { value = "bogus" }, csrfHeader: h.Csrf);
+        Assert((int)bad.StatusCode == 400, "invalid filter value should return 400");
+    }
+
+    static void TestDashboardFilterRequiresCsrf()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var resp = h.Post("/api/state/filter/os", new { value = "windows" }, csrfHeader: null);
+        Assert((int)resp.StatusCode == 403, "POST without csrf should return 403");
+        Assert(h.Body(resp).Contains("\"error\":\"csrf_failed\""), "error code should be csrf_failed");
+        Assert(h.Controller.OsFilter == "all", "filter should not change on failed csrf check");
+    }
+
+    static void TestDashboardTokenRegenerateChangesToken()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        var before = h.Engine.Token;
+        using var resp = h.Post("/api/token/regenerate", body: null, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 200, "token regenerate should return 200");
+        Assert(h.Engine.Token != before, "engine token should change after regenerate");
+        Assert(h.Body(resp).Contains($"\"token\":\"{h.Engine.Token}\""), "response should echo new token");
+    }
+
+    sealed class WebApiTestHost : IDisposable
+    {
+        public WebHost                   Host       { get; }
+        public HttpClient                Client     { get; }
+        public OperatorStore             Operators  { get; }
+        public SessionStore              Sessions   { get; }
+        public BootstrapTokenIssuer      Bootstrap  { get; }
+        public RateLimiter               RateLimit  { get; }
+        public ServerEngine              Engine     { get; }
+        public ServerDashboardController Controller { get; }
         readonly TempDir _td;
         readonly CookieContainer _cookies;
 
-        public AuthTestHost()
+        public WebApiTestHost()
         {
-            _td       = new TempDir();
-            Operators = new OperatorStore(Path.Combine(_td.Path, "operator.json"));
-            Sessions  = new SessionStore(startPruner: false);
-            Bootstrap = new BootstrapTokenIssuer();
-            RateLimit = new RateLimiter();
-            Host      = new WebHost();
+            _td        = new TempDir();
+            Operators  = new OperatorStore(Path.Combine(_td.Path, "operator.json"));
+            Sessions   = new SessionStore(startPruner: false);
+            Bootstrap  = new BootstrapTokenIssuer();
+            RateLimit  = new RateLimiter();
+            Engine     = new ServerEngine(noBroadcast: true);
+            Controller = new ServerDashboardController(Engine, new FakeServerPlatformServices());
+            Host       = new WebHost();
             Host.StartAsync(new WebHostOptions
             {
                 Port = 0, UseTls = false, ServerVersion = "test",
-                ConfigureRoutes = (app, ctx) => WebAuthApi.Map(app, Operators, Sessions, Bootstrap, RateLimit, ctx)
+                ConfigureRoutes = (app, ctx) =>
+                {
+                    WebAuthApi.Map(app, Operators, Sessions, Bootstrap, RateLimit, ctx);
+                    WebDashboardApi.Map(app, Engine, Controller, Sessions, ctx);
+                }
             }).GetAwaiter().GetResult();
             _cookies = new CookieContainer();
             Client = new HttpClient(new HttpClientHandler { UseCookies = true, CookieContainer = _cookies })
@@ -1159,6 +1242,15 @@ internal static class Program
                 BaseAddress = new Uri($"http://127.0.0.1:{Host.Port}")
             };
         }
+
+        public void Login(string username = "admin", string password = "correctpassword12")
+        {
+            if (!Operators.Exists) Operators.Create(username, password);
+            using var r = Post("/api/auth/login", new { username, password });
+            if ((int)r.StatusCode != 204) throw new InvalidOperationException("login failed in test setup");
+        }
+
+        public string Csrf => CookieValue("cpumon_csrf");
 
         public HttpResponseMessage Post(string path, object? body = null, string? csrfHeader = null)
         {

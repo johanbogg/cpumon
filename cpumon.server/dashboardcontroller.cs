@@ -38,6 +38,31 @@ public sealed class ServerDashboardController
         return _sortMode;
     }
 
+    public string SetOsFilter(string value)
+    {
+        if (value != "all" && value != "windows" && value != "linux")
+            throw new ArgumentException("os filter must be 'all', 'windows', or 'linux'", nameof(value));
+        _osFilter = value;
+        return _osFilter;
+    }
+
+    public string SetSortMode(string value)
+    {
+        if (value != "name" && value != "os")
+            throw new ArgumentException("sort mode must be 'name' or 'os'", nameof(value));
+        _sortMode = value;
+        return _sortMode;
+    }
+
+    public void SetSelection(IEnumerable<string> machineNames)
+    {
+        _selectedMachineNames.Clear();
+        if (machineNames == null) return;
+        foreach (var name in machineNames)
+            if (!string.IsNullOrWhiteSpace(name))
+                _selectedMachineNames.Add(name);
+    }
+
     public bool ToggleSelection(string machineName)
     {
         if (string.IsNullOrWhiteSpace(machineName)) return false;
