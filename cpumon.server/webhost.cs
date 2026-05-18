@@ -104,14 +104,14 @@ public sealed class WebHost : IAsyncDisposable
                 h["Server"] = $"cpumon/{options.ServerVersion}";
                 return Task.CompletedTask;
             });
-            await next();
+            await next().ConfigureAwait(false);
         });
 
         // Request log → CLog. Format: METHOD /path → status (12ms) from 10.0.4.12
         app.Use(async (ctx, next) =>
         {
             var sw = Stopwatch.StartNew();
-            try { await next(); }
+            try { await next().ConfigureAwait(false); }
             finally
             {
                 sw.Stop();
@@ -151,7 +151,7 @@ public sealed class WebHost : IAsyncDisposable
             options.ConfigureRoutes(app, apiCtx);
         }
 
-        await app.StartAsync();
+        await app.StartAsync().ConfigureAwait(false);
 
         // Record the actually-bound port (useful when Port=0 was passed for tests).
         Port = ResolveBoundPort(app) ?? options.Port;
@@ -163,14 +163,14 @@ public sealed class WebHost : IAsyncDisposable
     public async Task StopAsync()
     {
         if (_app == null) return;
-        try { await _app.StopAsync(); }
+        try { await _app.StopAsync().ConfigureAwait(false); }
         catch (Exception ex) { _options?.Log?.Add($"Web UI: stop error ({ex.GetType().Name})", Th.Org); }
-        await _app.DisposeAsync();
+        await _app.DisposeAsync().ConfigureAwait(false);
         _app = null;
         _options?.Log?.Add("Web UI: stopped", Th.Dim);
     }
 
-    public async ValueTask DisposeAsync() => await StopAsync();
+    public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
 
     static X509Certificate2 LoadCert(WebHostOptions options)
     {

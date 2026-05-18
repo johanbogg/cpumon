@@ -70,7 +70,7 @@ public sealed class WebStartup : IDisposable
                 WebAlertsApi.Map(app, engine.Alerts, sessions, ctx);
                 WebLogApi.Map(app, engine, sessions, ctx);
             },
-        });
+        }).ConfigureAwait(false);
 
         var scheme = opts.UseTls ? "https" : "http";
         engine.Log.Add($"Web UI listening on {scheme}://{opts.BindAddress ?? "0.0.0.0"}:{host.Port}", Th.Cyan);
@@ -85,7 +85,7 @@ public sealed class WebStartup : IDisposable
     public void Dispose()
     {
         Snapshots.Dispose();
-        Host.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        Host.DisposeAsync().AsTask().ConfigureAwait(false).GetAwaiter().GetResult();
         Bootstrap.Dispose();
         Sessions.Dispose();
     }
