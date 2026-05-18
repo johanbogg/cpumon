@@ -59,6 +59,11 @@ internal static class Program
             TestArgon2HelperRoundTripAndRejectsTamper();
             TestBootstrapTokenSingleUseAndShape();
             TestBootstrapTokenExpiryClearsAndRejects();
+            TestSessionStoreIssueAndValidateRoundTrip();
+            TestSessionStoreSlidingExpiryRejectsStale();
+            TestSessionStoreTouchRefreshesLastUsed();
+            TestSessionStoreInvalidateRemoves();
+            TestSessionStorePruneRemovesExpiredEntries();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -830,6 +835,72 @@ internal static class Program
         Thread.Sleep(250);
         Assert(!issuer.IsActive, "issuer should be inactive after expiry");
         Assert(!issuer.Consume(token), "expired token should not consume");
+    }
+
+    static void TestSessionStoreIssueAndValidateRoundTrip()
+    {
+        using var store = new SessionStore(startPruner: false);
+        var s = store.Issue("admin", "127.0.0.1", "ua/test");
+        Assert(s.Id.Length >= 32, "session id should be long");
+        Assert(s.CsrfToken.Length >= 24, "csrf token should be long");
+        Assert(s.Id != s.CsrfToken, "session id and csrf must differ");
+        Assert(s.Username == "admin", "session should carry username");
+        var validated = store.Validate(s.Id);
+        Assert(validated != null && validated.Id == s.Id, "issued session should validate");
+        Assert(store.Validate(null) == null, "null id should not validate");
+        Assert(store.Validate("not-a-real-session") == null, "unknown id should not validate");
+    }
+
+    static void TestSessionStoreSlidingExpiryRejectsStale()
+    {
+        using var store = new SessionStore(startPruner: false) { SlidingExpiry = TimeSpan.FromMilliseconds(50) };
+        var s = store.Issue("admin", "::1", "");
+        Assert(store.Validate(s.Id) != null, "fresh session should validate");
+        Thread.Sleep(120);
+        Assert(store.Validate(s.Id) == null, "expired session should not validate");
+        Assert(store.Count == 0, "expired session should be removed on access");
+    }
+
+    static void TestSessionStoreTouchRefreshesLastUsed()
+    {
+        using var store = new SessionStore(startPruner: false) { SlidingExpiry = TimeSpan.FromMilliseconds(200) };
+        var s = store.Issue("admin", "::1", "");
+        var initial = s.LastUsedAt;
+        Thread.Sleep(80);
+        var validated = store.Validate(s.Id);
+        Assert(validated != null, "session should still be valid mid-window");
+        Assert(validated!.LastUsedAt > initial, "validate should refresh LastUsedAt");
+        Thread.Sleep(150);
+        Assert(store.Validate(s.Id) != null, "sliding expiry should keep refreshed session alive past original window");
+    }
+
+    static void TestSessionStoreInvalidateRemoves()
+    {
+        using var store = new SessionStore(startPruner: false);
+        var s = store.Issue("admin", "::1", "");
+        Assert(store.Invalidate(s.Id), "invalidate should report removal");
+        Assert(store.Validate(s.Id) == null, "invalidated session should not validate");
+        Assert(!store.Invalidate(s.Id), "second invalidate should report nothing removed");
+    }
+
+    static void TestSessionStorePruneRemovesExpiredEntries()
+    {
+        using var store = new SessionStore(startPruner: false) { SlidingExpiry = TimeSpan.FromMilliseconds(150) };
+        var alive = store.Issue("alive", "::1", "");
+        var dead1 = store.Issue("dead1", "::1", "");
+        var dead2 = store.Issue("dead2", "::1", "");
+        // Touch the live one mid-window so its LastUsedAt advances.
+        Thread.Sleep(60);
+        Assert(store.Validate(alive.Id) != null, "mid-window validate should succeed");
+        // Wait long enough for dead1/2 to expire but not the refreshed alive.
+        Thread.Sleep(120);
+        int evented = 0;
+        store.Pruned += n => evented += n;
+        int swept = store.Prune();
+        Assert(swept == 2, "prune should remove two stale entries");
+        Assert(evented == 2, "Pruned event should report two removals");
+        Assert(store.Count == 1, "live session should remain after prune");
+        Assert(store.Validate(dead1.Id) == null, "pruned session id should no longer validate");
     }
 
     static RemoteClient FakeRemoteClient()
