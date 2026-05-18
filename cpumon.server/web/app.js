@@ -99,9 +99,34 @@ function render(data) {
 
 function renderClients(clients) {
   const list = $('clientList');
-  list.replaceChildren();
   $('emptyClients').style.display = clients.length ? 'none' : 'block';
-  for (const client of clients) list.appendChild(clientCard(client));
+  const seen = new Set();
+
+  for (let i = 0; i < clients.length; i++) {
+    const client = clients[i];
+    const sig = cardSignature(client);
+    seen.add(client.machineName);
+    let node = list.children[i];
+
+    if (node?.dataset.machine === client.machineName && (node.dataset.sig === sig || (node.matches(':hover') && node.dataset.stableSig === stableCardSignature(client))))
+      continue;
+
+    const existing = [...list.children].find(el => el.dataset.machine === client.machineName);
+    if (existing && (existing.dataset.sig === sig || (existing.matches(':hover') && existing.dataset.stableSig === stableCardSignature(client)))) {
+      list.insertBefore(existing, node || null);
+      continue;
+    }
+
+    const fresh = clientCard(client);
+    fresh.dataset.sig = sig;
+    fresh.dataset.stableSig = stableCardSignature(client);
+    if (existing) existing.replaceWith(fresh);
+    else list.insertBefore(fresh, node || null);
+  }
+
+  for (const child of [...list.children])
+    if (!seen.has(child.dataset.machine))
+      child.remove();
 }
 
 function clientCard(client) {
@@ -161,6 +186,28 @@ function clientCard(client) {
     post(`/api/clients/${encodeURIComponent(client.machineName)}/expand`);
   });
   return tpl;
+}
+
+function cardSignature(client) {
+  return JSON.stringify({
+    client,
+    selected: state.selected.has(client.machineName),
+  });
+}
+
+function stableCardSignature(client) {
+  return JSON.stringify({
+    machineName: client.machineName,
+    displayName: client.displayName,
+    clientVersion: client.clientVersion,
+    isExpanded: client.isExpanded,
+    isStale: client.isStale,
+    isWaitingForFirstReport: client.isWaitingForFirstReport,
+    isOutdated: client.isOutdated,
+    isPaw: client.isPaw,
+    sendMode: client.sendMode,
+    selected: state.selected.has(client.machineName),
+  });
 }
 
 function renderOffline(items) {
