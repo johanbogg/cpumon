@@ -33,25 +33,27 @@ public static class WebApprovedApi
         app.MapMethods("/api/approved/{machine}", new[] { "PATCH" }, async (HttpContext ctx, string machine) =>
         {
             if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
-            if (!Exists(engine, machine)) return NotFound(ctx, machine);
+            var canonical = Canonical(engine, machine);
+            if (canonical == null) return NotFound(ctx, machine);
             var body = await TryRead<ApprovedPatchRequest>(ctx);
             if (body == null) return Error(ctx, 400, "validation_failed", "Body required.");
-            if (body.Alias != null) engine.Store.SetAlias(machine, body.Alias.Trim());
-            if (body.IsPaw.HasValue) engine.Store.SetPaw(machine, body.IsPaw.Value);
+            if (body.Alias != null) engine.Store.SetAlias(canonical, body.Alias.Trim());
+            if (body.IsPaw.HasValue) engine.Store.SetPaw(canonical, body.IsPaw.Value);
             return Results.NoContent();
         });
 
         app.MapDelete("/api/approved/{machine}", (HttpContext ctx, string machine) =>
         {
             if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
-            engine.Store.Forget(machine);
-            apiCtx.Log?.Add($"Web UI: delete approved {machine}", Th.Yel);
+            var canonical = Canonical(engine, machine) ?? machine;
+            engine.Store.Forget(canonical);
+            apiCtx.Log?.Add($"Web UI: delete approved {canonical}", Th.Yel);
             return Results.NoContent();
         });
     }
 
-    static bool Exists(ServerEngine engine, string machine)
-        => engine.Store.All().Any(c => string.Equals(c.Name, machine, StringComparison.OrdinalIgnoreCase));
+    static string? Canonical(ServerEngine engine, string machine)
+        => engine.Store.All().FirstOrDefault(c => string.Equals(c.Name, machine, StringComparison.OrdinalIgnoreCase))?.Name;
 
     static ApprovedClientEntry Project(ApprovedClient c) => new()
     {

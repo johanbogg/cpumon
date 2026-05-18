@@ -29,38 +29,41 @@ public static class WebOfflineApi
         app.MapPost("/api/offline/{machine}/wake", (HttpContext ctx, string machine) =>
         {
             if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
-            if (!IsApproved(engine, machine)) return NotFound(ctx, machine);
-            if (!engine.WakeOffline(machine))
-                return Error(ctx, 409, "conflict", $"Machine '{machine}' has no MAC stored or wake failed.");
+            var canonical = Canonical(engine, machine);
+            if (canonical == null) return NotFound(ctx, machine);
+            if (!engine.WakeOffline(canonical))
+                return Error(ctx, 409, "conflict", $"Machine '{canonical}' has no MAC stored or wake failed.");
             return Results.NoContent();
         });
 
         app.MapPost("/api/offline/{machine}/mac", async (HttpContext ctx, string machine) =>
         {
             if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
-            if (!IsApproved(engine, machine)) return NotFound(ctx, machine);
+            var canonical = Canonical(engine, machine);
+            if (canonical == null) return NotFound(ctx, machine);
             var body = await TryRead<MacRequest>(ctx);
             if (body == null || string.IsNullOrWhiteSpace(body.Mac))
                 return Error(ctx, 400, "validation_failed", "Body { mac } required.");
             var mac = body.Mac.Trim();
             if (!MacPattern.IsMatch(mac))
                 return Error(ctx, 400, "validation_failed", "MAC must be 12 hex digits, optional ':' or '-' separators.");
-            engine.SetMacForOffline(machine, mac);
+            engine.SetMacForOffline(canonical, mac);
             return Results.NoContent();
         });
 
         app.MapPost("/api/offline/{machine}/forget", (HttpContext ctx, string machine) =>
         {
             if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
-            if (!IsApproved(engine, machine)) return NotFound(ctx, machine);
-            engine.Store.Forget(machine);
-            apiCtx.Log?.Add($"Web UI: forget offline {machine}", Th.Yel);
+            var canonical = Canonical(engine, machine);
+            if (canonical == null) return NotFound(ctx, machine);
+            engine.Store.Forget(canonical);
+            apiCtx.Log?.Add($"Web UI: forget offline {canonical}", Th.Yel);
             return Results.NoContent();
         });
     }
 
-    static bool IsApproved(ServerEngine engine, string machine)
-        => engine.Store.All().Any(c => string.Equals(c.Name, machine, StringComparison.OrdinalIgnoreCase));
+    static string? Canonical(ServerEngine engine, string machine)
+        => engine.Store.All().FirstOrDefault(c => string.Equals(c.Name, machine, StringComparison.OrdinalIgnoreCase))?.Name;
 
     static IResult NotFound(HttpContext ctx, string machine)
         => Error(ctx, 404, "not_found", $"Machine '{machine}' is not known.");

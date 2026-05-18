@@ -25,19 +25,26 @@ public static class WebAlertsApi
         app.MapGet("/api/alerts", (HttpContext ctx) =>
         {
             if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: false, out _, out var fail)) return fail!;
-            return Results.Json(alerts.Config, JsonOpts);
+            return Results.Json(View(alerts.Config), JsonOpts);
         });
 
         app.MapPut("/api/alerts", async (HttpContext ctx) =>
         {
             if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
-            var cfg = await TryRead<AlertConfig>(ctx);
-            if (cfg == null) return Error(ctx, 400, "validation_failed", "AlertConfig body required.");
-            if (cfg.SmtpPort < 0 || cfg.SmtpPort > 65535)
-                return Error(ctx, 400, "validation_failed", "SmtpPort must be 0-65535.");
-            if (cfg.CooldownMinutes < 0)
-                return Error(ctx, 400, "validation_failed", "CooldownMinutes must be non-negative.");
-            alerts.SaveConfig(cfg);
+            var body = await TryRead<AlertConfigUpdateRequest>(ctx);
+            if (body == null) return Error(ctx, 400, "validation_failed", "AlertConfig body required.");
+            var port = body.Port ?? 587;
+            if (port < 0 || port > 65535)
+                return Error(ctx, 400, "validation_failed", "Port must be 0-65535.");
+            var cooldown = body.Cooldown ?? 30;
+            if (cooldown < 0)
+                return Error(ctx, 400, "validation_failed", "Cooldown must be non-negative.");
+            if (body.Ram is < 0 or > 100)
+                return Error(ctx, 400, "validation_failed", "Ram threshold must be 0-100.");
+            if (body.Disk is < 0 or > 100)
+                return Error(ctx, 400, "validation_failed", "Disk threshold must be 0-100.");
+            var merged = Merge(alerts.Config, body, port, cooldown);
+            alerts.SaveConfig(merged);
             apiCtx.Log?.Add("Web UI: alerts config updated", Th.Yel);
             return Results.NoContent();
         });
@@ -61,6 +68,44 @@ public static class WebAlertsApi
         });
     }
 
+    static AlertConfigView View(AlertConfig cfg) => new()
+    {
+        Host        = cfg.SmtpHost,
+        Port        = cfg.SmtpPort,
+        Security    = cfg.Security,
+        From        = cfg.FromAddress,
+        To          = cfg.ToAddress,
+        Username    = cfg.Username,
+        PasswordSet = !string.IsNullOrEmpty(cfg.EncryptedPassword),
+        Ram         = cfg.AlertRamPct,
+        Disk        = cfg.AlertDiskPct,
+        Temp        = cfg.AlertTempC,
+        Cooldown    = cfg.CooldownMinutes,
+    };
+
+    static AlertConfig Merge(AlertConfig existing, AlertConfigUpdateRequest body, int port, int cooldown)
+    {
+        string? encryptedPassword;
+        if (body.ClearPassword == true) encryptedPassword = null;
+        else if (!string.IsNullOrEmpty(body.Password)) encryptedPassword = AlertConfigStore.Encrypt(body.Password);
+        else encryptedPassword = existing.EncryptedPassword;
+
+        return new AlertConfig
+        {
+            SmtpHost          = body.Host,
+            SmtpPort          = port,
+            Security          = body.Security ?? existing.Security,
+            FromAddress       = body.From,
+            ToAddress         = body.To,
+            Username          = body.Username,
+            EncryptedPassword = encryptedPassword,
+            AlertRamPct       = body.Ram,
+            AlertDiskPct      = body.Disk,
+            AlertTempC        = body.Temp,
+            CooldownMinutes   = cooldown,
+        };
+    }
+
     static IResult Error(HttpContext ctx, int status, string code, string message)
     {
         ctx.Response.StatusCode = status;
@@ -78,4 +123,37 @@ public static class WebAlertsApi
         }
         catch { return null; }
     }
+}
+
+public sealed class AlertConfigView
+{
+    public string?       Host        { get; set; }
+    public int           Port        { get; set; }
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public EmailSecurity Security    { get; set; }
+    public string?       From        { get; set; }
+    public string?       To          { get; set; }
+    public string?       Username    { get; set; }
+    public bool          PasswordSet { get; set; }
+    public int?          Ram         { get; set; }
+    public int?          Disk        { get; set; }
+    public float?        Temp        { get; set; }
+    public int           Cooldown    { get; set; }
+}
+
+public sealed class AlertConfigUpdateRequest
+{
+    public string?        Host          { get; set; }
+    public int?           Port          { get; set; }
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public EmailSecurity? Security      { get; set; }
+    public string?        From          { get; set; }
+    public string?        To            { get; set; }
+    public string?        Username      { get; set; }
+    public string?        Password      { get; set; }   // plaintext; encrypted server-side
+    public bool?          ClearPassword { get; set; }   // explicit wipe
+    public int?           Ram           { get; set; }
+    public int?           Disk          { get; set; }
+    public float?         Temp          { get; set; }
+    public int?           Cooldown      { get; set; }
 }

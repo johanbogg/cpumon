@@ -111,6 +111,10 @@ internal static class Program
             TestOfflineWakeReturns404ForUnknownMachine();
             TestOfflineMacValidatesFormat();
             TestAlertsGetPutRoundTripUpdatesService();
+            TestAlertsPutPreservesExistingPassword();
+            TestApprovedPatchResolvesCanonicalCasing();
+            TestSlice9EndpointsRequireAuth();
+            TestSlice9EndpointsRequireCsrf();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -1410,15 +1414,18 @@ internal static class Program
         h.Login();
         using var get = h.Get("/api/alerts");
         Assert((int)get.StatusCode == 200, "GET /api/alerts should return 200");
-        Assert(h.Body(get).Contains("\"cool\":30"), "default cooldown should be 30 minutes");
+        var body = h.Body(get);
+        Assert(body.Contains("\"cooldown\":30"), "default cooldown should be 30 minutes");
+        Assert(body.Contains("\"passwordSet\":false"), "GET should expose passwordSet boolean (not the encrypted blob)");
+        Assert(!body.Contains("\"pass\""), "GET must not expose the encrypted password field");
         var update = new
         {
-            host = "smtp.example.com",
-            port = 587,
-            from = "ops@example.com",
-            to   = "ops@example.com",
-            ram  = 90,
-            cool = 15,
+            host     = "smtp.example.com",
+            port     = 587,
+            from     = "ops@example.com",
+            to       = "ops@example.com",
+            ram      = 90,
+            cooldown = 15,
         };
         using var put = h.Put("/api/alerts", update, csrfHeader: h.Csrf);
         Assert((int)put.StatusCode == 204, "PUT /api/alerts should return 204");
@@ -1427,6 +1434,80 @@ internal static class Program
         Assert(h.Alerts.Config.CooldownMinutes == 15, "cooldown should be updated");
         using var bad = h.Put("/api/alerts", new { port = -1 }, csrfHeader: h.Csrf);
         Assert((int)bad.StatusCode == 400, "invalid port should return 400");
+    }
+
+    static void TestAlertsPutPreservesExistingPassword()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        // Bypass DPAPI by stashing a sentinel directly; web code only cares that the field is non-empty.
+        h.Alerts.SaveConfig(new AlertConfig
+        {
+            SmtpHost = "smtp.example.com", FromAddress = "ops@x.com", ToAddress = "ops@x.com",
+            Username = "ops", EncryptedPassword = "STORED_BLOB", CooldownMinutes = 30,
+        });
+        using var keep = h.Put("/api/alerts", new
+        {
+            host = "smtp.example.com", port = 587, from = "ops@x.com", to = "ops@x.com",
+            username = "ops", ram = 80, cooldown = 30,
+        }, csrfHeader: h.Csrf);
+        Assert((int)keep.StatusCode == 204, "PUT without password fields should return 204");
+        Assert(h.Alerts.Config.EncryptedPassword == "STORED_BLOB", "PUT without password fields must preserve existing encrypted password");
+        Assert(h.Alerts.Config.Username == "ops", "username should still be ops");
+        using var clear = h.Put("/api/alerts", new
+        {
+            host = "smtp.example.com", port = 587, from = "ops@x.com", to = "ops@x.com",
+            username = "ops", clearPassword = true, cooldown = 30,
+        }, csrfHeader: h.Csrf);
+        Assert((int)clear.StatusCode == 204, "PUT with clearPassword should return 204");
+        Assert(string.IsNullOrEmpty(h.Alerts.Config.EncryptedPassword), "clearPassword=true must wipe the encrypted blob");
+    }
+
+    static void TestApprovedPatchResolvesCanonicalCasing()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        h.Engine.Store.Approve("mybox", "k", "10.0.0.9");
+        using var resp = h.Patch("/api/approved/MYBOX", new { alias = "renamed" }, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 204, "case-mismatched PATCH should resolve canonical name and return 204");
+        Assert(h.Engine.Store.GetAlias("mybox") == "renamed", "PATCH must mutate the stored entry under its canonical casing");
+    }
+
+    static readonly (string Method, string Path, bool HasBody)[] Slice9Paths =
+    {
+        ("POST",   "/api/offline/box/wake",   false),
+        ("POST",   "/api/offline/box/mac",    true),
+        ("POST",   "/api/offline/box/forget", false),
+        ("PATCH",  "/api/approved/box",       true),
+        ("DELETE", "/api/approved/box",       false),
+        ("PUT",    "/api/alerts",             true),
+        ("POST",   "/api/alerts/test",        false),
+    };
+
+    static void TestSlice9EndpointsRequireAuth()
+    {
+        using var h = new WebApiTestHost();
+        foreach (var (method, path, hasBody) in Slice9Paths)
+        {
+            using var resp = h.Send(method, path, hasBody ? new { } : null, csrfHeader: null);
+            Assert((int)resp.StatusCode == 401, $"{method} {path} without auth should return 401");
+        }
+        using var listResp = h.Get("/api/approved");
+        Assert((int)listResp.StatusCode == 401, "GET /api/approved without auth should return 401");
+        using var alertsGet = h.Get("/api/alerts");
+        Assert((int)alertsGet.StatusCode == 401, "GET /api/alerts without auth should return 401");
+    }
+
+    static void TestSlice9EndpointsRequireCsrf()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        foreach (var (method, path, hasBody) in Slice9Paths)
+        {
+            using var resp = h.Send(method, path, hasBody ? new { } : null, csrfHeader: null);
+            Assert((int)resp.StatusCode == 403, $"{method} {path} without csrf should return 403");
+            Assert(h.Body(resp).Contains("\"error\":\"csrf_failed\""), $"{method} {path} should report csrf_failed");
+        }
     }
 
     static readonly string[] SnapshotPaths =
@@ -1556,10 +1637,11 @@ internal static class Program
             Sessions   = new SessionStore(startPruner: false);
             Bootstrap  = new BootstrapTokenIssuer();
             RateLimit  = new RateLimiter();
-            Engine     = new ServerEngine(noBroadcast: true);
+            Alerts     = new AlertService(new CLog(), Path.Combine(_td.Path, "alerts.json"));
+            var store  = new ApprovedClientStore(Path.Combine(_td.Path, "approved_clients.json"));
+            Engine     = new ServerEngine(noBroadcast: true, store: store, alerts: Alerts);
             Controller = new ServerDashboardController(Engine, new FakeServerPlatformServices());
             Snapshots  = new SnapshotCache(Engine);
-            Alerts     = new AlertService(new CLog(), Path.Combine(_td.Path, "alerts.json"));
             Host       = new WebHost();
             Host.StartAsync(new WebHostOptions
             {
@@ -1605,7 +1687,10 @@ internal static class Program
 
         public HttpResponseMessage Get(string path) => Client.GetAsync(path).GetAwaiter().GetResult();
 
-        HttpResponseMessage Send(HttpMethod method, string path, object? body, string? csrfHeader)
+        public HttpResponseMessage Send(string method, string path, object? body = null, string? csrfHeader = null)
+            => Send(method == "PATCH" ? new HttpMethod("PATCH") : new HttpMethod(method), path, body, csrfHeader);
+
+        public HttpResponseMessage Send(HttpMethod method, string path, object? body, string? csrfHeader)
         {
             var req = new HttpRequestMessage(method, path);
             if (body != null)

@@ -23,7 +23,7 @@ public sealed class ServerEngine : IDisposable
     readonly CLog _log = new(50, "cpumon_server.log");
     readonly ConcurrentDictionary<string, RemoteClient> _cls = new();
     readonly ConcurrentDictionary<string, PendingClientApproval> _pendingApprovals = new();
-    readonly ApprovedClientStore _store = new();
+    readonly ApprovedClientStore _store;
     readonly Dictionary<string, PendingPowerAction> _pendingPowerActions = new();
     readonly ConcurrentDictionary<string, long> _pawSeenNonces = new();
     readonly AlertService _alertSvc;
@@ -57,10 +57,11 @@ public sealed class ServerEngine : IDisposable
         "rdp_open", "rdp_close", "rdp_set_fps", "rdp_set_quality", "rdp_refresh", "rdp_input", "rdp_set_monitor", "rdp_set_bandwidth",
     };
 
-    public ServerEngine(bool noBroadcast)
+    public ServerEngine(bool noBroadcast, ApprovedClientStore? store = null, AlertService? alerts = null)
     {
         _nb = noBroadcast;
-        _alertSvc = new AlertService(_log);
+        _store = store ?? new ApprovedClientStore();
+        _alertSvc = alerts ?? new AlertService(_log);
         _tok = Security.GenToken();
         _tokAt = DateTime.UtcNow;
     }
