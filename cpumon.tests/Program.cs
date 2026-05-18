@@ -487,7 +487,7 @@ internal static class Program
         AddReportedClient(engine, "m-win", "Microsoft Windows 10", Proto.AppVersion);
         AddReportedClient(engine, "b-lnx", "Linux Ubuntu", "0.0.2-linux");
 
-        var controller = new ServerDashboardController(engine);
+        var controller = new ServerDashboardController(engine, new FakeServerPlatformServices());
         Assert(controller.CycleSortMode() == "os", "sort mode should cycle to os");
         var names = controller.GetState().Clients.Select(c => c.MachineName).ToList();
 
@@ -500,7 +500,7 @@ internal static class Program
         AddReportedClient(engine, "win-box", "Microsoft Windows 11", Proto.AppVersion);
         AddReportedClient(engine, "linux-box", "Linux Debian", "0.0.1-linux");
 
-        var cards = new ServerDashboardController(engine).GetState().Clients.ToDictionary(c => c.MachineName, StringComparer.OrdinalIgnoreCase);
+        var cards = new ServerDashboardController(engine, new FakeServerPlatformServices()).GetState().Clients.ToDictionary(c => c.MachineName, StringComparer.OrdinalIgnoreCase);
         var win = cards["win-box"];
         var linux = cards["linux-box"];
 
@@ -536,7 +536,7 @@ internal static class Program
         windows.LastReport = new MachineReport { MachineName = windows.MachineName, OsVersion = "Microsoft Windows 11" };
         engine.Clients[windows.MachineName] = windows;
 
-        var controller = new ServerDashboardController(engine);
+        var controller = new ServerDashboardController(engine, new FakeServerPlatformServices());
         Assert(controller.GetState().OsFilter == "all", "dashboard controller should default to all clients");
         Assert(controller.GetState().SortMode == "name", "dashboard controller should default to name sort");
 
@@ -568,7 +568,7 @@ internal static class Program
         AddReportedClient(engine, "win-box", "Microsoft Windows 11", Proto.AppVersion);
         AddReportedClient(engine, "linux-box", "Linux Debian", "0.0.1-linux");
 
-        var controller = new ServerDashboardController(engine);
+        var controller = new ServerDashboardController(engine, new FakeServerPlatformServices());
         Assert(controller.CycleOsFilter() == "windows", "first OS filter cycle should select windows");
         controller.SelectAllVisible();
 
@@ -583,7 +583,7 @@ internal static class Program
         AddReportedClient(engine, "current-box", "Microsoft Windows 11", Proto.AppVersion);
         AddReportedClient(engine, "future-box", "Microsoft Windows 11", "9.9.9");
 
-        var controller = new ServerDashboardController(engine);
+        var controller = new ServerDashboardController(engine, new FakeServerPlatformServices());
         controller.SelectOutdatedVisible();
 
         Assert(controller.GetState().SelectedMachineNames.SetEquals(new[] { "old-box" }), "SelectOutdatedVisible should select only visible clients older than the server version");
@@ -597,7 +597,7 @@ internal static class Program
         var stale = AddReportedClient(engine, "stale", "Microsoft Windows 11", Proto.AppVersion);
         stale.LastSeen = DateTime.UtcNow.AddMinutes(-5);
 
-        var controller = new ServerDashboardController(engine);
+        var controller = new ServerDashboardController(engine, new FakeServerPlatformServices());
         controller.ToggleSelection("stale");
         controller.PurgeStaleClients();
 
@@ -608,7 +608,7 @@ internal static class Program
 
     static void TestDashboardControllerPendingDelegatesReturnFalseForMissing()
     {
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), new FakeServerPlatformServices());
         Assert(!controller.ApprovePending("no-such-machine"), "controller approving missing pending client should return false");
         Assert(!controller.RejectPending("no-such-machine"), "controller rejecting missing pending client should return false");
     }
@@ -701,7 +701,7 @@ internal static class Program
         client.MachineName = "card-box";
         client.Expanded = false;
         engine.Clients[client.MachineName] = client;
-        var controller = new ServerDashboardController(engine);
+        var controller = new ServerDashboardController(engine, new FakeServerPlatformServices());
         controller.ToggleClientExpanded("card-box");
         Assert(client.Expanded, "ToggleClientExpanded should expand a collapsed client");
         controller.ToggleClientExpanded("card-box");

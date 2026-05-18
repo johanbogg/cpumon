@@ -8,12 +8,12 @@ public sealed class ServerDashboardController
 {
     readonly ServerEngine _engine;
     readonly ServerDashboardStateBuilder _stateBuilder;
-    readonly IServerPlatformServices? _platform;
+    readonly IServerPlatformServices _platform;
     readonly HashSet<string> _selectedMachineNames = new(StringComparer.OrdinalIgnoreCase);
     string _osFilter = "all";
     string _sortMode = "name";
 
-    public ServerDashboardController(ServerEngine engine, IServerPlatformServices? platform = null)
+    public ServerDashboardController(ServerEngine engine, IServerPlatformServices platform)
     {
         _engine = engine;
         _platform = platform;
@@ -86,7 +86,7 @@ public sealed class ServerDashboardController
     {
         var token = _engine.Token;
         if (string.IsNullOrEmpty(token)) return;
-        _platform?.SetClipboardText(token);
+        _platform.SetClipboardText(token);
         _engine.Log.Add("Token copied", Th.Grn);
     }
 
@@ -106,7 +106,6 @@ public sealed class ServerDashboardController
 
     public void RequestSetOfflineMac(string machineName)
     {
-        if (_platform == null) return;
         var mac = _platform.Prompt("Set MAC", $"MAC for {machineName} (e.g. AA:BB:CC:DD:EE:FF):");
         if (mac != null) SetOfflineMac(machineName, mac);
     }
@@ -137,7 +136,7 @@ public sealed class ServerDashboardController
 
     public void RequestProcesses(string machineName)
     {
-        _platform?.ShowProcessDialog(machineName);
+        _platform.ShowProcessDialog(machineName);
         _engine.RequestProcessList(machineName);
     }
 
@@ -153,28 +152,27 @@ public sealed class ServerDashboardController
 
     public bool TogglePaw(string machineName) => _engine.TogglePaw(machineName);
 
-    public void ShowApprovedClients() => _platform?.ShowApprovedClients();
+    public void ShowApprovedClients() => _platform.ShowApprovedClients();
 
-    public void ShowAlerts() => _platform?.ShowAlerts();
+    public void ShowAlerts() => _platform.ShowAlerts();
 
-    public void ShowHealth(string machineName) => _platform?.ShowHealthDialog(machineName);
+    public void ShowHealth(string machineName) => _platform.ShowHealthDialog(machineName);
 
-    public void OpenTerminal(string machineName, string shell) => _platform?.ShowTerminal(machineName, shell);
+    public void OpenTerminal(string machineName, string shell) => _platform.ShowTerminal(machineName, shell);
 
-    public void OpenFileBrowser(string machineName, string? initialPath = null) => _platform?.ShowFileBrowser(machineName, initialPath);
+    public void OpenFileBrowser(string machineName, string? initialPath = null) => _platform.ShowFileBrowser(machineName, initialPath);
 
-    public void OpenRdp(string machineName) => _platform?.ShowRdp(machineName);
+    public void OpenRdp(string machineName) => _platform.ShowRdp(machineName);
 
     public void SendUserMessage(string machineName)
     {
-        if (_platform == null) return;
         var text = _platform.PromptUserMessage(machineName);
         if (!string.IsNullOrWhiteSpace(text)) _engine.SendUserMessage(machineName, text);
     }
 
     public void PushUpdate(string machineName)
     {
-        if (_platform == null || !_engine.Clients.TryGetValue(machineName, out var cl)) return;
+        if (!_engine.Clients.TryGetValue(machineName, out var cl)) return;
         bool linux = ServerEngine.IsLinuxClient(cl);
         var path = _platform.PickFile(
             linux ? "Select Linux cpumon.py or cpumon-linux release zip" : "Select new client exe to push",
@@ -184,7 +182,6 @@ public sealed class ServerDashboardController
 
     public void PushUpdateToSelected()
     {
-        if (_platform == null) return;
         var snapshot = _selectedMachineNames.ToList();
         var winClients = LiveSelectedClients(snapshot, linux: false);
         var linuxClients = LiveSelectedClients(snapshot, linux: true);
@@ -210,9 +207,9 @@ public sealed class ServerDashboardController
     }
 
     bool Confirm(string message, DashboardConfirmKind kind = DashboardConfirmKind.Question)
-        => _platform != null && _platform.Confirm(message, "Confirm", kind);
+        => _platform.Confirm(message, "Confirm", kind);
 
-    void OpenExternal(string target) => _platform?.OpenExternal(target);
+    void OpenExternal(string target) => _platform.OpenExternal(target);
 
     void DoPushUpdate(string machineName, bool linux, string path)
     {
