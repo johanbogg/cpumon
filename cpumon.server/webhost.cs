@@ -26,6 +26,32 @@ public sealed class WebHostOptions
     public string   ServerVersion { get; init; } = "?";
     public DateTime StartedAt     { get; init; } = DateTime.UtcNow;
     public CLog?    Log           { get; init; }
+    /// <summary>Called after middleware is installed and /api/healthz is mapped but before app.StartAsync().
+    /// Use to register additional API endpoints from per-concern modules (webauthapi, webdashboardapi, …).</summary>
+    public Action<WebApplication, WebApiContext>? ConfigureRoutes { get; init; }
+}
+
+/// <summary>Read-only view of host options passed to route configurators so they can shape responses correctly
+/// (Secure cookie attribute, X-Forwarded-For handling, log routing).</summary>
+public sealed class WebApiContext
+{
+    public bool   UseTls      { get; init; }
+    public bool   BehindProxy { get; init; }
+    public CLog?  Log         { get; init; }
+
+    public string ClientIp(HttpContext ctx)
+    {
+        if (BehindProxy)
+        {
+            var fwd = ctx.Request.Headers["X-Forwarded-For"].ToString();
+            if (!string.IsNullOrEmpty(fwd))
+            {
+                int comma = fwd.IndexOf(',');
+                return (comma > 0 ? fwd[..comma] : fwd).Trim();
+            }
+        }
+        return ctx.Connection.RemoteIpAddress?.ToString() ?? "";
+    }
 }
 
 public sealed class WebHost : IAsyncDisposable
@@ -110,6 +136,17 @@ public sealed class WebHost : IAsyncDisposable
             });
         });
 
+        if (options.ConfigureRoutes != null)
+        {
+            var apiCtx = new WebApiContext
+            {
+                UseTls      = options.UseTls,
+                BehindProxy = options.BehindProxy,
+                Log         = options.Log
+            };
+            options.ConfigureRoutes(app, apiCtx);
+        }
+
         await app.StartAsync();
 
         // Record the actually-bound port (useful when Port=0 was passed for tests).
@@ -160,16 +197,5 @@ public sealed class WebHost : IAsyncDisposable
     }
 
     static string RemoteIp(HttpContext ctx, bool behindProxy)
-    {
-        if (behindProxy)
-        {
-            var fwd = ctx.Request.Headers["X-Forwarded-For"].ToString();
-            if (!string.IsNullOrEmpty(fwd))
-            {
-                int comma = fwd.IndexOf(',');
-                return (comma > 0 ? fwd[..comma] : fwd).Trim();
-            }
-        }
-        return ctx.Connection.RemoteIpAddress?.ToString() ?? "";
-    }
+        => new WebApiContext { BehindProxy = behindProxy }.ClientIp(ctx);
 }

@@ -3,9 +3,12 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -68,6 +71,18 @@ internal static class Program
             TestWebHostStartsAndStopsCleanly();
             TestWebHostHealthzReturnsJson();
             TestWebHostSetsSecurityHeaders();
+            TestRateLimiterBlocksAfterMaxFailures();
+            TestRateLimiterResetClears();
+            TestRateLimiterWindowSlides();
+            TestAuthLoginRejectsBlankBody();
+            TestAuthLoginRejectsWrongPassword();
+            TestAuthLoginSuccessIssuesCookies();
+            TestAuthLogoutWithCsrfClearsCookies();
+            TestAuthLogoutWithoutCsrfReturns403();
+            TestAuthWhoamiReturnsUsername();
+            TestAuthBootstrapWhenOperatorExistsReturns409();
+            TestAuthBootstrapSucceedsAndIssuesCookies();
+            TestAuthRateLimitBlocksAfterFiveFailedLogins();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -972,6 +987,207 @@ internal static class Program
         if (resp.Headers.TryGetValues(name, out var v1)) return string.Join(", ", v1);
         if (resp.Content.Headers.TryGetValues(name, out var v2)) return string.Join(", ", v2);
         return "";
+    }
+
+    // ── rate limiter ────────────────────────────────────────────────
+
+    static void TestRateLimiterBlocksAfterMaxFailures()
+    {
+        var rl = new RateLimiter { MaxFailures = 3 };
+        Assert(!rl.IsBlocked("10.0.0.1"), "fresh limiter should not block");
+        rl.RecordFailure("10.0.0.1");
+        rl.RecordFailure("10.0.0.1");
+        Assert(!rl.IsBlocked("10.0.0.1"), "below threshold should not block");
+        rl.RecordFailure("10.0.0.1");
+        Assert(rl.IsBlocked("10.0.0.1"), "reaching MaxFailures should block");
+        Assert(!rl.IsBlocked("10.0.0.2"), "block should be per-IP");
+    }
+
+    static void TestRateLimiterResetClears()
+    {
+        var rl = new RateLimiter { MaxFailures = 2 };
+        rl.RecordFailure("ip"); rl.RecordFailure("ip");
+        Assert(rl.IsBlocked("ip"), "should block after threshold");
+        rl.Reset("ip");
+        Assert(!rl.IsBlocked("ip"), "Reset should clear the block");
+        Assert(rl.FailureCount("ip") == 0, "count should be zero after Reset");
+    }
+
+    static void TestRateLimiterWindowSlides()
+    {
+        var rl = new RateLimiter { MaxFailures = 2, Window = TimeSpan.FromMilliseconds(120) };
+        rl.RecordFailure("ip"); rl.RecordFailure("ip");
+        Assert(rl.IsBlocked("ip"), "should block immediately");
+        Thread.Sleep(180);
+        Assert(!rl.IsBlocked("ip"), "old failures should age out of window");
+        Assert(rl.FailureCount("ip") == 0, "count should drop to zero after window passes");
+    }
+
+    // ── auth API ────────────────────────────────────────────────────
+
+    static void TestAuthLoginRejectsBlankBody()
+    {
+        using var h = new AuthTestHost();
+        h.Operators.Create("admin", "correctpassword12");
+        using var resp = h.Post("/api/auth/login", body: null);
+        Assert((int)resp.StatusCode == 400, "blank body should return 400");
+        Assert(h.Body(resp).Contains("\"error\":\"validation_failed\""), "error code should be validation_failed");
+    }
+
+    static void TestAuthLoginRejectsWrongPassword()
+    {
+        using var h = new AuthTestHost();
+        h.Operators.Create("admin", "correctpassword12");
+        using var resp = h.Post("/api/auth/login", new { username = "admin", password = "wrongpasswordwrong" });
+        Assert((int)resp.StatusCode == 401, "wrong password should return 401");
+        Assert(h.Body(resp).Contains("\"error\":\"invalid_credentials\""), "error code should be invalid_credentials");
+        Assert(h.RateLimit.FailureCount("127.0.0.1") == 1, "failed login should bump rate-limit counter");
+    }
+
+    static void TestAuthLoginSuccessIssuesCookies()
+    {
+        using var h = new AuthTestHost();
+        h.Operators.Create("admin", "correctpassword12");
+        using var resp = h.Post("/api/auth/login", new { username = "admin", password = "correctpassword12" });
+        Assert((int)resp.StatusCode == 204, "successful login should return 204");
+        Assert(h.CookieValue("cpumon_sess").Length > 0, "cpumon_sess cookie should be set");
+        Assert(h.CookieValue("cpumon_csrf").Length > 0, "cpumon_csrf cookie should be set");
+        Assert(h.CookieValue("cpumon_sess") != h.CookieValue("cpumon_csrf"), "session id and csrf must differ");
+        Assert(h.Sessions.Count == 1, "session store should have one entry");
+    }
+
+    static void TestAuthLogoutWithCsrfClearsCookies()
+    {
+        using var h = new AuthTestHost();
+        h.Operators.Create("admin", "correctpassword12");
+        h.Post("/api/auth/login", new { username = "admin", password = "correctpassword12" }).Dispose();
+        var csrf = h.CookieValue("cpumon_csrf");
+        using var resp = h.Post("/api/auth/logout", body: null, csrfHeader: csrf);
+        Assert((int)resp.StatusCode == 204, "logout with valid csrf should return 204");
+        Assert(h.Sessions.Count == 0, "session should be removed after logout");
+        Assert(h.CookieValue("cpumon_sess") == "", "cpumon_sess cookie should be cleared by server");
+    }
+
+    static void TestAuthLogoutWithoutCsrfReturns403()
+    {
+        using var h = new AuthTestHost();
+        h.Operators.Create("admin", "correctpassword12");
+        h.Post("/api/auth/login", new { username = "admin", password = "correctpassword12" }).Dispose();
+        using var resp = h.Post("/api/auth/logout", body: null, csrfHeader: null);
+        Assert((int)resp.StatusCode == 403, "logout without csrf header should return 403");
+        Assert(h.Body(resp).Contains("\"error\":\"csrf_failed\""), "error code should be csrf_failed");
+        Assert(h.Sessions.Count == 1, "session should remain after failed csrf check");
+    }
+
+    static void TestAuthWhoamiReturnsUsername()
+    {
+        using var h = new AuthTestHost();
+        h.Operators.Create("admin", "correctpassword12");
+        h.Post("/api/auth/login", new { username = "admin", password = "correctpassword12" }).Dispose();
+        using var resp = h.Get("/api/auth/whoami");
+        Assert((int)resp.StatusCode == 200, "whoami after login should return 200");
+        var body = h.Body(resp);
+        Assert(body.Contains("\"username\":\"admin\""), "whoami should echo the username");
+        Assert(body.Contains("\"sessionCreatedAt\""), "whoami should include sessionCreatedAt");
+    }
+
+    static void TestAuthBootstrapWhenOperatorExistsReturns409()
+    {
+        using var h = new AuthTestHost();
+        h.Operators.Create("admin", "preexistingpwd12");
+        var (token, _) = h.Bootstrap.Issue();
+        using var resp = h.Post("/api/auth/bootstrap", new { username = "two", password = "anotherpassword12", bootstrapToken = token });
+        Assert((int)resp.StatusCode == 409, "bootstrap with existing operator should return 409");
+        Assert(h.Body(resp).Contains("\"error\":\"bootstrap_disabled\""), "error code should be bootstrap_disabled");
+    }
+
+    static void TestAuthBootstrapSucceedsAndIssuesCookies()
+    {
+        using var h = new AuthTestHost();
+        Assert(!h.Operators.Exists, "operator should not exist initially");
+        var (token, _) = h.Bootstrap.Issue();
+        using var resp = h.Post("/api/auth/bootstrap", new { username = "admin", password = "freshpassword12", bootstrapToken = token });
+        Assert((int)resp.StatusCode == 204, "successful bootstrap should return 204");
+        Assert(h.Operators.Exists, "operator should exist after bootstrap");
+        Assert(h.Operators.Username == "admin", "operator username should be persisted");
+        Assert(h.CookieValue("cpumon_sess").Length > 0, "session cookie should be set after bootstrap");
+        Assert(!h.Bootstrap.IsActive, "bootstrap token should be consumed");
+    }
+
+    static void TestAuthRateLimitBlocksAfterFiveFailedLogins()
+    {
+        using var h = new AuthTestHost();
+        h.Operators.Create("admin", "rightpassword12345");
+        for (int i = 0; i < 5; i++)
+        {
+            using var r = h.Post("/api/auth/login", new { username = "admin", password = $"wrong{i:D2}wrongwrong" });
+            Assert((int)r.StatusCode == 401, $"attempt {i + 1} should be 401");
+        }
+        using var resp = h.Post("/api/auth/login", new { username = "admin", password = "rightpassword12345" });
+        Assert((int)resp.StatusCode == 429, "6th attempt should be 429 even with correct password");
+        Assert(resp.Headers.TryGetValues("Retry-After", out _), "429 response should include Retry-After header");
+        Assert(h.Body(resp).Contains("\"error\":\"rate_limited\""), "error code should be rate_limited");
+    }
+
+    sealed class AuthTestHost : IDisposable
+    {
+        public WebHost              Host      { get; }
+        public HttpClient           Client    { get; }
+        public OperatorStore        Operators { get; }
+        public SessionStore         Sessions  { get; }
+        public BootstrapTokenIssuer Bootstrap { get; }
+        public RateLimiter          RateLimit { get; }
+        readonly TempDir _td;
+        readonly CookieContainer _cookies;
+
+        public AuthTestHost()
+        {
+            _td       = new TempDir();
+            Operators = new OperatorStore(Path.Combine(_td.Path, "operator.json"));
+            Sessions  = new SessionStore(startPruner: false);
+            Bootstrap = new BootstrapTokenIssuer();
+            RateLimit = new RateLimiter();
+            Host      = new WebHost();
+            Host.StartAsync(new WebHostOptions
+            {
+                Port = 0, UseTls = false, ServerVersion = "test",
+                ConfigureRoutes = (app, ctx) => WebAuthApi.Map(app, Operators, Sessions, Bootstrap, RateLimit, ctx)
+            }).GetAwaiter().GetResult();
+            _cookies = new CookieContainer();
+            Client = new HttpClient(new HttpClientHandler { UseCookies = true, CookieContainer = _cookies })
+            {
+                BaseAddress = new Uri($"http://127.0.0.1:{Host.Port}")
+            };
+        }
+
+        public HttpResponseMessage Post(string path, object? body = null, string? csrfHeader = null)
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, path);
+            if (body != null)
+                req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+            if (csrfHeader != null) req.Headers.Add("X-CSRF-Token", csrfHeader);
+            return Client.SendAsync(req).GetAwaiter().GetResult();
+        }
+
+        public HttpResponseMessage Get(string path) => Client.GetAsync(path).GetAwaiter().GetResult();
+
+        public string Body(HttpResponseMessage resp) => resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+        public string CookieValue(string name)
+        {
+            foreach (Cookie c in _cookies.GetCookies(Client.BaseAddress!))
+                if (c.Name == name) return c.Value;
+            return "";
+        }
+
+        public void Dispose()
+        {
+            Client.Dispose();
+            Host.DisposeAsync().GetAwaiter().GetResult();
+            Sessions.Dispose();
+            Bootstrap.Dispose();
+            _td.Dispose();
+        }
     }
 
     static RemoteClient FakeRemoteClient()
