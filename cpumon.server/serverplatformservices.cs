@@ -24,7 +24,7 @@ public interface IServerPlatformServices
     void ShowTerminal(string machineName, string shell);
     void ShowFileBrowser(string machineName, string? initialPath);
     void ShowRdp(string machineName);
-    void PromptSendUserMessage(string machineName, Action<string> onSubmit);
+    string? PromptUserMessage(string machineName);
 }
 
 public sealed class WinFormsServerPlatformServices : IServerPlatformServices
@@ -223,9 +223,9 @@ public sealed class WinFormsServerPlatformServices : IServerPlatformServices
         });
     }
 
-    public void PromptSendUserMessage(string machineName, Action<string> onSubmit)
+    public string? PromptUserMessage(string machineName)
     {
-        OnUi(() =>
+        return OnUiSync<string?>(() =>
         {
             using var dlg = new Form { Text = "Send Message", Size = new Size(420, 148), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, BackColor = Th.Bg, ForeColor = Th.Brt, MaximizeBox = false, MinimizeBox = false };
             DwmDark.Hook(dlg);
@@ -234,8 +234,7 @@ public sealed class WinFormsServerPlatformServices : IServerPlatformServices
             var send = new Button { Text = "Send", DialogResult = DialogResult.OK, Location = new Point(12, 52), Size = new Size(80, 30), BackColor = Color.FromArgb(30, 60, 30), ForeColor = Th.Grn, FlatStyle = FlatStyle.Flat }; send.FlatAppearance.BorderColor = Th.Grn;
             var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(100, 52), Size = new Size(80, 30), BackColor = Th.Card, ForeColor = Th.Dim, FlatStyle = FlatStyle.Flat };
             dlg.Controls.AddRange(new Control[] { txt, send, cancel }); dlg.AcceptButton = send;
-            if (dlg.ShowDialog(_owner) == DialogResult.OK)
-                onSubmit(txt.Text);
+            return dlg.ShowDialog(_owner) == DialogResult.OK ? txt.Text : null;
         });
     }
 

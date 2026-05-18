@@ -52,7 +52,7 @@ internal static class Program
             TestDashboardControllerPushUpdatePicksLinuxFilterForLinuxClient();
             TestDashboardControllerSetOfflineMacRoutesPromptToEngine();
             TestDashboardControllerOpenTerminalCarriesShellArgument();
-            TestDashboardControllerSubmitUserMessageDropsBlank();
+            TestDashboardControllerSendUserMessageDropsBlankPrompt();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -691,8 +691,7 @@ internal static class Program
         Assert(platform.ShowRdpMachine == "lnx", "OpenRdp should route through platform services");
 
         controller.SendUserMessage("lnx");
-        Assert(platform.PromptSendUserMessageCall?.Machine == "lnx", "SendUserMessage should route through platform services");
-        platform.PromptSendUserMessageCall?.OnSubmit("hello");
+        Assert(platform.PromptUserMessageMachine == "lnx", "SendUserMessage should route through platform services");
     }
 
     static void TestDashboardControllerToggleExpandedFlipsClient()
@@ -735,12 +734,17 @@ internal static class Program
         Assert(platform.ShowTerminalCall.Value.Shell == "powershell", "terminal call should carry the requested shell");
     }
 
-    static void TestDashboardControllerSubmitUserMessageDropsBlank()
+    static void TestDashboardControllerSendUserMessageDropsBlankPrompt()
     {
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
-        Assert(!controller.SubmitUserMessage("box", ""), "SubmitUserMessage should reject empty text");
-        Assert(!controller.SubmitUserMessage("box", "   "), "SubmitUserMessage should reject whitespace text");
-        Assert(!controller.SubmitUserMessage("no-such-box", "hello"), "SubmitUserMessage should return false for unknown client");
+        var engine = new ServerEngine(noBroadcast: true);
+        var platform = new FakeServerPlatformServices { PromptUserMessageReturn = "  " };
+        var controller = new ServerDashboardController(engine, platform);
+        controller.SendUserMessage("box");
+        Assert(!engine.Log.Recent(10).Any(e => e.M.StartsWith("Msg→")), "whitespace prompt should not produce a Msg log entry");
+
+        platform.PromptUserMessageReturn = null;
+        controller.SendUserMessage("box");
+        Assert(!engine.Log.Recent(10).Any(e => e.M.StartsWith("Msg→")), "cancelled prompt should not produce a Msg log entry");
     }
 
     static void TestDashboardControllerSetOfflineMacRoutesPromptToEngine()
@@ -821,7 +825,8 @@ internal static class Program
         public (string Machine, string Shell)? ShowTerminalCall { get; private set; }
         public (string Machine, string? Path)? ShowFileBrowserCall { get; private set; }
         public string? ShowRdpMachine { get; private set; }
-        public (string Machine, Action<string> OnSubmit)? PromptSendUserMessageCall { get; private set; }
+        public string? PromptUserMessageMachine { get; private set; }
+        public string? PromptUserMessageReturn { get; set; }
 
         public void SetClipboardText(string text) => ClipboardText = text;
         public bool Confirm(string message, string title, DashboardConfirmKind kind) { LastConfirm = (message, title, kind); return ConfirmReturn; }
@@ -841,6 +846,6 @@ internal static class Program
         public void ShowTerminal(string machineName, string shell) => ShowTerminalCall = (machineName, shell);
         public void ShowFileBrowser(string machineName, string? initialPath) => ShowFileBrowserCall = (machineName, initialPath);
         public void ShowRdp(string machineName) => ShowRdpMachine = machineName;
-        public void PromptSendUserMessage(string machineName, Action<string> onSubmit) => PromptSendUserMessageCall = (machineName, onSubmit);
+        public string? PromptUserMessage(string machineName) { PromptUserMessageMachine = machineName; return PromptUserMessageReturn; }
     }
 }

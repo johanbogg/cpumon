@@ -165,12 +165,11 @@ public sealed class ServerDashboardController
 
     public void OpenRdp(string machineName) => _platform?.ShowRdp(machineName);
 
-    public void SendUserMessage(string machineName) => _platform?.PromptSendUserMessage(machineName, text => SubmitUserMessage(machineName, text));
-
-    public bool SubmitUserMessage(string machineName, string text)
+    public void SendUserMessage(string machineName)
     {
-        if (string.IsNullOrWhiteSpace(text)) return false;
-        return _engine.SendUserMessage(machineName, text);
+        if (_platform == null) return;
+        var text = _platform.PromptUserMessage(machineName);
+        if (!string.IsNullOrWhiteSpace(text)) _engine.SendUserMessage(machineName, text);
     }
 
     public void PushUpdate(string machineName)
