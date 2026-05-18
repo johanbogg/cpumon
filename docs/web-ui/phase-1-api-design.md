@@ -78,6 +78,16 @@ The operator account is provisioned via a one-time URL printed to the server log
 - Sliding expiry: 30 days from `LastUsedAt`. Touched on every authenticated request.
 - Server can invalidate: `POST /api/auth/logout` removes the entry; restart drops all sessions.
 
+### Background pruning
+
+Sessions are also swept by a background `System.Threading.Timer` so dead entries (browser closed, device discarded, cookie cleared) don't accumulate indefinitely:
+
+- Timer fires every 5 minutes on a pool thread.
+- Sweep iterates the dictionary, `TryRemove`s any entry whose `LastUsedAt + 30 days < UtcNow`.
+- O(n) walk; bounded by session count which is bounded by operator devices in practice.
+- Logged at debug level when entries are removed (`Session pruned: N entries`).
+- The "clear on access" path (validate-then-touch-or-drop) stays as a backstop — pruning is a memory hygiene measure, not a correctness one.
+
 ### Cookies
 
 | Cookie         | Attributes                                                         | Purpose                       |
@@ -320,7 +330,7 @@ After this doc is accepted, code lands in the following order. Each is its own c
 
 1. `cpumon.server.csproj`: add `<FrameworkReference Include="Microsoft.AspNetCore.App" />`, `<PackageReference Include="Konscious.Security.Cryptography.Argon2" />`. Verify: `build.ps1 -ServerOnly` still green.
 2. `webauth.cs`: argon2id helper, `OperatorStore` (load/save `operator.json`), bootstrap-token issuer, password verify. Tests: 6 around store roundtrip, bootstrap-token expiry, password verify. Verify: tests pass.
-3. `websessions.cs`: `SessionStore` (in-memory), CSRF token issuance, sliding expiry. Tests: 4. Verify: tests pass.
+3. `websessions.cs`: `SessionStore` (in-memory), CSRF token issuance, sliding expiry, background pruning timer. Tests: 5 (issue, validate, expire, touch-refresh, prune-removes-expired). Verify: tests pass.
 4. `webhost.cs`: Kestrel scaffold, TLS load, security-header middleware, start/stop. Tests: 2 (binds and stops cleanly). Verify: `--web` flag starts, `curl https://localhost:47202/api/healthz -k` returns 200.
 5. Auth endpoints (`/api/auth/*`) + rate limiter. Tests: 8. Verify: end-to-end login + whoami via `curl`.
 6. State + filter + selection + token endpoints. Tests: 6.
@@ -343,4 +353,3 @@ Total: ~11 commits, target 30–60 mins of review each. Tests count ~45 added.
 - Multi-operator support, audit log, role-based access control.
 - TOTP / WebAuthn (future ADR-002 amendment).
 - Cert renewal automation.
-- Background session pruning timer (sessions expire on access; restart drops all — acceptable for v1).
