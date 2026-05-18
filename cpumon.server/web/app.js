@@ -111,7 +111,7 @@ function clientCard(client) {
   const linux = os.includes('linux') || (client.clientVersion || '').toLowerCase().includes('linux');
   const selected = state.selected.has(client.machineName);
   const expanded = !!client.isExpanded;
-  const waiting = !!client.isWaitingForFirstReport;
+  const waiting = !!client.isWaitingForFirstReport && !hasReportData(report);
   tpl.classList.toggle('selected', selected);
   tpl.classList.toggle('expanded', expanded);
   tpl.classList.toggle('wait-card', waiting);
@@ -306,6 +306,14 @@ function time(ts) {
 }
 function isLinux(item) {
   return `${item.osVersion || ''} ${item.clientVersion || ''}`.toLowerCase().includes('linux');
+}
+function hasReportData(report) {
+  if (!report || typeof report !== 'object') return false;
+  return !!report.machineName
+    || !!report.osVersion
+    || Number.isFinite(Number(report.totalLoadPercent))
+    || Number.isFinite(Number(report.ramTotalGB))
+    || Number.isFinite(Number(report.timestampUtcMs));
 }
 function logClass(color) {
   const c = (color || '').toLowerCase();
