@@ -20,7 +20,7 @@ public sealed class ServerEngine : IDisposable
 {
     readonly bool _nb;
     readonly CancellationTokenSource _cts = new();
-    readonly CLog _log = new(50, "cpumon_server.log");
+    readonly CLog _log = new(500, "cpumon_server.log");
     readonly ConcurrentDictionary<string, RemoteClient> _cls = new();
     readonly ConcurrentDictionary<string, PendingClientApproval> _pendingApprovals = new();
     readonly ApprovedClientStore _store;
