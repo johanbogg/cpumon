@@ -53,6 +53,12 @@ internal static class Program
             TestDashboardControllerSetOfflineMacRoutesPromptToEngine();
             TestDashboardControllerOpenTerminalCarriesShellArgument();
             TestDashboardControllerSendUserMessageDropsBlankPrompt();
+            TestOperatorStoreCreateAndVerify();
+            TestOperatorStorePersistsAcrossInstances();
+            TestOperatorStoreRejectsDoubleCreate();
+            TestArgon2HelperRoundTripAndRejectsTamper();
+            TestBootstrapTokenSingleUseAndShape();
+            TestBootstrapTokenExpiryClearsAndRejects();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -755,6 +761,75 @@ internal static class Program
         Assert(platform.LastPrompt != null, "RequestSetOfflineMac should route prompt through platform services");
         Assert(platform.LastPrompt!.Value.Title == "Set MAC", "prompt should be titled Set MAC");
         Assert(platform.LastPrompt.Value.Label.Contains("offline-box"), "prompt label should mention machine name");
+    }
+
+    static void TestOperatorStoreCreateAndVerify()
+    {
+        using var td = new TempDir();
+        var path = Path.Combine(td.Path, "operator.json");
+        var store = new OperatorStore(path);
+        Assert(!store.Exists, "fresh operator store should not report Exists");
+        store.Create("admin", "supersecretpassword12");
+        Assert(store.Exists, "store should report Exists after Create");
+        Assert(store.Username == "admin", "stored username should match");
+        Assert(store.Verify("admin", "supersecretpassword12"), "correct password should verify");
+        Assert(!store.Verify("admin", "wrongpasswordwrong"), "wrong password should not verify");
+        Assert(!store.Verify("wronguser", "supersecretpassword12"), "wrong username should not verify");
+    }
+
+    static void TestOperatorStorePersistsAcrossInstances()
+    {
+        using var td = new TempDir();
+        var path = Path.Combine(td.Path, "operator.json");
+        new OperatorStore(path).Create("admin", "persistencetesting1");
+        var fresh = new OperatorStore(path);
+        Assert(fresh.Exists, "operator should persist across store instances");
+        Assert(fresh.Username == "admin", "reloaded username should match");
+        Assert(fresh.Verify("admin", "persistencetesting1"), "reloaded store should verify correct password");
+    }
+
+    static void TestOperatorStoreRejectsDoubleCreate()
+    {
+        using var td = new TempDir();
+        var store = new OperatorStore(Path.Combine(td.Path, "operator.json"));
+        store.Create("admin", "firstpasswordfirst");
+        AssertThrows<InvalidOperationException>(() => store.Create("admin", "secondpassword12"),
+            "creating an operator twice in the same instance should throw");
+    }
+
+    static void TestArgon2HelperRoundTripAndRejectsTamper()
+    {
+        // Use a lightweight config to keep the smoke test fast — production hashing uses the defaults.
+        var hash = Argon2Helper.Hash("correct horse battery staple", memoryKiB: 1024, iterations: 1, parallelism: 1);
+        Assert(Argon2Helper.Verify("correct horse battery staple", hash), "correct password should verify");
+        Assert(!Argon2Helper.Verify("wrong horse battery staple", hash), "wrong password should not verify");
+        Assert(!Argon2Helper.Verify("correct horse battery staple", hash[..^4] + "AAAA"), "tampered hash should not verify");
+        Assert(!Argon2Helper.Verify("correct horse battery staple", "not-a-valid-hash"), "malformed hash should not verify");
+        Assert(!Argon2Helper.Verify("correct horse battery staple", ""), "empty hash should not verify");
+    }
+
+    static void TestBootstrapTokenSingleUseAndShape()
+    {
+        using var issuer = new BootstrapTokenIssuer();
+        Assert(!issuer.IsActive, "fresh issuer should be inactive");
+        Assert(issuer.ExpiresAt == null, "fresh issuer should have no expiry");
+        var (token, expiresAt) = issuer.Issue();
+        Assert(token.Length >= 20, "token should be at least 20 chars");
+        Assert(token.All(c => (c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7')), "token should be base32");
+        Assert(issuer.IsActive, "issuer should be active after Issue");
+        Assert(expiresAt > DateTime.UtcNow, "expiry should be in the future");
+        Assert(issuer.Consume(token), "valid token should consume");
+        Assert(!issuer.IsActive, "issuer should be inactive after Consume");
+        Assert(!issuer.Consume(token), "consumed token should not consume again");
+    }
+
+    static void TestBootstrapTokenExpiryClearsAndRejects()
+    {
+        using var issuer = new BootstrapTokenIssuer { Validity = TimeSpan.FromMilliseconds(100) };
+        var (token, _) = issuer.Issue();
+        Thread.Sleep(250);
+        Assert(!issuer.IsActive, "issuer should be inactive after expiry");
+        Assert(!issuer.Consume(token), "expired token should not consume");
     }
 
     static RemoteClient FakeRemoteClient()
