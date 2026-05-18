@@ -123,6 +123,8 @@ internal static class Program
             TestWebStartupComposesAllRoutesAndSurfacesBootstrapUrl();
             TestWebPlatformServicesShowBootstrapUrlPrintsToStdout();
             TestSetupPageBranches();
+            TestWebStaticRoutesServeLoginAndDashboard();
+            TestPendingApproveRejectRoutesRequireCsrfAndReturn404();
             TestWebSocketStateSentOnConnect();
             TestWebSocketStateUpdatedOnControllerAction();
             TestWebSocketLogStreamsNewEntries();
@@ -1504,6 +1506,41 @@ internal static class Program
         Assert(errSink.ToString().Contains("https://localhost:47202/setup?t=ABC"), "stub should also print URL to stderr");
     }
 
+    static void TestWebStaticRoutesServeLoginAndDashboard()
+    {
+        using var h = new WebApiTestHost();
+        using var unauthRoot = h.Get("/");
+        Assert((int)unauthRoot.StatusCode == 200, "unauthenticated GET / should follow redirect to login");
+        Assert(h.Body(unauthRoot).Contains("operator console"), "unauthenticated root should land on the login page");
+
+        using var login = h.Get("/login");
+        Assert((int)login.StatusCode == 200, "GET /login should serve the login page");
+        Assert(h.Body(login).Contains("operator console"), "login page should contain operator console text");
+
+        using var css = h.Get("/web/app.css");
+        Assert((int)css.StatusCode == 200, "app.css should be served");
+        Assert(h.Body(css).Contains("--bg-deep"), "app.css should contain the dashboard palette");
+
+        h.Login();
+        using var root = h.Get("/");
+        Assert((int)root.StatusCode == 200, "authenticated GET / should return the dashboard shell");
+        var body = h.Body(root);
+        Assert(body.Contains("clientTemplate"), "dashboard shell should include the client card template");
+        Assert(body.Contains("/web/app.js"), "dashboard shell should load the app script");
+    }
+
+    static void TestPendingApproveRejectRoutesRequireCsrfAndReturn404()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var noCsrf = h.Post("/api/pending/ghost/approve", body: null, csrfHeader: null);
+        Assert((int)noCsrf.StatusCode == 403, "pending approve should require csrf");
+        using var missingApprove = h.Post("/api/pending/ghost/approve", body: null, csrfHeader: h.Csrf);
+        Assert((int)missingApprove.StatusCode == 404, "pending approve on unknown machine should return 404");
+        using var missingReject = h.Post("/api/pending/ghost/reject", body: null, csrfHeader: h.Csrf);
+        Assert((int)missingReject.StatusCode == 404, "pending reject on unknown machine should return 404");
+    }
+
     static void TestWebSocketStateSentOnConnect()
     {
         using var h = new WebApiTestHost();
@@ -1860,6 +1897,7 @@ internal static class Program
                 Port = 0, UseTls = false, ServerVersion = "test",
                 ConfigureRoutes = (app, ctx) =>
                 {
+                    WebStaticApi.Map(app, Sessions);
                     WebAuthApi.Map(app, Operators, Sessions, Bootstrap, RateLimit, ctx);
                     WebDashboardApi.Map(app, Engine, Controller, Sessions, ctx);
                     WebClientActionsApi.Map(app, Engine, Controller, Sessions, ctx);

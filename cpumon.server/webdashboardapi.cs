@@ -74,6 +74,22 @@ public static class WebDashboardApi
             apiCtx.Log?.Add("Web UI: token regenerated", Th.Yel);
             return Results.Json(new { token = s.Token, issuedAt = s.TokenIssuedAt }, JsonOpts);
         });
+
+        app.MapPost("/api/pending/{machine}/approve", (HttpContext ctx, string machine) =>
+        {
+            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
+            if (!controller.ApprovePending(machine)) return Error(ctx, 404, "not_found", $"Pending client '{machine}' was not found.");
+            apiCtx.Log?.Add($"Web UI: approved pending {machine}", Th.Grn);
+            return Results.NoContent();
+        });
+
+        app.MapPost("/api/pending/{machine}/reject", (HttpContext ctx, string machine) =>
+        {
+            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
+            if (!controller.RejectPending(machine)) return Error(ctx, 404, "not_found", $"Pending client '{machine}' was not found.");
+            apiCtx.Log?.Add($"Web UI: rejected pending {machine}", Th.Org);
+            return Results.NoContent();
+        });
     }
 
     static IResult Error(HttpContext ctx, int status, string code, string message)

@@ -61,6 +61,7 @@ public sealed class WebStartup : IDisposable
             Log           = engine.Log,
             ConfigureRoutes = (app, ctx) =>
             {
+                WebStaticApi.Map(app, sessions);
                 WebAuthApi.Map(app, operators, sessions, bootstrap, rateLimit, ctx);
                 WebDashboardApi.Map(app, engine, controller, sessions, ctx);
                 WebClientActionsApi.Map(app, engine, controller, sessions, ctx);

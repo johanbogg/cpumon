@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cpumon login</title>
+  <link rel="stylesheet" href="/web/app.css">
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <section class="login-panel">
+      <div class="brand">CPUMON<span class="version">web</span></div>
+      <p class="login-subtitle">operator console</p>
+      <form id="loginForm" class="login-form">
+        <label>
+          <span>username</span>
+          <input name="username" autocomplete="username" value="admin" required>
+        </label>
+        <label>
+          <span>password</span>
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit">Sign in</button>
+        <div id="loginError" class="form-error" role="alert"></div>
+      </form>
+    </section>
+  </main>
+  <script>
+  document.getElementById('loginForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const error = document.getElementById('loginError');
+    error.textContent = '';
+    const data = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (response.ok) {
+      location.href = '/';
+      return;
+    }
+    let message = 'Sign in failed';
+    try { message = (await response.json()).message || message; } catch {}
+    error.textContent = message;
+  });
+  </script>
+</body>
+</html>

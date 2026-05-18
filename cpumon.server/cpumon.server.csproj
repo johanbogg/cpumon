@@ -24,6 +24,12 @@
     <PackageReference Include="MailKit" Version="4.16.0" />
     <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="web\index.html" LogicalName="cpumon.server.web.index.html" />
+    <EmbeddedResource Include="web\login.html" LogicalName="cpumon.server.web.login.html" />
+    <EmbeddedResource Include="web\app.css" LogicalName="cpumon.server.web.app.css" />
+    <EmbeddedResource Include="web\app.js" LogicalName="cpumon.server.web.app.js" />
+  </ItemGroup>
 
   <Target Name="GitVersion" BeforeTargets="CoreCompile;GetAssemblyVersion">
     <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low">
