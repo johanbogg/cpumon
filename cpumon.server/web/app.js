@@ -107,13 +107,14 @@ function renderClients(clients) {
 function clientCard(client) {
   const tpl = $('clientTemplate').content.firstElementChild.cloneNode(true);
   const report = client.lastReport || client.report || {};
-  const os = (client.osVersion || report.os || '').toLowerCase();
+  const os = (client.osLabel || report.osVersion || '').toLowerCase();
   const linux = os.includes('linux') || (client.clientVersion || '').toLowerCase().includes('linux');
   const selected = state.selected.has(client.machineName);
-  const expanded = !!client.expanded;
+  const expanded = !!client.isExpanded;
+  const waiting = !!client.isWaitingForFirstReport;
   tpl.classList.toggle('selected', selected);
   tpl.classList.toggle('expanded', expanded);
-  tpl.classList.toggle('wait-card', !client.hasReport && !client.isOffline);
+  tpl.classList.toggle('wait-card', waiting);
   tpl.classList.toggle('stale-card', client.isStale);
   tpl.classList.toggle('paw-card', client.isPaw);
   tpl.dataset.machine = client.machineName;
@@ -129,22 +130,22 @@ function clientCard(client) {
   ver.classList.toggle('outdated', !!client.isOutdated);
 
   const tag = tpl.querySelector('.state-tag');
-  const text = client.isPaw ? 'PAW relay' : client.isOffline ? 'offline' : !client.hasReport ? 'awaiting report' : client.isStale ? 'stale' : 'connected';
+  const text = client.isPaw ? 'PAW relay' : waiting ? 'awaiting report' : client.isStale ? 'stale' : 'connected';
   tag.classList.toggle('paw', client.isPaw);
-  tag.classList.toggle('dead', client.isOffline);
-  tag.classList.toggle('wait', !client.hasReport && !client.isOffline);
+  tag.classList.toggle('dead', false);
+  tag.classList.toggle('wait', waiting);
   tag.classList.toggle('stale', client.isStale);
   tpl.querySelector('.state-text').textContent = text;
 
-  metric(tpl, 'cpu', percent(client.cpuLoadPercent ?? report.load ?? report.totalLoadPercent), client.cpuLoadPercent ?? report.load ?? report.totalLoadPercent);
-  metric(tpl, 'ram', ramText(client.ramUsedGB ?? report.ramUsed, client.ramTotalGB ?? report.ramTotal), ramPct(client.ramUsedGB ?? report.ramUsed, client.ramTotalGB ?? report.ramTotal));
-  metric(tpl, 'temp', tempText(client.temperatureC ?? report.temp ?? report.packageTemperatureC), client.temperatureC ?? report.temp ?? report.packageTemperatureC);
-  tpl.querySelector('.net .value').textContent = netText(client.netDownKBps ?? report.netDn, client.netUpKBps ?? report.netUp);
+  metric(tpl, 'cpu', percent(report.totalLoadPercent), report.totalLoadPercent);
+  metric(tpl, 'ram', ramText(report.ramUsedGB, report.ramTotalGB), ramPct(report.ramUsedGB, report.ramTotalGB));
+  metric(tpl, 'temp', tempText(report.packageTemperatureC), report.packageTemperatureC);
+  tpl.querySelector('.net .value').textContent = netText(report.netDownKBps, report.netUpKBps);
 
   tpl.querySelector('.card-body').replaceChildren(
-    kv('OS', client.osVersion || report.os || '?'),
-    kv('CPU', client.cpuName || report.cpuName || '?'),
-    kv('RAM', ramText(client.ramUsedGB ?? report.ramUsed, client.ramTotalGB ?? report.ramTotal)),
+    kv('OS', client.osLabel || report.osVersion || '?'),
+    kv('CPU', report.cpuName || '?'),
+    kv('RAM', ramText(report.ramUsedGB, report.ramTotalGB)),
     kv('Last seen', client.lastSeenText || '?'),
   );
   tpl.querySelector('.card-actions').replaceChildren(
