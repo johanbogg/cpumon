@@ -727,14 +727,12 @@ internal static class Program
 
     static void TestDashboardControllerOpenTerminalCarriesShellArgument()
     {
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true));
-        DashboardDialogRequest? captured = null;
-        controller.DialogRequested += req => captured = req;
+        var platform = new FakeServerPlatformServices();
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
         controller.OpenTerminal("shell-box", "powershell");
-        Assert(captured != null, "OpenTerminal should raise DialogRequested");
-        Assert(captured!.Kind == "terminal", "terminal dialog should carry kind=terminal");
-        Assert(captured.MachineName == "shell-box", "terminal dialog should carry the machine name");
-        Assert(captured.Argument == "powershell", "terminal dialog should carry the requested shell as argument");
+        Assert(platform.ShowTerminalCall != null, "OpenTerminal should route through platform services");
+        Assert(platform.ShowTerminalCall!.Value.Machine == "shell-box", "terminal call should carry the machine name");
+        Assert(platform.ShowTerminalCall.Value.Shell == "powershell", "terminal call should carry the requested shell");
     }
 
     static void TestDashboardControllerSubmitUserMessageDropsBlank()

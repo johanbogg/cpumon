@@ -4,13 +4,6 @@ using System.Linq;
 
 public enum DashboardConfirmKind { Question, Warning }
 
-public sealed class DashboardDialogRequest
-{
-    public string Kind { get; init; } = "";
-    public string MachineName { get; init; } = "";
-    public string? Argument { get; init; }
-}
-
 public sealed class ServerDashboardController
 {
     readonly ServerEngine _engine;
@@ -19,8 +12,6 @@ public sealed class ServerDashboardController
     readonly HashSet<string> _selectedMachineNames = new(StringComparer.OrdinalIgnoreCase);
     string _osFilter = "all";
     string _sortMode = "name";
-
-    public event Action<DashboardDialogRequest>? DialogRequested;
 
     public ServerDashboardController(ServerEngine engine, IServerPlatformServices? platform = null)
     {
@@ -146,8 +137,7 @@ public sealed class ServerDashboardController
 
     public void RequestProcesses(string machineName)
     {
-        if (_platform != null) _platform.ShowProcessDialog(machineName);
-        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "processes", MachineName = machineName });
+        _platform?.ShowProcessDialog(machineName);
         _engine.RequestProcessList(machineName);
     }
 
@@ -163,47 +153,19 @@ public sealed class ServerDashboardController
 
     public bool TogglePaw(string machineName) => _engine.TogglePaw(machineName);
 
-    public void ShowApprovedClients()
-    {
-        if (_platform != null) _platform.ShowApprovedClients();
-        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "approved" });
-    }
+    public void ShowApprovedClients() => _platform?.ShowApprovedClients();
 
-    public void ShowAlerts()
-    {
-        if (_platform != null) _platform.ShowAlerts();
-        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "alerts" });
-    }
+    public void ShowAlerts() => _platform?.ShowAlerts();
 
-    public void ShowHealth(string machineName)
-    {
-        if (_platform != null) _platform.ShowHealthDialog(machineName);
-        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "health", MachineName = machineName });
-    }
+    public void ShowHealth(string machineName) => _platform?.ShowHealthDialog(machineName);
 
-    public void OpenTerminal(string machineName, string shell)
-    {
-        if (_platform != null) _platform.ShowTerminal(machineName, shell);
-        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "terminal", MachineName = machineName, Argument = shell });
-    }
+    public void OpenTerminal(string machineName, string shell) => _platform?.ShowTerminal(machineName, shell);
 
-    public void OpenFileBrowser(string machineName, string? initialPath = null)
-    {
-        if (_platform != null) _platform.ShowFileBrowser(machineName, initialPath);
-        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "files", MachineName = machineName, Argument = initialPath });
-    }
+    public void OpenFileBrowser(string machineName, string? initialPath = null) => _platform?.ShowFileBrowser(machineName, initialPath);
 
-    public void OpenRdp(string machineName)
-    {
-        if (_platform != null) _platform.ShowRdp(machineName);
-        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "rdp", MachineName = machineName });
-    }
+    public void OpenRdp(string machineName) => _platform?.ShowRdp(machineName);
 
-    public void SendUserMessage(string machineName)
-    {
-        if (_platform != null) _platform.PromptSendUserMessage(machineName, text => SubmitUserMessage(machineName, text));
-        else DialogRequested?.Invoke(new DashboardDialogRequest { Kind = "send_message", MachineName = machineName });
-    }
+    public void SendUserMessage(string machineName) => _platform?.PromptSendUserMessage(machineName, text => SubmitUserMessage(machineName, text));
 
     public bool SubmitUserMessage(string machineName, string text)
     {
