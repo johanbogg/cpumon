@@ -31,39 +31,41 @@ public static class WebSocketApi
     {
         app.Map("/ws/state", async (HttpContext ctx) =>
         {
-            if (!await TryAccept(ctx, sessions).ConfigureAwait(false)) return;
+            var session = await TryAccept(ctx, sessions).ConfigureAwait(false);
+            if (session == null) return;
             using var ws = await ctx.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-            await StreamState(ws, controller, ctx.RequestAborted).ConfigureAwait(false);
+            await StreamState(ws, engine, session, ctx.RequestAborted).ConfigureAwait(false);
         });
 
         app.Map("/ws/log", async (HttpContext ctx) =>
         {
-            if (!await TryAccept(ctx, sessions).ConfigureAwait(false)) return;
+            if (await TryAccept(ctx, sessions).ConfigureAwait(false) == null) return;
             var sinceUtc = DateTime.UtcNow;
             using var ws = await ctx.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
             await StreamLog(ws, engine.Log, sinceUtc, ctx.RequestAborted).ConfigureAwait(false);
         });
     }
 
-    static async Task<bool> TryAccept(HttpContext ctx, SessionStore sessions)
+    static async Task<SessionState?> TryAccept(HttpContext ctx, SessionStore sessions)
     {
         if (!ctx.WebSockets.IsWebSocketRequest)
         {
             ctx.Response.StatusCode = 400;
             await ctx.Response.WriteAsJsonAsync(new { error = "websocket_required", message = "WebSocket upgrade required." }).ConfigureAwait(false);
-            return false;
+            return null;
         }
-        if (WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: false, out _, out var fail)) return true;
+        if (WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: false, out var session, out var fail)) return session;
         await fail!.ExecuteAsync(ctx).ConfigureAwait(false);
-        return false;
+        return null;
     }
 
-    static async Task StreamState(WebSocket ws, ServerDashboardController controller, CancellationToken ct)
+    static async Task StreamState(WebSocket ws, ServerEngine engine, SessionState session, CancellationToken ct)
     {
-        await SendJson(ws, new { type = "state", state = controller.GetState() }, ct).ConfigureAwait(false);
+        var builder = new ServerDashboardStateBuilder(engine);
+        await SendJson(ws, new { type = "state", state = WebSessionDashboard.Build(builder, session) }, ct).ConfigureAwait(false);
         using var timer = new PeriodicTimer(StateInterval);
         while (ws.State == WebSocketState.Open && await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
-            await SendJson(ws, new { type = "state", state = controller.GetState() }, ct).ConfigureAwait(false);
+            await SendJson(ws, new { type = "state", state = WebSessionDashboard.Build(builder, session) }, ct).ConfigureAwait(false);
     }
 
     static async Task StreamLog(WebSocket ws, CLog log, DateTime sinceUtc, CancellationToken ct)

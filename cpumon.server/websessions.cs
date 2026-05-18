@@ -15,6 +15,12 @@ public sealed class SessionState
     public DateTime LastUsedAt    { get; set; }
     public string   RemoteIp      { get; init; } = "";
     public string   UserAgent     { get; init; } = "";
+
+    public object UiLock { get; } = new();
+    public HashSet<string> SelectedMachineNames { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public HashSet<string> ExpandedMachineNames { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public string OsFilter { get; set; } = "all";
+    public string SortMode { get; set; } = "name";
 }
 
 public sealed class SessionStore : IDisposable

@@ -23,30 +23,32 @@ public static class WebDashboardApi
                            SessionStore sessions,
                            WebApiContext apiCtx)
     {
+        var stateBuilder = new ServerDashboardStateBuilder(engine);
+
         app.MapGet("/api/state", (HttpContext ctx) =>
         {
-            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: false, out _, out var fail)) return fail!;
-            return Results.Json(controller.GetState(), JsonOpts);
+            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: false, out var session, out var fail)) return fail!;
+            return Results.Json(WebSessionDashboard.Build(stateBuilder, session!), JsonOpts);
         });
 
         app.MapPost("/api/state/select", async (HttpContext ctx) =>
         {
-            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
+            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out var session, out var fail)) return fail!;
             var body = await TryRead<SelectRequest>(ctx);
             if (body == null) return Error(ctx, 400, "validation_failed", "Body required.");
-            controller.SetSelection(body.MachineNames ?? Array.Empty<string>());
+            WebSessionDashboard.SetSelection(session!, body.MachineNames ?? Array.Empty<string>());
             return Results.NoContent();
         });
 
         app.MapPost("/api/state/filter/os", async (HttpContext ctx) =>
         {
-            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
+            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out var session, out var fail)) return fail!;
             var body = await TryRead<FilterValueRequest>(ctx);
             if (body == null || string.IsNullOrWhiteSpace(body.Value))
                 return Error(ctx, 400, "validation_failed", "Body { value } required.");
             try
             {
-                var v = controller.SetOsFilter(body.Value);
+                var v = WebSessionDashboard.SetOsFilter(session!, body.Value);
                 return Results.Json(new { value = v }, JsonOpts);
             }
             catch (ArgumentException ex) { return Error(ctx, 400, "validation_failed", ex.Message); }
@@ -54,13 +56,13 @@ public static class WebDashboardApi
 
         app.MapPost("/api/state/filter/sort", async (HttpContext ctx) =>
         {
-            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
+            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out var session, out var fail)) return fail!;
             var body = await TryRead<FilterValueRequest>(ctx);
             if (body == null || string.IsNullOrWhiteSpace(body.Value))
                 return Error(ctx, 400, "validation_failed", "Body { value } required.");
             try
             {
-                var v = controller.SetSortMode(body.Value);
+                var v = WebSessionDashboard.SetSortMode(session!, body.Value);
                 return Results.Json(new { value = v }, JsonOpts);
             }
             catch (ArgumentException ex) { return Error(ctx, 400, "validation_failed", ex.Message); }

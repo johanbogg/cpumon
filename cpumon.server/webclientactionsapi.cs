@@ -39,10 +39,10 @@ public static class WebClientActionsApi
 
         app.MapPost("/api/clients/{machine}/forget", (HttpContext ctx, string machine) =>
         {
-            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
+            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out var session, out var fail)) return fail!;
             if (!engine.Clients.ContainsKey(machine)) return NotFound(ctx, machine);
             engine.ForgetClient(machine);
-            controller.DeselectMachine(machine);
+            WebSessionDashboard.RemoveMachine(session!, machine);
             apiCtx.Log?.Add($"Web UI: forget {machine}", Th.Yel);
             return Results.NoContent();
         });
@@ -75,10 +75,10 @@ public static class WebClientActionsApi
 
         app.MapPost("/api/clients/{machine}/expand", (HttpContext ctx, string machine) =>
         {
-            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
-            if (!engine.Clients.TryGetValue(machine, out var cl)) return NotFound(ctx, machine);
-            controller.ToggleClientExpanded(machine);
-            return Results.Json(new { expanded = cl.Expanded }, JsonOpts);
+            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out var session, out var fail)) return fail!;
+            if (!engine.Clients.ContainsKey(machine)) return NotFound(ctx, machine);
+            var expanded = WebSessionDashboard.ToggleExpanded(session!, machine);
+            return Results.Json(new { expanded }, JsonOpts);
         });
     }
 

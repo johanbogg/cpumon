@@ -74,11 +74,12 @@ public sealed class ServerDashboardStateBuilder
 
     public ServerDashboardStateBuilder(ServerEngine engine) => _engine = engine;
 
-    public ServerDashboardState Build(IEnumerable<string> selectedMachineNames, string osFilter, string sortMode, int maxLogEntries = 50)
+    public ServerDashboardState Build(IEnumerable<string> selectedMachineNames, string osFilter, string sortMode, int maxLogEntries = 50, IReadOnlySet<string>? expandedMachineNames = null)
     {
         var selected = selectedMachineNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var expanded = expandedMachineNames ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var clients = VisibleClients(osFilter, sortMode)
-            .Select(cl => BuildClient(cl, selected))
+            .Select(cl => BuildClient(cl, selected, expandedMachineNames == null ? null : expanded))
             .ToList();
         var pendingApprovals = _engine.PendingApprovals.Values
             .OrderBy(p => p.MachineName, StringComparer.OrdinalIgnoreCase)
@@ -135,7 +136,7 @@ public sealed class ServerDashboardStateBuilder
         return clients.ToList();
     }
 
-    ClientCardState BuildClient(RemoteClient cl, IReadOnlySet<string> selected)
+    ClientCardState BuildClient(RemoteClient cl, IReadOnlySet<string> selected, IReadOnlySet<string>? expandedMachineNames)
     {
         var report = CloneReport(cl.LastReport);
         string alias = _engine.Store.GetAlias(cl.MachineName);
@@ -146,7 +147,7 @@ public sealed class ServerDashboardStateBuilder
             machineName,
             string.IsNullOrEmpty(alias) ? machineName : alias,
             alias,
-            cl.Expanded,
+            expandedMachineNames == null ? cl.Expanded : expandedMachineNames.Contains(machineName),
             (DateTime.UtcNow - cl.LastSeen).TotalSeconds > 70,
             cl.LastReport == null,
             isLinux,

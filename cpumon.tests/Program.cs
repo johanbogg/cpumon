@@ -90,6 +90,7 @@ internal static class Program
             TestDashboardSelectReplacesSelection();
             TestDashboardFilterOsSetsValue();
             TestDashboardFilterRequiresCsrf();
+            TestDashboardWebStateIsSessionLocal();
             TestDashboardTokenRegenerateChangesToken();
             TestPerClientActionsRequireAuth();
             TestPerClientActionsRequireCsrf();
@@ -1206,10 +1207,14 @@ internal static class Program
         h.Login();
         using var r1 = h.Post("/api/state/select", new { machineNames = new[] { "alpha", "beta" } }, csrfHeader: h.Csrf);
         Assert((int)r1.StatusCode == 204, "select should return 204");
-        Assert(h.Controller.SelectedMachineNames.SetEquals(new[] { "alpha", "beta" }), "selection should reflect posted machines");
+        using var s1 = h.Get("/api/state");
+        var b1 = h.Body(s1);
+        Assert(b1.Contains("\"selectedMachineNames\":[\"alpha\",\"beta\"]"), "selection should reflect posted machines");
         using var r2 = h.Post("/api/state/select", new { machineNames = new[] { "gamma" } }, csrfHeader: h.Csrf);
         Assert((int)r2.StatusCode == 204, "second select should return 204");
-        Assert(h.Controller.SelectedMachineNames.SetEquals(new[] { "gamma" }), "select should replace, not merge");
+        using var s2 = h.Get("/api/state");
+        var b2 = h.Body(s2);
+        Assert(b2.Contains("\"selectedMachineNames\":[\"gamma\"]"), "select should replace, not merge");
     }
 
     static void TestDashboardFilterOsSetsValue()
@@ -1219,7 +1224,8 @@ internal static class Program
         using var r = h.Post("/api/state/filter/os", new { value = "linux" }, csrfHeader: h.Csrf);
         Assert((int)r.StatusCode == 200, "filter set should return 200");
         Assert(h.Body(r).Contains("\"value\":\"linux\""), "response should echo new filter value");
-        Assert(h.Controller.OsFilter == "linux", "controller osFilter should be updated");
+        using var state = h.Get("/api/state");
+        Assert(h.Body(state).Contains("\"osFilter\":\"linux\""), "session osFilter should be updated");
         using var bad = h.Post("/api/state/filter/os", new { value = "bogus" }, csrfHeader: h.Csrf);
         Assert((int)bad.StatusCode == 400, "invalid filter value should return 400");
     }
@@ -1231,7 +1237,35 @@ internal static class Program
         using var resp = h.Post("/api/state/filter/os", new { value = "windows" }, csrfHeader: null);
         Assert((int)resp.StatusCode == 403, "POST without csrf should return 403");
         Assert(h.Body(resp).Contains("\"error\":\"csrf_failed\""), "error code should be csrf_failed");
-        Assert(h.Controller.OsFilter == "all", "filter should not change on failed csrf check");
+        using var state = h.Get("/api/state");
+        Assert(h.Body(state).Contains("\"osFilter\":\"all\""), "filter should not change on failed csrf check");
+    }
+
+    static void TestDashboardWebStateIsSessionLocal()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        var client = AddReportedClient(h.Engine, "win-box", "Microsoft Windows 11", Proto.AppVersion);
+        using var second = h.NewSession();
+
+        using var expand = h.Post("/api/clients/win-box/expand", body: null, csrfHeader: h.Csrf);
+        Assert((int)expand.StatusCode == 200, "expand should return 200");
+        Assert(h.Body(expand).Contains("\"expanded\":true"), "expand response should report the session-local expanded state");
+        Assert(!client.Expanded, "web expand must not mutate the shared WinForms/client expanded flag");
+
+        using var firstState = h.Get("/api/state");
+        using var secondState = second.Get("/api/state");
+        Assert(h.Body(firstState).Contains("\"machineName\":\"win-box\"") && h.Body(firstState).Contains("\"isExpanded\":true"),
+            "expanded web session should see its own expanded card");
+        Assert(h.Body(secondState).Contains("\"machineName\":\"win-box\"") && h.Body(secondState).Contains("\"isExpanded\":false"),
+            "second browser session should not inherit another browser's expansion");
+
+        using var filter = h.Post("/api/state/filter/os", new { value = "linux" }, csrfHeader: h.Csrf);
+        Assert((int)filter.StatusCode == 200, "filter set should return 200");
+        using var firstFiltered = h.Get("/api/state");
+        using var secondFiltered = second.Get("/api/state");
+        Assert(h.Body(firstFiltered).Contains("\"osFilter\":\"linux\""), "first session should keep its own filter");
+        Assert(h.Body(secondFiltered).Contains("\"osFilter\":\"all\""), "second session should keep default filter");
     }
 
     static void TestDashboardTokenRegenerateChangesToken()
@@ -1314,11 +1348,13 @@ internal static class Program
         Assert(!client.Expanded, "expanded should start false");
         using var r1 = h.Post("/api/clients/win-box/expand", body: null, csrfHeader: h.Csrf);
         Assert((int)r1.StatusCode == 200, "expand should return 200");
-        Assert(client.Expanded, "expand should flip the client expanded flag on");
+        Assert(!client.Expanded, "web expand should leave the shared client expanded flag unchanged");
         Assert(h.Body(r1).Contains("\"expanded\":true"), "response should echo expanded=true");
+        using var state1 = h.Get("/api/state");
+        Assert(h.Body(state1).Contains("\"isExpanded\":true"), "session state should show the card as expanded");
         using var r2 = h.Post("/api/clients/win-box/expand", body: null, csrfHeader: h.Csrf);
         Assert((int)r2.StatusCode == 200, "second expand should return 200");
-        Assert(!client.Expanded, "expand should flip the client expanded flag off");
+        Assert(!client.Expanded, "web collapse should leave the shared client expanded flag unchanged");
         Assert(h.Body(r2).Contains("\"expanded\":false"), "response should echo expanded=false");
     }
 
@@ -1923,6 +1959,24 @@ internal static class Program
             if ((int)r.StatusCode != 204) throw new InvalidOperationException("login failed in test setup");
         }
 
+        public WebApiSession NewSession(string username = "admin", string password = "correctpassword12")
+        {
+            if (!Operators.Exists) Operators.Create(username, password);
+            var cookies = new CookieContainer();
+            var client = new HttpClient(new HttpClientHandler { UseCookies = true, CookieContainer = cookies })
+            {
+                BaseAddress = Client.BaseAddress
+            };
+            var session = new WebApiSession(client, cookies);
+            using var r = session.Post("/api/auth/login", new { username, password });
+            if ((int)r.StatusCode != 204)
+            {
+                session.Dispose();
+                throw new InvalidOperationException("login failed in secondary test setup");
+            }
+            return session;
+        }
+
         public string Csrf => CookieValue("cpumon_csrf");
 
         public HttpResponseMessage Post(string path, object? body = null, string? csrfHeader = null)
@@ -1981,6 +2035,45 @@ internal static class Program
             Bootstrap.Dispose();
             _td.Dispose();
         }
+    }
+
+    sealed class WebApiSession : IDisposable
+    {
+        readonly CookieContainer _cookies;
+        public HttpClient Client { get; }
+
+        public WebApiSession(HttpClient client, CookieContainer cookies)
+        {
+            Client = client;
+            _cookies = cookies;
+        }
+
+        public string Csrf => CookieValue("cpumon_csrf");
+
+        public HttpResponseMessage Post(string path, object? body = null, string? csrfHeader = null)
+            => Send(HttpMethod.Post, path, body, csrfHeader);
+
+        public HttpResponseMessage Get(string path) => Client.GetAsync(path).GetAwaiter().GetResult();
+
+        public HttpResponseMessage Send(HttpMethod method, string path, object? body, string? csrfHeader)
+        {
+            var req = new HttpRequestMessage(method, path);
+            if (body != null)
+                req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+            if (csrfHeader != null) req.Headers.Add("X-CSRF-Token", csrfHeader);
+            return Client.SendAsync(req).GetAwaiter().GetResult();
+        }
+
+        public string Body(HttpResponseMessage resp) => resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+        string CookieValue(string name)
+        {
+            foreach (Cookie c in _cookies.GetCookies(Client.BaseAddress!))
+                if (c.Name == name) return c.Value;
+            return "";
+        }
+
+        public void Dispose() => Client.Dispose();
     }
 
     static RemoteClient FakeRemoteClient()
