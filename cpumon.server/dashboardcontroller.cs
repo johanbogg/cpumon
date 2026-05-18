@@ -220,13 +220,8 @@ public sealed class ServerDashboardController
         }
         if (linux)
         {
-            if (!LinuxUpdatePayload.TryRead(path, out var fileName, out var bytes, out var error))
-            {
-                _engine.Log.Add($"Linux update failed: {error}", Th.Red);
-                return;
-            }
             _engine.Log.Add($"Pushing Linux update → {cl.MachineName}…", Th.Org);
-            _engine.PushUpdatePayload(cl, fileName, bytes);
+            _engine.PushLinuxUpdate(cl, path);
             return;
         }
         _engine.Log.Add($"Pushing update → {cl.MachineName}…", Th.Org);
@@ -242,13 +237,8 @@ public sealed class ServerDashboardController
         if (targets.Count == 0) { _engine.Log.Add("No matching clients for selected file type", Th.Org); return; }
         if (isLinuxPayload)
         {
-            if (!LinuxUpdatePayload.TryRead(path, out var fileName, out var bytes, out var error))
-            {
-                _engine.Log.Add($"Linux update failed: {error}", Th.Red);
-                return;
-            }
             _engine.Log.Add($"Pushing Linux update → {targets.Count} client(s)…", Th.Org);
-            _engine.PushUpdateMultiPayload(targets, fileName, bytes);
+            _engine.PushLinuxUpdateMulti(targets, path);
             return;
         }
         _engine.Log.Add($"Pushing update → {targets.Count} client(s)…", Th.Org);

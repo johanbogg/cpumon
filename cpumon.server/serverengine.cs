@@ -287,12 +287,16 @@ public sealed class ServerEngine : IDisposable
 
     public void PushUpdate(RemoteClient cl, string exePath) => Task.Run(() => DoPushUpdate(cl, exePath));
 
-    public void PushUpdatePayload(RemoteClient cl, string fileName, byte[] fileBytes) =>
-        Task.Run(() =>
+    public void PushLinuxUpdate(RemoteClient cl, string path) => Task.Run(() =>
+    {
+        if (!LinuxUpdatePayload.TryRead(path, out var fileName, out var bytes, out var error))
         {
-            string fileHash = Convert.ToBase64String(SHA256.HashData(fileBytes));
-            PushUpdateFromBytes(cl, fileName, fileBytes, fileHash);
-        });
+            _log.Add($"Linux update failed: {error}", Th.Red);
+            return;
+        }
+        string fileHash = Convert.ToBase64String(SHA256.HashData(bytes));
+        PushUpdateFromBytes(cl, fileName, bytes, fileHash);
+    });
 
     void DoPushUpdate(RemoteClient cl, string exePath)
     {
@@ -332,16 +336,20 @@ public sealed class ServerEngine : IDisposable
 
     public void PushUpdateMulti(IReadOnlyList<RemoteClient> clients, string exePath) => Task.Run(() => DoPushUpdateMulti(clients, exePath));
 
-    public void PushUpdateMultiPayload(IReadOnlyList<RemoteClient> clients, string fileName, byte[] fileBytes) =>
-        Task.Run(() =>
+    public void PushLinuxUpdateMulti(IReadOnlyList<RemoteClient> clients, string path) => Task.Run(() =>
+    {
+        if (!LinuxUpdatePayload.TryRead(path, out var fileName, out var bytes, out var error))
         {
-            string fileHash = Convert.ToBase64String(SHA256.HashData(fileBytes));
-            foreach (var cl in clients)
-            {
-                var capture = cl;
-                Task.Run(() => PushUpdateFromBytes(capture, fileName, fileBytes, fileHash));
-            }
-        });
+            _log.Add($"Linux update failed: {error}", Th.Red);
+            return;
+        }
+        string fileHash = Convert.ToBase64String(SHA256.HashData(bytes));
+        foreach (var cl in clients)
+        {
+            var capture = cl;
+            Task.Run(() => PushUpdateFromBytes(capture, fileName, bytes, fileHash));
+        }
+    });
 
     void DoPushUpdateMulti(IReadOnlyList<RemoteClient> clients, string exePath)
     {
