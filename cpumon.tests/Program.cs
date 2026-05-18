@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
@@ -64,6 +65,9 @@ internal static class Program
             TestSessionStoreTouchRefreshesLastUsed();
             TestSessionStoreInvalidateRemoves();
             TestSessionStorePruneRemovesExpiredEntries();
+            TestWebHostStartsAndStopsCleanly();
+            TestWebHostHealthzReturnsJson();
+            TestWebHostSetsSecurityHeaders();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -901,6 +905,73 @@ internal static class Program
         Assert(evented == 2, "Pruned event should report two removals");
         Assert(store.Count == 1, "live session should remain after prune");
         Assert(store.Validate(dead1.Id) == null, "pruned session id should no longer validate");
+    }
+
+    static void TestWebHostStartsAndStopsCleanly()
+    {
+        var host = new WebHost();
+        try
+        {
+            host.StartAsync(new WebHostOptions { Port = 0, UseTls = false, ServerVersion = "test" })
+                .GetAwaiter().GetResult();
+            Assert(host.IsRunning, "host should be running after StartAsync");
+            Assert(host.Port > 0, "host should expose the bound port after StartAsync");
+        }
+        finally
+        {
+            host.DisposeAsync().GetAwaiter().GetResult();
+        }
+        Assert(!host.IsRunning, "host should be stopped after DisposeAsync");
+    }
+
+    static void TestWebHostHealthzReturnsJson()
+    {
+        var host = new WebHost();
+        try
+        {
+            host.StartAsync(new WebHostOptions { Port = 0, UseTls = false, ServerVersion = "1.2.3" })
+                .GetAwaiter().GetResult();
+            using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{host.Port}") };
+            using var resp = client.GetAsync("/api/healthz").GetAwaiter().GetResult();
+            Assert((int)resp.StatusCode == 200, "/api/healthz should return 200");
+            var body = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            Assert(body.Contains("\"ok\":true"), "healthz body should contain ok=true");
+            Assert(body.Contains("\"version\":\"1.2.3\""), "healthz body should echo server version");
+            Assert(body.Contains("\"uptimeSec\""), "healthz body should contain uptimeSec");
+        }
+        finally
+        {
+            host.DisposeAsync().GetAwaiter().GetResult();
+        }
+    }
+
+    static void TestWebHostSetsSecurityHeaders()
+    {
+        var host = new WebHost();
+        try
+        {
+            host.StartAsync(new WebHostOptions { Port = 0, UseTls = false, ServerVersion = "hdrtest" })
+                .GetAwaiter().GetResult();
+            using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{host.Port}") };
+            using var resp = client.GetAsync("/api/healthz").GetAwaiter().GetResult();
+            Assert(GetHeader(resp, "X-Content-Type-Options") == "nosniff", "X-Content-Type-Options should be nosniff");
+            Assert(GetHeader(resp, "X-Frame-Options") == "DENY", "X-Frame-Options should be DENY");
+            Assert(GetHeader(resp, "Referrer-Policy") == "no-referrer", "Referrer-Policy should be no-referrer");
+            Assert(GetHeader(resp, "Content-Security-Policy").Contains("default-src 'self'"), "CSP should restrict default-src to self");
+            Assert(GetHeader(resp, "Server") == "cpumon/hdrtest", "Server header should embed ServerVersion");
+            Assert(GetHeader(resp, "Strict-Transport-Security") == "", "HSTS must NOT be set in plain-HTTP mode");
+        }
+        finally
+        {
+            host.DisposeAsync().GetAwaiter().GetResult();
+        }
+    }
+
+    static string GetHeader(HttpResponseMessage resp, string name)
+    {
+        if (resp.Headers.TryGetValues(name, out var v1)) return string.Join(", ", v1);
+        if (resp.Content.Headers.TryGetValues(name, out var v2)) return string.Join(", ", v2);
+        return "";
     }
 
     static RemoteClient FakeRemoteClient()
