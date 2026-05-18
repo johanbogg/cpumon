@@ -43,26 +43,49 @@ cpumon.client/
                     PawProcDialog, PawSysInfoDialog, PawServicesDialog
 
 cpumon.server/
-  program.cs       — entry point, launches ServerForm
-  serverengine.cs  — ServerEngine (state + protocol loops): _cls, _pendingApprovals,
-                     _store, _alertSvc, _updater, ListenLoop, HandleClient, BeaconLoop,
-                     UpdateCheckLoop, UpdateModes, PAW relay, Approve/RejectPending,
-                     Request{Restart,Shutdown,SysInfo,Processes,Services,Events,Screenshot},
-                     TogglePaw, ForgetClient, WakeOffline, PushUpdate(Multi);
-                     events: ProcessListReceived, SysInfoReceived, ServicesReceived,
-                     EventsReceived, ScreenshotReceived, UpdateAvailable.
-                     Also defines PendingClientApproval and PendingPowerAction.
-  serverform.cs    — ServerForm (presentation only): subscribes to engine events,
-                     owns painting, OnClick, scroll, _btns, _selectedMachines, _procDialogs.
-  serverdialogs.cs — ApprovedClientsDialog, ProcDialog (live filter), SysInfoDialog,
-                     ServicesDialog, EventViewerDialog
-  email.cs         — EmailSecurity, AlertConfig, AlertConfigStore, AlertService,
-                     AlertConfigDialog (SMTP/STARTTLS/SMTPS via MailKit)
-  updatechecker.cs — UpdateChecker (polls api.github.com/repos/{Repo}/releases/latest)
-                     and ReleaseInfo record carrying tag, version, all asset URLs and
-                     the SHA256SUMS URL.
-  releasestager.cs — ReleaseStager.StageAsync downloads + SHA256-verifies + extracts a
-                     ReleaseInfo's zips into %ProgramData%\CpuMon\releases\vX.Y.Z\
+  program.cs               — entry point, launches ServerForm or ServerForm2 (--new-ui)
+  serverengine.cs          — ServerEngine (state + protocol loops): _cls, _pendingApprovals,
+                             _store, _alertSvc, _updater, ListenLoop, HandleClient, BeaconLoop,
+                             UpdateCheckLoop, UpdateModes, PAW relay, Approve/RejectPending,
+                             Request{Restart,Shutdown,SysInfo,Processes,Services,Events,Screenshot},
+                             TogglePaw, ForgetClient, WakeOffline, PushUpdate(Multi),
+                             PushLinuxUpdate(Multi); events: ProcessListReceived,
+                             SysInfoReceived, ServicesReceived, EventsReceived,
+                             ScreenshotReceived, UpdateAvailable.
+                             Also defines PendingClientApproval and PendingPowerAction.
+  serverform.cs            — ServerForm (legacy custom-painted UI): owns painting, OnClick,
+                             scroll, _btns; renders cards from ServerDashboardState and
+                             forwards user actions to ServerDashboardController.
+  serverform2.cs           — ServerForm2 (experimental --new-ui dashboard, Phase 6 spike):
+                             standard WinForms ListView/Button layout over the same
+                             ServerDashboardController + IServerPlatformServices boundary.
+  dashboardstate.cs        — UI-neutral DTO snapshots (ServerDashboardState, ClientCardState,
+                             PendingApprovalState, OfflineClientState, DashboardLogEntryState)
+                             and ServerDashboardStateBuilder that projects engine state.
+  dashboardcontroller.cs   — ServerDashboardController: UI-neutral user actions
+                             (selection, OS filter, sort, approve/reject, restart/shutdown,
+                             push update, dialog launches). Composes IServerPlatformServices
+                             calls with engine calls; no WinForms dependency. Requires a
+                             non-null IServerPlatformServices.
+  serverplatformservices.cs — IServerPlatformServices + WinFormsServerPlatformServices.
+                             Sync result-returning Confirm/Prompt/PickFile and typed
+                             dialog launchers; owns _procDialogs lifecycle. OnUi /
+                             OnUiSync helpers marshal to the UI thread.
+  serverdialogs.cs         — ApprovedClientsDialog, ProcDialog (live filter), SysInfoDialog,
+                             ServicesDialog, EventViewerDialog
+  email.cs                 — EmailSecurity, AlertConfig, AlertConfigStore, AlertService,
+                             AlertConfigDialog (SMTP/STARTTLS/SMTPS via MailKit)
+  updatechecker.cs         — UpdateChecker (polls api.github.com/repos/{Repo}/releases/latest)
+                             and ReleaseInfo record carrying tag, version, all asset URLs
+                             and the SHA256SUMS URL.
+  releasestager.cs         — ReleaseStager.StageAsync downloads + SHA256-verifies + extracts a
+                             ReleaseInfo's zips into %ProgramData%\CpuMon\releases\vX.Y.Z\
+  linuxupdatepayload.cs    — LinuxUpdatePayload.TryRead: validates a .py or release .zip,
+                             returns (fileName, bytes) for push. Called from
+                             ServerEngine.PushLinuxUpdate{,Multi} on a background thread.
+  versioning.cs            — Versioning.TryNormalize/IsOlder/IsNewer: strips leading 'v',
+                             keeps numeric prefix, pads to three parts. Used by
+                             UpdateChecker.IsNewer and ServerEngine.ClientNeedsUpdate.
 
 cpumon.tests/
   Program.cs — 19 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
