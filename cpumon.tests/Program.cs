@@ -121,6 +121,7 @@ internal static class Program
             TestWebBootstrapSkippedWhenOperatorExists();
             TestWebStartupComposesAllRoutesAndSurfacesBootstrapUrl();
             TestWebPlatformServicesShowBootstrapUrlPrintsToStdout();
+            TestSetupPageBranches();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -1412,6 +1413,31 @@ internal static class Program
         using var ok = h.Post("/api/offline/box/mac", new { mac = "AA:BB:CC:DD:EE:FF" }, csrfHeader: h.Csrf);
         Assert((int)ok.StatusCode == 204, "valid mac should return 204");
         Assert(h.Engine.Store.GetMac("box") == "AA:BB:CC:DD:EE:FF", "mac should be persisted");
+    }
+
+    static void TestSetupPageBranches()
+    {
+        using var h = new WebApiTestHost();
+
+        using var missing = h.Get("/setup");
+        Assert((int)missing.StatusCode == 200, "GET /setup with no token should still return 200");
+        var missingBody = h.Body(missing);
+        Assert(missingBody.Contains("Missing setup token"), "no-token branch should explain to the operator");
+        Assert(!missingBody.Contains("<form"), "no-token branch must not render a form");
+
+        using var withToken = h.Get("/setup?t=ABCDEF1234567890");
+        Assert((int)withToken.StatusCode == 200, "GET /setup?t=… should return 200");
+        var formBody = h.Body(withToken);
+        Assert(formBody.Contains("<form"), "token branch should render the form");
+        Assert(formBody.Contains("value=\"ABCDEF1234567890\""), "form should embed the supplied bootstrap token");
+        Assert(formBody.Contains("/api/auth/bootstrap"), "form should POST to /api/auth/bootstrap");
+
+        h.Operators.Create("admin", "correctpassword12");
+        using var done = h.Get("/setup?t=ABCDEF1234567890");
+        Assert((int)done.StatusCode == 200, "GET /setup after operator created should return 200");
+        var doneBody = h.Body(done);
+        Assert(doneBody.Contains("Setup complete"), "post-bootstrap branch should say setup is done");
+        Assert(!doneBody.Contains("<form"), "post-bootstrap branch must not render a form");
     }
 
     static void TestWebStartupComposesAllRoutesAndSurfacesBootstrapUrl()

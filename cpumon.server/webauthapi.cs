@@ -30,6 +30,12 @@ public static class WebAuthApi
                            RateLimiter rateLimiter,
                            WebApiContext apiCtx)
     {
+        app.MapGet("/setup", (HttpContext ctx) =>
+        {
+            var token = ctx.Request.Query["t"].ToString();
+            return Results.Content(WebSetupPage.Render(operators.Exists, token), "text/html; charset=utf-8");
+        });
+
         app.MapPost("/api/auth/bootstrap", async (HttpContext ctx) =>
         {
             var ip = apiCtx.ClientIp(ctx);
