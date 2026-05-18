@@ -115,6 +115,8 @@ internal static class Program
             TestApprovedPatchResolvesCanonicalCasing();
             TestSlice9EndpointsRequireAuth();
             TestSlice9EndpointsRequireCsrf();
+            TestLogRequiresAuth();
+            TestLogSinceAndLimitFilterEntries();
             Console.WriteLine("cpumon smoke tests passed");
             return 0;
         }
@@ -1408,6 +1410,45 @@ internal static class Program
         Assert(h.Engine.Store.GetMac("box") == "AA:BB:CC:DD:EE:FF", "mac should be persisted");
     }
 
+    static void TestLogRequiresAuth()
+    {
+        using var h = new WebApiTestHost();
+        using var resp = h.Get("/api/log");
+        Assert((int)resp.StatusCode == 401, "GET /api/log without auth should return 401");
+        Assert(h.Body(resp).Contains("\"error\":\"auth_required\""), "error code should be auth_required");
+    }
+
+    static void TestLogSinceAndLimitFilterEntries()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        // ServerEngine startup writes a couple lines already; add deterministic ones.
+        h.Engine.Log.Add("entry-A", System.Drawing.Color.Gray);
+        h.Engine.Log.Add("entry-B", System.Drawing.Color.FromArgb(0xFF, 0x88, 0x00));
+        h.Engine.Log.Add("entry-C", System.Drawing.Color.Red);
+
+        using var all = h.Get("/api/log?limit=500");
+        Assert((int)all.StatusCode == 200, "GET /api/log should return 200");
+        var allBody = h.Body(all);
+        Assert(allBody.Contains("\"message\":\"entry-A\""), "log should include seeded entry-A");
+        Assert(allBody.Contains("\"message\":\"entry-C\""), "log should include seeded entry-C");
+        Assert(allBody.Contains("\"color\":\"#FF8800\""), "log entries should expose hex colour");
+
+        using var limited = h.Get("/api/log?limit=1");
+        Assert((int)limited.StatusCode == 200, "limited GET should return 200");
+        var limitedBody = h.Body(limited);
+        Assert(limitedBody.Contains("\"message\":\"entry-C\""), "limit=1 should return the most-recent entry");
+        Assert(!limitedBody.Contains("\"message\":\"entry-A\""), "limit=1 should not include older entries");
+
+        var future = DateTime.UtcNow.AddMinutes(5).ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+        using var none = h.Get($"/api/log?since={Uri.EscapeDataString(future)}");
+        Assert((int)none.StatusCode == 200, "future since should return 200");
+        Assert(h.Body(none) == "[]", "since in the future should yield an empty array");
+
+        using var huge = h.Get("/api/log?limit=9999");
+        Assert((int)huge.StatusCode == 200, "oversize limit should clamp, not error");
+    }
+
     static void TestAlertsGetPutRoundTripUpdatesService()
     {
         using var h = new WebApiTestHost();
@@ -1655,6 +1696,7 @@ internal static class Program
                     WebOfflineApi.Map(app, Engine, Sessions, ctx);
                     WebApprovedApi.Map(app, Engine, Sessions, ctx);
                     WebAlertsApi.Map(app, Alerts, Sessions, ctx);
+                    WebLogApi.Map(app, Engine, Sessions, ctx);
                 }
             }).GetAwaiter().GetResult();
             _cookies = new CookieContainer();
