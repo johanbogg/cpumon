@@ -229,7 +229,11 @@ public sealed class WinFormsServerPlatformServices : IServerPlatformServices
         var localExpiry = expiresAt.ToLocalTime().ToString("HH:mm:ss");
         Console.Out.WriteLine($"* Web UI setup: {url} (valid until {localExpiry})");
         Console.Error.WriteLine($"* Web UI setup: {url} (valid until {localExpiry})");
-        OnUi(() => new BootstrapUrlDialog(url, expiresAt).Show(_owner));
+        OnUi(() =>
+        {
+            using var dlg = new BootstrapUrlDialog(url, expiresAt);
+            dlg.ShowDialog(_owner);
+        });
     }
 
     public string? PromptUserMessage(string machineName)
@@ -357,9 +361,9 @@ sealed class BootstrapUrlDialog : Form
             Location = new Point(16, 156),
             Size = new Size(600, 24),
         };
-        UpdateCountdown();
         _timer = new Timer { Interval = 1000 };
         _timer.Tick += (_, _) => UpdateCountdown();
+        UpdateCountdown();
         _timer.Start();
 
         AcceptButton = dismiss;
