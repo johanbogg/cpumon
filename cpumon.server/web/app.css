@@ -958,6 +958,42 @@ button { cursor: pointer; }
   padding: 6px 10px 8px;
 }
 
+.terminal-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: min(560px, calc(100vh - 180px));
+  background: #05070a;
+}
+.terminal-output {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 14px 16px;
+  color: var(--brter);
+  font: 12px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.terminal-inputbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--brd-hi);
+  background: var(--bg-deep);
+  color: var(--grn);
+}
+.terminal-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--brter);
+  font: 12px var(--font-mono);
+}
+.terminal-input::placeholder { color: var(--dimmer); }
+
 .sysinfo-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

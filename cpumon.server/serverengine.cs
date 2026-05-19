@@ -91,6 +91,8 @@ public sealed class ServerEngine : IDisposable
     public event Action<RemoteClient, CpuDetailReport>? CpuDetailUpdated;
     public event Action<RemoteClient, ScreenshotData>? ScreenshotReceived;
     public event Action<RemoteClient, ScreenshotData>? ScreenshotUpdated;
+    public event Action<RemoteClient, string, string>? TerminalOutputUpdated;
+    public event Action<RemoteClient, string>? TerminalClosedUpdated;
     public event Action? UpdateAvailable;
     public event Action? ReleaseStaged;
 
@@ -214,6 +216,28 @@ public sealed class ServerEngine : IDisposable
         if (!_cls.TryGetValue(machine, out var cl)) return false;
         cl.Send(new ServerCommand { Cmd = "cpu_detail", CmdId = NewSnapshotCmdId(notifyUi, "cpu_detail") });
         _log.Add($"CPU detail->{machine}", Th.Cyan);
+        return true;
+    }
+
+    public bool RequestTerminalOpen(string machine, string termId, string? shell)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "terminal_open", TermId = termId, Shell = shell });
+        _log.Add($"Term->{machine}", Th.Cyan);
+        return true;
+    }
+
+    public bool RequestTerminalInput(string machine, string termId, string input)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "terminal_input", TermId = termId, Input = input });
+        return true;
+    }
+
+    public bool RequestTerminalClose(string machine, string termId)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "terminal_close", TermId = termId });
         return true;
     }
 
@@ -784,6 +808,7 @@ public sealed class ServerEngine : IDisposable
                         case "terminal_output" when msg.TermId != null && msg.Output != null:
                             if (TryRoutePawTerminal(cl, msg.TermId, new ServerCommand { Cmd = "paw_term_output", PawSource = cl.MachineName, PawTermId = msg.TermId, PawTermOutput = msg.Output }))
                                 break;
+                            try { TerminalOutputUpdated?.Invoke(cl, msg.TermId, msg.Output); } catch { }
                             if (cl.TerminalDialogs.TryGetValue(msg.TermId, out var td))
                                 td.ReceiveOutput(msg.Output);
                             break;
@@ -791,6 +816,7 @@ public sealed class ServerEngine : IDisposable
                         case "terminal_closed" when msg.TermId != null:
                             if (TryRoutePawTerminal(cl, msg.TermId, new ServerCommand { Cmd = "paw_term_output", PawSource = cl.MachineName, PawTermId = msg.TermId, PawTermOutput = "\r\n[terminal closed]\r\n" }, remove: true))
                                 break;
+                            try { TerminalClosedUpdated?.Invoke(cl, msg.TermId); } catch { }
                             if (cl.TerminalDialogs.TryGetValue(msg.TermId, out var closedTd))
                                 closedTd.ReceiveClosed();
                             break;

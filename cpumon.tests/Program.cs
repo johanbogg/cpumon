@@ -100,6 +100,8 @@ internal static class Program
             TestPerClientExpandTogglesClientFlag();
             TestPerClientPawTogglesStoreFlag();
             TestPerClientMessageValidatesBody();
+            TestWebTerminalOpenDefaultsShellPerOs();
+            TestWebTerminalSessionInputOutputAndCloseRoutes();
             TestSnapshotEndpointsRequireAuth();
             TestSnapshotReturns204AndTriggersFetchWhenEmpty();
             TestSnapshotReturnsCachedAndDoesNotTriggerWhenFresh();
@@ -1288,6 +1290,7 @@ internal static class Program
         ("/api/clients/box/message",    true),
         ("/api/clients/box/screenshot", false),
         ("/api/clients/box/expand",     false),
+        ("/api/clients/box/terminal/open", true),
     };
 
     static void TestPerClientActionsRequireAuth()
@@ -1388,6 +1391,50 @@ internal static class Program
         using var ghost = h.Post("/api/clients/ghost/message", new { text = "hi" }, csrfHeader: h.Csrf);
         Assert((int)ghost.StatusCode == 404, "message to unknown machine should return 404");
         Assert(h.Body(ghost).Contains("\"error\":\"not_found\""), "unknown machine error should be not_found");
+    }
+
+    static void TestWebTerminalOpenDefaultsShellPerOs()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "win-box", "Microsoft Windows 11", Proto.AppVersion);
+        AddReportedClient(h.Engine, "linux-box", "Linux Debian", "1.0.0-linux");
+
+        using var win = h.Post("/api/clients/win-box/terminal/open", new { shell = "" }, csrfHeader: h.Csrf);
+        Assert((int)win.StatusCode == 200, "web terminal open should return 200 for a Windows client");
+        var winBody = h.Body(win);
+        Assert(winBody.Contains("\"shell\":\"cmd\""), "Windows web terminal should default to cmd");
+        Assert(winBody.Contains("\"termId\":\"web-"), "terminal open should return a web-owned term id");
+
+        using var linux = h.Post("/api/clients/linux-box/terminal/open", new { shell = "cmd" }, csrfHeader: h.Csrf);
+        Assert((int)linux.StatusCode == 200, "web terminal open should return 200 for a Linux client");
+        Assert(h.Body(linux).Contains("\"shell\":\"bash\""), "Linux web terminal should force bash");
+    }
+
+    static void TestWebTerminalSessionInputOutputAndCloseRoutes()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+
+        using var open = h.Post("/api/clients/box/terminal/open", new { shell = "cmd" }, csrfHeader: h.Csrf);
+        Assert((int)open.StatusCode == 200, "terminal open should succeed");
+        using var doc = JsonDocument.Parse(h.Body(open));
+        var termId = doc.RootElement.GetProperty("termId").GetString()!;
+
+        using var output = h.Get($"/api/clients/box/terminal/{termId}/output?since=0");
+        Assert((int)output.StatusCode == 200, "terminal output poll should succeed for an open session");
+        var outBody = h.Body(output);
+        Assert(outBody.Contains("\"chunks\":[]"), "new terminal session should start with no buffered output");
+        Assert(outBody.Contains("\"closed\":false"), "new terminal session should start open");
+
+        using var input = h.Post($"/api/clients/box/terminal/{termId}/input", new { input = "dir\n" }, csrfHeader: h.Csrf);
+        Assert((int)input.StatusCode == 204, "terminal input should relay with 204");
+
+        using var close = h.Post($"/api/clients/box/terminal/{termId}/close", body: null, csrfHeader: h.Csrf);
+        Assert((int)close.StatusCode == 204, "terminal close should return 204");
+        using var closed = h.Get($"/api/clients/box/terminal/{termId}/output?since=0");
+        Assert(h.Body(closed).Contains("\"closed\":true"), "terminal close should mark the web session closed");
     }
 
     static void TestApprovedListReturnsProjectedEntries()
@@ -1578,6 +1625,7 @@ internal static class Program
         Assert(jsBody.Contains("function clientCard("), "app.js should include client card rendering");
         Assert(jsBody.Contains("function ramText("), "app.js should include the RAM formatter used by expanded cards");
         Assert(jsBody.Contains("function openScreenshotDialog("), "app.js should include the web screenshot dialog");
+        Assert(jsBody.Contains("function openTerminalDialog("), "app.js should include the web terminal dialog");
     }
 
     static void TestPendingApproveRejectRoutesRequireCsrfAndReturn404()
@@ -1927,6 +1975,7 @@ internal static class Program
         public ServerEngine              Engine     { get; }
         public ServerDashboardController Controller { get; }
         public SnapshotCache             Snapshots  { get; }
+        public WebTerminalStore          Terminals  { get; }
         public AlertService              Alerts     { get; }
         readonly TempDir _td;
         readonly CookieContainer _cookies;
@@ -1943,6 +1992,7 @@ internal static class Program
             Engine     = new ServerEngine(noBroadcast: true, store: store, alerts: Alerts);
             Controller = new ServerDashboardController(Engine, new FakeServerPlatformServices());
             Snapshots  = new SnapshotCache(Engine);
+            Terminals  = new WebTerminalStore(Engine);
             Host       = new WebHost();
             Host.StartAsync(new WebHostOptions
             {
@@ -1954,6 +2004,7 @@ internal static class Program
                     WebDashboardApi.Map(app, Engine, Controller, Sessions, ctx);
                     WebClientActionsApi.Map(app, Engine, Controller, Sessions, ctx);
                     WebSnapshotApi.Map(app, Engine, Snapshots, Sessions, ctx);
+                    WebTerminalApi.Map(app, Engine, Terminals, Sessions, ctx);
                     WebOfflineApi.Map(app, Engine, Sessions, ctx);
                     WebApprovedApi.Map(app, Engine, Sessions, ctx);
                     WebAlertsApi.Map(app, Alerts, Sessions, ctx);
@@ -2045,6 +2096,7 @@ internal static class Program
         public void Dispose()
         {
             Client.Dispose();
+            Terminals.Dispose();
             Host.DisposeAsync().GetAwaiter().GetResult();
             Snapshots.Dispose();
             Sessions.Dispose();

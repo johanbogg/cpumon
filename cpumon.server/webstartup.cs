@@ -24,9 +24,11 @@ public sealed class WebStartup : IDisposable
     public BootstrapTokenIssuer Bootstrap  { get; }
     public RateLimiter          RateLimit  { get; }
     public SnapshotCache        Snapshots  { get; }
+    public WebTerminalStore     Terminals  { get; }
 
     WebStartup(WebHost host, OperatorStore operators, SessionStore sessions,
-               BootstrapTokenIssuer bootstrap, RateLimiter rateLimit, SnapshotCache snapshots)
+               BootstrapTokenIssuer bootstrap, RateLimiter rateLimit, SnapshotCache snapshots,
+               WebTerminalStore terminals)
     {
         Host       = host;
         Operators  = operators;
@@ -34,6 +36,7 @@ public sealed class WebStartup : IDisposable
         Bootstrap  = bootstrap;
         RateLimit  = rateLimit;
         Snapshots  = snapshots;
+        Terminals  = terminals;
     }
 
     public static async Task<WebStartup> StartAsync(ServerEngine engine,
@@ -46,6 +49,7 @@ public sealed class WebStartup : IDisposable
         var bootstrap = new BootstrapTokenIssuer();
         var rateLimit = new RateLimiter();
         var snapshots = new SnapshotCache(engine);
+        var terminals = new WebTerminalStore(engine);
 
         var host = new WebHost();
         await host.StartAsync(new WebHostOptions
@@ -66,6 +70,7 @@ public sealed class WebStartup : IDisposable
                 WebDashboardApi.Map(app, engine, controller, sessions, ctx);
                 WebClientActionsApi.Map(app, engine, controller, sessions, ctx);
                 WebSnapshotApi.Map(app, engine, snapshots, sessions, ctx);
+                WebTerminalApi.Map(app, engine, terminals, sessions, ctx);
                 WebOfflineApi.Map(app, engine, sessions, ctx);
                 WebApprovedApi.Map(app, engine, sessions, ctx);
                 WebAlertsApi.Map(app, engine.Alerts, sessions, ctx);
@@ -81,11 +86,12 @@ public sealed class WebStartup : IDisposable
             token => $"{scheme}://localhost:{host.Port}/setup?t={token}",
             engine.Log);
 
-        return new WebStartup(host, operators, sessions, bootstrap, rateLimit, snapshots);
+        return new WebStartup(host, operators, sessions, bootstrap, rateLimit, snapshots, terminals);
     }
 
     public void Dispose()
     {
+        Terminals.Dispose();
         Snapshots.Dispose();
         Host.DisposeAsync().AsTask().ConfigureAwait(false).GetAwaiter().GetResult();
         Bootstrap.Dispose();

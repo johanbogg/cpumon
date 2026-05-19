@@ -273,6 +273,7 @@ function buildCardActions(client, selected) {
   ];
   if (client.canServices)  inspect.push(action('Services',   () => openServicesDialog(client.machineName)));
   if (client.canEvents)    inspect.push(action('Events',     () => openEventsDialog(client.machineName)));
+  if (client.canTerminal)  inspect.push(action('Terminal',   () => openTerminalDialog(client.machineName)));
   if (client.canScreenshot) inspect.push(action('Screenshot', () => openScreenshotDialog(client.machineName)));
   if (client.canCpuDetail) inspect.push(action('CPU detail', () => openCpuDetailDialog(client.machineName)));
 
@@ -1126,6 +1127,116 @@ function openScreenshotDialog(machine) {
         .then(async r => { if (r?.status === 200) { const j = await r.json(); setShot(j.snapshot, j.receivedAt); } })
         .catch(() => {});
       ctx.onClose(stop);
+    },
+  });
+}
+
+// terminal dialog
+function openTerminalDialog(machine) {
+  openModal({
+    title: `Terminal · ${machine}`,
+    mount: (body, ctx) => {
+      body.classList.add('flush');
+      body.innerHTML = `
+        <div class="modal-toolbar">
+          <span class="modal-status" data-k="shell">opening…</span>
+          <span class="modal-status" data-k="status">connecting</span>
+        </div>
+        <div class="terminal-pane">
+          <pre class="terminal-output" aria-live="polite"></pre>
+          <form class="terminal-inputbar">
+            <span>&gt;</span>
+            <input class="terminal-input" type="text" autocomplete="off" spellcheck="false" placeholder="command">
+          </form>
+        </div>`;
+      const out = body.querySelector('.terminal-output');
+      const form = body.querySelector('.terminal-inputbar');
+      const input = body.querySelector('.terminal-input');
+      const shellLabel = body.querySelector('[data-k="shell"]');
+      const status = body.querySelector('[data-k="status"]');
+      const m = encodeURIComponent(machine);
+      let termId = null;
+      let seq = 0;
+      let stopped = false;
+      let timer = null;
+
+      function append(text) {
+        out.textContent += text;
+        if (out.textContent.length > 120000) out.textContent = out.textContent.slice(-100000);
+        out.scrollTop = out.scrollHeight;
+      }
+
+      async function poll() {
+        if (stopped || !termId) return;
+        try {
+          const r = await api(`/api/clients/${m}/terminal/${encodeURIComponent(termId)}/output?since=${seq}`);
+          if (stopped) return;
+          if (r?.ok) {
+            const j = await r.json();
+            for (const c of (j.chunks || [])) append(c.text || '');
+            seq = j.nextSeq ?? seq;
+            status.textContent = j.closed ? 'closed' : 'live';
+            status.classList.toggle('err', !!j.closed);
+            if (j.closed) return;
+          } else {
+            status.textContent = r?.status === 404 ? 'disconnected' : 'error';
+            status.classList.add('err');
+          }
+        } catch {
+          status.textContent = 'connection error';
+          status.classList.add('err');
+        }
+        if (!stopped) timer = setTimeout(poll, 650);
+      }
+
+      async function open() {
+        const r = await api(`/api/clients/${m}/terminal/open`, {
+          method: 'POST',
+          body: JSON.stringify({ shell: 'cmd' }),
+        });
+        if (!r?.ok) {
+          status.textContent = r?.status === 404 ? 'client unavailable' : 'open failed';
+          status.classList.add('err');
+          return;
+        }
+        const j = await r.json();
+        termId = j.termId;
+        shellLabel.textContent = j.shell || 'terminal';
+        status.textContent = 'live';
+        input.disabled = false;
+        input.focus();
+        poll();
+      }
+
+      input.disabled = true;
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!termId || input.disabled) return;
+        const text = input.value;
+        input.value = '';
+        await api(`/api/clients/${m}/terminal/${encodeURIComponent(termId)}/input`, {
+          method: 'POST',
+          body: JSON.stringify({ input: `${text}\n` }),
+        });
+      });
+      input.addEventListener('keydown', async (e) => {
+        if (e.ctrlKey && e.key.toLowerCase() === 'c' && termId) {
+          e.preventDefault();
+          await api(`/api/clients/${m}/terminal/${encodeURIComponent(termId)}/input`, {
+            method: 'POST',
+            body: JSON.stringify({ input: '\u0003' }),
+          });
+        }
+      });
+      ctx.onClose(() => {
+        stopped = true;
+        if (timer) clearTimeout(timer);
+        if (termId) api(`/api/clients/${m}/terminal/${encodeURIComponent(termId)}/close`, { method: 'POST' }).catch(() => {});
+      });
+      open().catch(() => {
+        status.textContent = 'open failed';
+        status.classList.add('err');
+      });
     },
   });
 }
