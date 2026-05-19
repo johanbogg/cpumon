@@ -37,6 +37,7 @@ internal static class Program
         AppState.Admin = Admin;
 
         bool daemon = false, serviceMode = false, agentMode = false, install = false, uninstall = false, resetAuth = false;
+        bool fromElevation = false;
         string? forceIp = null, token = null;
 
         for (int i = 0; i < args.Length; i++)
@@ -54,6 +55,8 @@ internal static class Program
                 uninstall = true;
             else if (a.Equals("--reset-auth", StringComparison.OrdinalIgnoreCase) || a.Equals("--reset-pairing", StringComparison.OrdinalIgnoreCase))
                 resetAuth = true;
+            else if (a.Equals("--elevated", StringComparison.OrdinalIgnoreCase))
+                fromElevation = true;
             else if ((a.Equals("--server-ip", StringComparison.OrdinalIgnoreCase) || a.Equals("-ip", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
                 forceIp = args[++i];
             else if ((a.Equals("--token", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
@@ -103,15 +106,23 @@ internal static class Program
             return;
         }
 
-        // Normal modes — request admin elevation if not already elevated
-        if (!Admin)
+        // Normal modes — request admin elevation if not already elevated.
+        // --elevated marks a relaunch attempt; if we come back here without admin
+        // it means UAC was either declined or "approved" without granting elevation
+        // (which can happen for standard-user accounts that cannot actually elevate).
+        // Fall through to the non-admin GUI rather than retrying — otherwise the
+        // process re-spawns itself indefinitely on every UAC prompt.
+        if (!Admin && !fromElevation)
         {
             try
             {
+                string relaunchArgs = args.Length == 0
+                    ? "--elevated"
+                    : string.Join(' ', args) + " --elevated";
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = Environment.ProcessPath ?? Application.ExecutablePath,
-                    Arguments = string.Join(' ', args),
+                    Arguments = relaunchArgs,
                     UseShellExecute = true,
                     Verb = "runas"
                 });
