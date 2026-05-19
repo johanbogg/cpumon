@@ -16,6 +16,7 @@ sealed class ServerForm : BorderlessForm
     readonly ToolTip _toolTip = new();
     readonly NotifyIcon _tray;
     readonly WebStartupOptions? _webOpts;
+    readonly bool _startInTray;
     WebStartup? _web;
     bool _exitRequested;
     bool _trayBalloonShown;
@@ -28,10 +29,11 @@ sealed class ServerForm : BorderlessForm
     readonly List<(Rectangle R, string M, string A)> _btns = new();
     string _currentToolTip = "";
 
-    public ServerForm(bool noBroadcast, WebStartupOptions? webOpts = null)
+    public ServerForm(bool noBroadcast, WebStartupOptions? webOpts = null, bool startInTray = false)
     {
         _engine = new ServerEngine(noBroadcast);
         _webOpts = webOpts;
+        _startInTray = startInTray;
 
         Text = $"CPU Monitor — Server  v{Proto.AppVersion}";
         StartPosition = FormStartPosition.Manual;
@@ -105,6 +107,8 @@ sealed class ServerForm : BorderlessForm
                 try { _web = WebStartup.StartAsync(_engine, _dashboard, _platform, _webOpts).GetAwaiter().GetResult(); }
                 catch (Exception ex) { _engine.Log.Add($"Web UI failed to start: {ex.Message}", Th.Red); }
             }
+            if (_startInTray)
+                BeginInvoke(HideToTray);
         };
 
         FormClosed += (_, _) => Cleanup();

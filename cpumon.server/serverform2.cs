@@ -33,11 +33,16 @@ sealed class ServerForm2 : Form
     string _lastActionKey = "";
 
     readonly WebStartupOptions? _webOpts;
+    readonly bool _startInTray;
+    readonly NotifyIcon _tray;
     WebStartup? _web;
+    bool _exitRequested;
+    bool _trayBalloonShown;
 
-    public ServerForm2(bool noBroadcast, WebStartupOptions? webOpts = null)
+    public ServerForm2(bool noBroadcast, WebStartupOptions? webOpts = null, bool startInTray = false)
     {
         _webOpts = webOpts;
+        _startInTray = startInTray;
         Text = $"CPU Monitor — Server (NEW UI)  v{Proto.AppVersion}";
         ClientSize = new Size(1100, 720);
         MinimumSize = new Size(820, 520);
@@ -47,6 +52,19 @@ sealed class ServerForm2 : Form
         Font = new Font("Segoe UI", 9f);
         Icon = Th.MakeHexIcon(Th.Grn);
         DwmDark.Hook(this);
+
+        _tray = new NotifyIcon
+        {
+            Icon = Icon,
+            Text = "CPU Monitor Server",
+            Visible = false
+        };
+        var trayMenu = new ContextMenuStrip();
+        trayMenu.Items.Add("Show", null, (_, _) => RestoreFromTray());
+        trayMenu.Items.Add(new ToolStripSeparator());
+        trayMenu.Items.Add("Exit", null, (_, _) => ExitFromTray());
+        _tray.ContextMenuStrip = trayMenu;
+        _tray.DoubleClick += (_, _) => RestoreFromTray();
 
         _engine = new ServerEngine(noBroadcast);
         _platform = new WinFormsServerPlatformServices(this, _engine, Refresh);
@@ -68,13 +86,54 @@ sealed class ServerForm2 : Form
                 try { _web = WebStartup.StartAsync(_engine, _dashboard, _platform, _webOpts).GetAwaiter().GetResult(); }
                 catch (Exception ex) { _engine.Log.Add($"Web UI failed to start: {ex.Message}", Th.Red); }
             }
+            if (_startInTray)
+                BeginInvoke(HideToTray);
+        };
+        FormClosing += (_, e) =>
+        {
+            if (!_exitRequested && e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                HideToTray();
+            }
         };
         FormClosed += (_, _) =>
         {
             _tm.Stop(); _tm.Dispose();
+            try { _tray.Visible = false; } catch { }
+            try { _tray.Dispose(); } catch { }
             try { _web?.Dispose(); } catch { }
             _engine.Dispose();
         };
+    }
+
+    void HideToTray()
+    {
+        Hide();
+        ShowInTaskbar = false;
+        _tray.Visible = true;
+        if (!_trayBalloonShown)
+        {
+            _trayBalloonShown = true;
+            _tray.ShowBalloonTip(3000, "CPU Monitor Server", "Still running in the tray. Double-click to restore.", ToolTipIcon.Info);
+        }
+    }
+
+    void RestoreFromTray()
+    {
+        _tray.Visible = false;
+        Show();
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        ShowInTaskbar = true;
+        Activate();
+    }
+
+    void ExitFromTray()
+    {
+        _exitRequested = true;
+        try { _tray.Visible = false; } catch { }
+        try { System.Diagnostics.Process.GetCurrentProcess().Kill(entireProcessTree: true); }
+        catch { Environment.Exit(0); }
     }
 
     void BuildLayout()
