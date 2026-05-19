@@ -13,6 +13,8 @@ using Microsoft.AspNetCore.Routing;
 
 public sealed class WebTerminalStore : IDisposable
 {
+    static readonly TimeSpan ClosedSessionTtl = TimeSpan.FromSeconds(30);
+
     readonly ServerEngine _engine;
     readonly ConcurrentDictionary<string, Session> _sessions = new(StringComparer.Ordinal);
     volatile bool _disposed;
@@ -26,6 +28,7 @@ public sealed class WebTerminalStore : IDisposable
 
     public WebTerminalSession Create(string machine, string termId, string shell)
     {
+        SweepClosed();
         var session = new Session(machine, termId, shell);
         _sessions[Key(machine, termId)] = session;
         return session.Snapshot(0);
@@ -35,6 +38,7 @@ public sealed class WebTerminalStore : IDisposable
 
     public WebTerminalSession? Read(string machine, string termId, long since)
     {
+        SweepClosed();
         if (!_sessions.TryGetValue(Key(machine, termId), out var session)) return null;
         return session.Snapshot(since);
     }
@@ -43,9 +47,18 @@ public sealed class WebTerminalStore : IDisposable
     {
         if (_sessions.TryGetValue(Key(machine, termId), out var session))
             session.MarkClosed();
+        SweepClosed();
     }
 
     public bool Remove(string machine, string termId) => _sessions.TryRemove(Key(machine, termId), out _);
+
+    void SweepClosed()
+    {
+        var cutoff = DateTime.UtcNow - ClosedSessionTtl;
+        foreach (var kv in _sessions)
+            if (kv.Value.ClosedAt is { } closedAt && closedAt < cutoff)
+                _sessions.TryRemove(kv.Key, out _);
+    }
 
     void OnOutput(RemoteClient cl, string termId, string output)
     {
@@ -83,11 +96,13 @@ public sealed class WebTerminalStore : IDisposable
         long _nextSeq;
         int _textChars;
         bool _closed;
+        DateTime? _closedAt;
         DateTime _updatedAt = DateTime.UtcNow;
 
         public string Machine { get; }
         public string TermId { get; }
         public string Shell { get; }
+        public DateTime? ClosedAt { get { lock (_lock) return _closedAt; } }
 
         public Session(string machine, string termId, string shell)
         {
@@ -112,7 +127,11 @@ public sealed class WebTerminalStore : IDisposable
         {
             lock (_lock)
             {
-                _closed = true;
+                if (!_closed)
+                {
+                    _closed = true;
+                    _closedAt = DateTime.UtcNow;
+                }
                 _updatedAt = DateTime.UtcNow;
             }
         }

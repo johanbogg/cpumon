@@ -39,10 +39,10 @@ public static class WebClientActionsApi
 
         app.MapPost("/api/clients/{machine}/forget", (HttpContext ctx, string machine) =>
         {
-            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out var session, out var fail)) return fail!;
+            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
             if (!engine.Clients.ContainsKey(machine)) return NotFound(ctx, machine);
             engine.ForgetClient(machine);
-            WebSessionDashboard.RemoveMachine(session!, machine);
+            sessions.ForgetMachineFromAllSessions(machine);
             apiCtx.Log?.Add($"Web UI: forget {machine}", Th.Yel);
             return Results.NoContent();
         });

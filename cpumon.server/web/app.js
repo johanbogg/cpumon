@@ -120,8 +120,6 @@ function render(data) {
   $('alertsState').textContent = data.alertsConfigured ? 'configured' : 'off';
   $('segBroadcast').textContent = data.broadcastDisabled ? 'off' : 'on';
   $('segAuthCount').textContent = data.authenticatedClientCount ?? clients.length;
-  $('viewportLabel').textContent = (clients.length + pending.length + offline.length) > 0
-    ? 'populated' : 'empty · first run';
 
   state.selected = new Set(data.selectedMachineNames || []);
   $('selectionCount').innerHTML = '';
@@ -187,7 +185,7 @@ function renderClients(clients) {
 
 function clientCard(client) {
   const tpl = $('clientTemplate').content.firstElementChild.cloneNode(true);
-  const report = client.lastReport || client.report || {};
+  const report = client.report || {};
   const linux = !!client.isLinux || (client.osLabel || '').toLowerCase().includes('linux');
   const selected = state.selected.has(client.machineName);
   const expanded = !!client.isExpanded;
@@ -216,10 +214,10 @@ function clientCard(client) {
   tag.classList.toggle('stale', client.isStale && !client.isPaw);
   tpl.querySelector('.state-text').textContent = text;
 
-  metricCpu(tpl, report.totalLoadPercent);
-  metricRam(tpl, report.ramUsedGB, report.ramTotalGB);
-  metricTemp(tpl, report.packageTemperatureC);
-  metricNet(tpl, report.netDownKBps, report.netUpKBps);
+  metricCpu(tpl, report.load);
+  metricRam(tpl, report.ramUsed, report.ramTotal);
+  metricTemp(tpl, report.temp);
+  metricNet(tpl, report.netDn, report.netUp);
 
   tpl.querySelector('.card-body').replaceChildren(...buildCardBody(client, report));
   tpl.querySelector('.card-actions').replaceChildren(...buildCardActions(client, selected));
@@ -232,12 +230,12 @@ function clientCard(client) {
 
 function buildCardBody(client, report) {
   const body = [
-    kv('OS', client.osLabel || report.osVersion || '?'),
+    kv('OS', client.osLabel || report.os || '?'),
     kv('CPU', report.cpuName || '?'),
     kv('Cores', report.coreCount ? `${report.coreCount}` : '?'),
-    kv('RAM', ramText(report.ramUsedGB, report.ramTotalGB)),
+    kv('RAM', ramText(report.ramUsed, report.ramTotal)),
   ];
-  const drives = Array.isArray(report.drives) ? report.drives : [];
+  const drives = Array.isArray(report.drvs) ? report.drvs : [];
   if (drives.length) body.push(buildDrives(drives));
   return body;
 }
@@ -246,15 +244,15 @@ function buildDrives(drives) {
   const wrap = document.createElement('div');
   wrap.className = 'drives';
   for (const d of drives) {
-    const total = Number(d.totalGB) || 0;
-    const free = Number(d.freeGB) || 0;
+    const total = Number(d.t) || 0;
+    const free = Number(d.f) || 0;
     const used = Math.max(0, total - free);
     const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
     const cls = pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : '';
     const row = document.createElement('div');
     row.className = 'drive';
     row.innerHTML = `<span class="letter"></span><span class="size"></span><span class="pct"></span><div class="bar"><span></span></div>`;
-    row.querySelector('.letter').textContent = d.name || '?';
+    row.querySelector('.letter').textContent = d.n || '?';
     row.querySelector('.size').textContent = `${fmtGB(used)} / ${fmtGB(total)}`;
     row.querySelector('.pct').textContent = `${pct}%`;
     const bar = row.querySelector('.bar span');
@@ -319,7 +317,7 @@ function composeIpLine(client, report) {
 
 function lastSeenText(report) {
   if (!report) return '';
-  const ms = Number(report.timestampUtcMs);
+  const ms = Number(report.ts);
   if (!Number.isFinite(ms) || ms <= 0) return '';
   return `seen ${timeAgo(ms)}`;
 }
@@ -603,11 +601,11 @@ function isLinux(item) {
 }
 function hasReportData(report) {
   if (!report || typeof report !== 'object') return false;
-  return !!report.machineName
-    || !!report.osVersion
-    || Number.isFinite(Number(report.totalLoadPercent))
-    || Number.isFinite(Number(report.ramTotalGB))
-    || Number.isFinite(Number(report.timestampUtcMs));
+  return !!report.name
+    || !!report.os
+    || Number.isFinite(Number(report.load))
+    || Number.isFinite(Number(report.ramTotal))
+    || Number.isFinite(Number(report.ts));
 }
 
 $('signOut').addEventListener('click', async () => {

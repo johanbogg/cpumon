@@ -136,8 +136,27 @@ sealed class ServerForm : BorderlessForm
     {
         _exitRequested = true;
         try { _tray.Visible = false; } catch { }
-        try { System.Diagnostics.Process.GetCurrentProcess().Kill(entireProcessTree: true); }
-        catch { Environment.Exit(0); }
+        if (!TryDisposeWebHost(TimeSpan.FromSeconds(5)))
+        {
+            try { System.Diagnostics.Process.GetCurrentProcess().Kill(entireProcessTree: true); }
+            catch { Environment.Exit(0); }
+            return;
+        }
+        Close();
+    }
+
+    bool TryDisposeWebHost(TimeSpan timeout)
+    {
+        var web = _web;
+        if (web == null) return true;
+        try
+        {
+            var task = System.Threading.Tasks.Task.Run(() => { try { web.Dispose(); } catch { } });
+            if (!task.Wait(timeout)) return false;
+            _web = null;
+            return true;
+        }
+        catch { return false; }
     }
 
     void Cleanup()

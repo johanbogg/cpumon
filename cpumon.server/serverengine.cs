@@ -26,7 +26,7 @@ public sealed class ServerEngine : IDisposable
     readonly ApprovedClientStore _store;
     readonly Dictionary<string, PendingPowerAction> _pendingPowerActions = new();
     readonly ConcurrentDictionary<string, long> _pawSeenNonces = new();
-    readonly ConcurrentDictionary<string, string> _silentSnapshotCommands = new(StringComparer.Ordinal);
+    readonly ConcurrentDictionary<string, (string Kind, long At)> _silentSnapshotCommands = new(StringComparer.Ordinal);
     readonly AlertService _alertSvc;
     readonly UpdateChecker _updater = new();
     volatile ReleaseInfo? _availableUpdate;
@@ -244,21 +244,23 @@ public sealed class ServerEngine : IDisposable
     string NewSnapshotCmdId(bool notifyUi, string kind)
     {
         string cmdId = Guid.NewGuid().ToString("N")[..8];
-        if (!notifyUi) _silentSnapshotCommands[cmdId] = kind;
+        if (!notifyUi) _silentSnapshotCommands[cmdId] = (kind, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         return cmdId;
     }
 
     bool IsSilentSnapshotCommand(string? cmdId, string kind)
     {
         if (string.IsNullOrEmpty(cmdId)) return false;
-        if (!_silentSnapshotCommands.TryGetValue(cmdId, out var actual) || actual != kind) return false;
+        if (!_silentSnapshotCommands.TryGetValue(cmdId, out var entry) || entry.Kind != kind) return false;
         return _silentSnapshotCommands.TryRemove(cmdId, out _);
     }
 
     bool TryTakeSilentSnapshotCommand(string? cmdId, out string kind)
     {
         kind = "";
-        return !string.IsNullOrEmpty(cmdId) && _silentSnapshotCommands.TryRemove(cmdId, out kind!);
+        if (string.IsNullOrEmpty(cmdId) || !_silentSnapshotCommands.TryRemove(cmdId, out var entry)) return false;
+        kind = entry.Kind;
+        return true;
     }
 
     public bool SendUserMessage(string machine, string text)
@@ -460,6 +462,8 @@ public sealed class ServerEngine : IDisposable
             var nowMs2 = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             foreach (var kv in _pawSeenNonces.Where(kv => nowMs2 - kv.Value > 60_000).ToList())
                 _pawSeenNonces.TryRemove(kv.Key, out _);
+            foreach (var kv in _silentSnapshotCommands.Where(kv => nowMs2 - kv.Value.At > 60_000).ToList())
+                _silentSnapshotCommands.TryRemove(kv.Key, out _);
 
             var pendingCutoff = DateTime.UtcNow.AddMinutes(-PendingApprovalTimeoutMinutes);
             foreach (var kv in _pendingApprovals.Where(kv => kv.Value.RequestedAt < pendingCutoff).ToList())

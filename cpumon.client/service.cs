@@ -626,6 +626,7 @@ sealed class CpuMonService : ServiceBase
             ")\r\n" +
             "if errorlevel 1 goto fail\r\n" +
             ":moved\r\n" +
+            $"icacls \"{exePath}\" /reset >> \"{logPath}\" 2>&1\r\n" +
             "sc start CpuMonClient\r\n" +
             "goto done\r\n" +
             ":fail\r\n" +
@@ -654,6 +655,20 @@ sealed class CpuMonService : ServiceBase
 
     static readonly SecurityIdentifier _systemSid = new(WellKnownSidType.LocalSystemSid, null);
     static readonly SecurityIdentifier _adminsSid = new(WellKnownSidType.BuiltinAdministratorsSid, null);
+
+    internal static void ResetToInheritedAcl(string filePath)
+    {
+        try
+        {
+            var fi = new FileInfo(filePath);
+            var sec = fi.GetAccessControl();
+            foreach (FileSystemAccessRule rule in sec.GetAccessRules(true, false, typeof(SecurityIdentifier)))
+                sec.RemoveAccessRuleSpecific(rule);
+            sec.SetAccessRuleProtection(isProtected: false, preserveInheritance: true);
+            fi.SetAccessControl(sec);
+        }
+        catch (Exception ex) { LogSink.Warn("Service.Install", $"Failed to reset ACL on {filePath}", ex); }
+    }
 
     static void EnsureHardenedDirectory(string path)
     {
@@ -1145,6 +1160,8 @@ static class ServiceManager
 
         if (!string.Equals(Path.GetFullPath(src), Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase))
             File.Copy(src, dest, overwrite: true);
+
+        CpuMonService.ResetToInheritedAcl(dest);
 
         // Quote the executable inside the SCM ImagePath so Program Files paths remain unambiguous.
         string binPath = $"{QuoteServiceArg(dest)} --service";

@@ -81,6 +81,18 @@ public sealed class SessionStore : IDisposable
     public bool Invalidate(string sessionId)
         => !string.IsNullOrEmpty(sessionId) && _sessions.TryRemove(sessionId, out _);
 
+    /// <summary>Removes a machine name from every session's selection and expansion sets.</summary>
+    public void ForgetMachineFromAllSessions(string machineName)
+    {
+        if (string.IsNullOrEmpty(machineName)) return;
+        foreach (var s in _sessions.Values)
+            lock (s.UiLock)
+            {
+                s.SelectedMachineNames.Remove(machineName);
+                s.ExpandedMachineNames.Remove(machineName);
+            }
+    }
+
     public int Count => _sessions.Count;
 
     /// <summary>Removes all sessions whose sliding expiry has passed. Returns the number removed.</summary>

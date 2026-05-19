@@ -57,6 +57,7 @@ public static class WebOfflineApi
             var canonical = Canonical(engine, machine);
             if (canonical == null) return NotFound(ctx, machine);
             engine.Store.Forget(canonical);
+            sessions.ForgetMachineFromAllSessions(canonical);
             apiCtx.Log?.Add($"Web UI: forget offline {canonical}", Th.Yel);
             return Results.NoContent();
         });
