@@ -69,7 +69,7 @@ public static class WebClientActionsApi
         app.MapPost("/api/clients/{machine}/screenshot", (HttpContext ctx, string machine) =>
         {
             if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
-            if (!engine.RequestScreenshot(machine)) return NotFound(ctx, machine);
+            if (!engine.RequestScreenshot(machine, notifyUi: false)) return NotFound(ctx, machine);
             return Results.NoContent();
         });
 

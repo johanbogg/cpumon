@@ -1577,6 +1577,7 @@ internal static class Program
         var jsBody = h.Body(js);
         Assert(jsBody.Contains("function clientCard("), "app.js should include client card rendering");
         Assert(jsBody.Contains("function ramText("), "app.js should include the RAM formatter used by expanded cards");
+        Assert(jsBody.Contains("function openScreenshotDialog("), "app.js should include the web screenshot dialog");
     }
 
     static void TestPendingApproveRejectRoutesRequireCsrfAndReturn404()
@@ -1816,6 +1817,7 @@ internal static class Program
         "/api/clients/box/services",
         "/api/clients/box/events",
         "/api/clients/box/cpu-detail",
+        "/api/clients/box/screenshot",
         "/api/clients/box/health",
     };
 
@@ -1910,7 +1912,7 @@ internal static class Program
         Assert(body.Contains("\"machineName\":\"box\""), "health response should echo machine name");
         Assert(body.Contains("\"hasReport\":true"), "health should reflect a present report");
         Assert(body.Contains("\"ramTotalGB\":8"), "health should expose ram from latest report");
-        foreach (var kind in new[] { SnapshotKind.Processes, SnapshotKind.SysInfo, SnapshotKind.Services, SnapshotKind.Events, SnapshotKind.CpuDetail })
+        foreach (var kind in new[] { SnapshotKind.Processes, SnapshotKind.SysInfo, SnapshotKind.Services, SnapshotKind.Events, SnapshotKind.CpuDetail, SnapshotKind.Screenshot })
             Assert(h.Snapshots.TriggeredAt("box", kind) == null, $"health GET must not trigger a fetch for {kind}");
     }
 

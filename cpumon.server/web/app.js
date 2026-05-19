@@ -273,6 +273,7 @@ function buildCardActions(client, selected) {
   ];
   if (client.canServices)  inspect.push(action('Services',   () => openServicesDialog(client.machineName)));
   if (client.canEvents)    inspect.push(action('Events',     () => openEventsDialog(client.machineName)));
+  if (client.canScreenshot) inspect.push(action('Screenshot', () => openScreenshotDialog(client.machineName)));
   if (client.canCpuDetail) inspect.push(action('CPU detail', () => openCpuDetailDialog(client.machineName)));
 
   const interact = [
@@ -1058,6 +1059,74 @@ function coreRow(c) {
   row.querySelector('.freq').textContent = Number.isFinite(freq) ? `${Math.round(freq)} MHz` : '';
   row.querySelector('.temp').textContent = Number.isFinite(temp) ? `${Math.round(temp)}°` : '';
   return row;
+}
+
+// ── screenshot dialog ────────────────────────────────────────────
+function openScreenshotDialog(machine) {
+  openModal({
+    title: `Screenshot · ${machine}`,
+    mount: (body, ctx) => {
+      body.classList.add('flush');
+      body.innerHTML = `
+        <div class="modal-toolbar">
+          <button class="a-btn primary" type="button" data-k="refresh">Refresh</button>
+          <button class="a-btn" type="button" data-k="minus">-</button>
+          <span class="modal-status" data-k="zoom">100%</span>
+          <button class="a-btn" type="button" data-k="plus">+</button>
+          <span class="modal-status" data-k="status">Fetching…</span>
+        </div>
+        <div class="modal-scroll screenshot-scroll">
+          <div class="screenshot-stage"><img alt=""></div>
+        </div>`;
+      const img = body.querySelector('img');
+      const stage = body.querySelector('.screenshot-stage');
+      const status = body.querySelector('[data-k="status"]');
+      const zoomLabel = body.querySelector('[data-k="zoom"]');
+      let zoom = 1;
+      let hasImage = false;
+      function applyZoom() {
+        img.style.width = `${Math.round(zoom * 100)}%`;
+        zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
+      }
+      function setShot(shot, receivedAt) {
+        if (shot?.error) {
+          status.textContent = shot.error;
+          status.classList.add('err');
+          return;
+        }
+        if (!shot?.data) return;
+        hasImage = true;
+        img.src = `data:image/jpeg;base64,${shot.data}`;
+        img.alt = `${machine} screenshot`;
+        stage.classList.add('loaded');
+        status.textContent = `${shot.w || '?'}x${shot.h || '?'} · updated ${timeAgo(receivedAt)}`;
+        status.classList.remove('err');
+      }
+      const stop = pollSnapshot(
+        `/api/clients/${encodeURIComponent(machine)}/screenshot`,
+        1500,
+        setShot,
+        (msg) => { status.textContent = msg; status.classList.add('err'); },
+      );
+      body.querySelector('[data-k="refresh"]').addEventListener('click', async () => {
+        status.textContent = hasImage ? 'Refreshing…' : 'Fetching…';
+        status.classList.remove('err');
+        const r = await api(`/api/clients/${encodeURIComponent(machine)}/screenshot?force=true`);
+        if (r?.status === 200) {
+          const j = await r.json();
+          setShot(j.snapshot, j.receivedAt);
+        }
+      });
+      body.querySelector('[data-k="minus"]').addEventListener('click', () => { zoom = Math.max(0.25, zoom - 0.25); applyZoom(); });
+      body.querySelector('[data-k="plus"]').addEventListener('click', () => { zoom = Math.min(3, zoom + 0.25); applyZoom(); });
+      img.addEventListener('dblclick', () => { zoom = zoom === 1 ? 2 : 1; applyZoom(); });
+      applyZoom();
+      api(`/api/clients/${encodeURIComponent(machine)}/screenshot?force=true`)
+        .then(async r => { if (r?.status === 200) { const j = await r.json(); setShot(j.snapshot, j.receivedAt); } })
+        .catch(() => {});
+      ctx.onClose(stop);
+    },
+  });
 }
 
 // ── alerts dialog ────────────────────────────────────────────────

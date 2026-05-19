@@ -35,6 +35,9 @@ public static class WebSnapshotApi
         app.MapGet("/api/clients/{machine}/cpu-detail", (HttpContext ctx, string machine) =>
             Serve(ctx, sessions, engine, machine, SnapshotKind.CpuDetail, _ => cache.GetCpuDetail(machine), cache));
 
+        app.MapGet("/api/clients/{machine}/screenshot", (HttpContext ctx, string machine) =>
+            Serve(ctx, sessions, engine, machine, SnapshotKind.Screenshot, _ => cache.GetScreenshot(machine), cache));
+
         app.MapGet("/api/clients/{machine}/health", (HttpContext ctx, string machine) =>
         {
             if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: false, out _, out var fail)) return fail!;

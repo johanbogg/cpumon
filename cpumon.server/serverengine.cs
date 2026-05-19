@@ -90,6 +90,7 @@ public sealed class ServerEngine : IDisposable
     public event Action<RemoteClient>? EventsUpdated;
     public event Action<RemoteClient, CpuDetailReport>? CpuDetailUpdated;
     public event Action<RemoteClient, ScreenshotData>? ScreenshotReceived;
+    public event Action<RemoteClient, ScreenshotData>? ScreenshotUpdated;
     public event Action? UpdateAvailable;
     public event Action? ReleaseStaged;
 
@@ -200,10 +201,10 @@ public sealed class ServerEngine : IDisposable
         return true;
     }
 
-    public bool RequestScreenshot(string machine)
+    public bool RequestScreenshot(string machine, bool notifyUi = true)
     {
         if (!_cls.TryGetValue(machine, out var cl)) return false;
-        cl.Send(new ServerCommand { Cmd = "screenshot", CmdId = Guid.NewGuid().ToString("N")[..8] });
+        cl.Send(new ServerCommand { Cmd = "screenshot", CmdId = NewSnapshotCmdId(notifyUi) });
         _log.Add($"Shot→{machine}", Th.Cyan);
         return true;
     }
@@ -795,7 +796,9 @@ public sealed class ServerEngine : IDisposable
                             break;
 
                         case "screenshot" when msg.Screenshot != null:
-                            try { ScreenshotReceived?.Invoke(cl, msg.Screenshot); } catch { }
+                            var silentScreenshot = IsSilentSnapshotCommand(msg.CmdId);
+                            try { ScreenshotUpdated?.Invoke(cl, msg.Screenshot); } catch { }
+                            if (!silentScreenshot) try { ScreenshotReceived?.Invoke(cl, msg.Screenshot); } catch { }
                             break;
 
                         case "rdp_frame" when msg.RdpFrame != null && msg.RdpId != null:
