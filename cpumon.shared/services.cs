@@ -555,6 +555,7 @@ public sealed class RemoteClient : IDisposable
     public void Send(ServerCommand cmd) => Send(cmd, queueOnFailure: true);
     public bool Send(ServerCommand cmd, bool queueOnFailure)
     {
+        if (_wl == null || _wr == null) return false;
         lock (_wl)
         {
             try
@@ -565,7 +566,7 @@ public sealed class RemoteClient : IDisposable
             }
             catch
             {
-                if (queueOnFailure && PendingCmds.Count < 5) PendingCmds.Enqueue(cmd);
+                if (queueOnFailure && PendingCmds != null && PendingCmds.Count < 5) PendingCmds.Enqueue(cmd);
                 return false;
             }
         }
@@ -574,12 +575,15 @@ public sealed class RemoteClient : IDisposable
     public void Kick() { try { _tcp.Close(); } catch { } }
     public void Dispose()
     {
-        foreach (var td in TerminalDialogs.Values) try { td.Close(); } catch { } TerminalDialogs.Clear();
-        foreach (var fd in FileBrowserDialogs.Values) try { fd.Dispose(); } catch { } FileBrowserDialogs.Clear();
-        foreach (var rd in RdpDialogs.Values) try { rd.Close(); } catch { } RdpDialogs.Clear();
-        foreach (var ds in ActiveDownloads.Values) ds.Dispose(); ActiveDownloads.Clear();
-        PawCmdOwners.Clear(); PawTerminalOwners.Clear(); PawRdpSessionOwners.Clear();
-        _rd.Dispose(); _wr.Dispose(); _ssl.Dispose(); _tcp.Dispose();
+        if (TerminalDialogs != null) { foreach (var td in TerminalDialogs.Values) try { td.Close(); } catch { } TerminalDialogs.Clear(); }
+        if (FileBrowserDialogs != null) { foreach (var fd in FileBrowserDialogs.Values) try { fd.Dispose(); } catch { } FileBrowserDialogs.Clear(); }
+        if (RdpDialogs != null) { foreach (var rd in RdpDialogs.Values) try { rd.Close(); } catch { } RdpDialogs.Clear(); }
+        if (ActiveDownloads != null) { foreach (var ds in ActiveDownloads.Values) ds.Dispose(); ActiveDownloads.Clear(); }
+        PawCmdOwners?.Clear(); PawTerminalOwners?.Clear(); PawRdpSessionOwners?.Clear();
+        try { _rd?.Dispose(); } catch { }
+        try { _wr?.Dispose(); } catch { }
+        try { _ssl?.Dispose(); } catch { }
+        try { _tcp?.Dispose(); } catch { }
     }
 }
 
