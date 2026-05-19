@@ -347,6 +347,7 @@ function stableCardSignature(client) {
 
 function renderOffline(items) {
   const list = $('offlineList');
+  if (list.matches(':hover')) return;
   list.replaceChildren();
   for (const item of items) {
     const row = document.createElement('div');

@@ -226,8 +226,10 @@ public static class ScreenshotService
         try
         {
             var screens = Screen.AllScreens;
+            if (screens.Length == 0) return new ScreenshotData { CmdId = cmdId, Error = "No screens available" };
             var screen = screens[Math.Clamp(monitorIndex, 0, screens.Length - 1)];
             var bounds = screen.Bounds;
+            if (bounds.Width <= 0 || bounds.Height <= 0) return new ScreenshotData { CmdId = cmdId, Error = "Selected screen has invalid bounds" };
             using var bmp = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
             using (var g = Graphics.FromImage(bmp))
                 g.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);

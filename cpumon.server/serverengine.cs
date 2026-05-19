@@ -26,7 +26,7 @@ public sealed class ServerEngine : IDisposable
     readonly ApprovedClientStore _store;
     readonly Dictionary<string, PendingPowerAction> _pendingPowerActions = new();
     readonly ConcurrentDictionary<string, long> _pawSeenNonces = new();
-    readonly ConcurrentDictionary<string, byte> _silentSnapshotCommands = new(StringComparer.Ordinal);
+    readonly ConcurrentDictionary<string, string> _silentSnapshotCommands = new(StringComparer.Ordinal);
     readonly AlertService _alertSvc;
     readonly UpdateChecker _updater = new();
     volatile ReleaseInfo? _availableUpdate;
@@ -174,21 +174,21 @@ public sealed class ServerEngine : IDisposable
     public bool RequestSysInfo(string machine, bool notifyUi = true)
     {
         if (!_cls.TryGetValue(machine, out var cl)) return false;
-        cl.Send(new ServerCommand { Cmd = "sysinfo", CmdId = NewSnapshotCmdId(notifyUi) });
+        cl.Send(new ServerCommand { Cmd = "sysinfo", CmdId = NewSnapshotCmdId(notifyUi, "sysinfo") });
         return true;
     }
 
     public bool RequestProcessList(string machine, bool notifyUi = true)
     {
         if (!_cls.TryGetValue(machine, out var cl)) return false;
-        cl.Send(new ServerCommand { Cmd = "listprocesses", CmdId = NewSnapshotCmdId(notifyUi) });
+        cl.Send(new ServerCommand { Cmd = "listprocesses", CmdId = NewSnapshotCmdId(notifyUi, "listprocesses") });
         return true;
     }
 
     public bool RequestServices(string machine, bool notifyUi = true)
     {
         if (!_cls.TryGetValue(machine, out var cl)) return false;
-        cl.Send(new ServerCommand { Cmd = "list_services", CmdId = NewSnapshotCmdId(notifyUi) });
+        cl.Send(new ServerCommand { Cmd = "list_services", CmdId = NewSnapshotCmdId(notifyUi, "list_services") });
         _log.Add($"Services→{machine}", Th.Grn);
         return true;
     }
@@ -196,7 +196,7 @@ public sealed class ServerEngine : IDisposable
     public bool RequestEvents(string machine, bool notifyUi = true)
     {
         if (!_cls.TryGetValue(machine, out var cl)) return false;
-        cl.Send(new ServerCommand { Cmd = "list_events", CmdId = NewSnapshotCmdId(notifyUi) });
+        cl.Send(new ServerCommand { Cmd = "list_events", CmdId = NewSnapshotCmdId(notifyUi, "list_events") });
         _log.Add($"Evts→{machine}", Th.Yel);
         return true;
     }
@@ -204,7 +204,7 @@ public sealed class ServerEngine : IDisposable
     public bool RequestScreenshot(string machine, bool notifyUi = true)
     {
         if (!_cls.TryGetValue(machine, out var cl)) return false;
-        cl.Send(new ServerCommand { Cmd = "screenshot", CmdId = NewSnapshotCmdId(notifyUi) });
+        cl.Send(new ServerCommand { Cmd = "screenshot", CmdId = NewSnapshotCmdId(notifyUi, "screenshot") });
         _log.Add($"Shot→{machine}", Th.Cyan);
         return true;
     }
@@ -212,20 +212,30 @@ public sealed class ServerEngine : IDisposable
     public bool RequestCpuDetail(string machine, bool notifyUi = true)
     {
         if (!_cls.TryGetValue(machine, out var cl)) return false;
-        cl.Send(new ServerCommand { Cmd = "cpu_detail", CmdId = NewSnapshotCmdId(notifyUi) });
+        cl.Send(new ServerCommand { Cmd = "cpu_detail", CmdId = NewSnapshotCmdId(notifyUi, "cpu_detail") });
         _log.Add($"CPU detail->{machine}", Th.Cyan);
         return true;
     }
 
-    string NewSnapshotCmdId(bool notifyUi)
+    string NewSnapshotCmdId(bool notifyUi, string kind)
     {
         string cmdId = Guid.NewGuid().ToString("N")[..8];
-        if (!notifyUi) _silentSnapshotCommands[cmdId] = 0;
+        if (!notifyUi) _silentSnapshotCommands[cmdId] = kind;
         return cmdId;
     }
 
-    bool IsSilentSnapshotCommand(string? cmdId)
-        => !string.IsNullOrEmpty(cmdId) && _silentSnapshotCommands.TryRemove(cmdId, out _);
+    bool IsSilentSnapshotCommand(string? cmdId, string kind)
+    {
+        if (string.IsNullOrEmpty(cmdId)) return false;
+        if (!_silentSnapshotCommands.TryGetValue(cmdId, out var actual) || actual != kind) return false;
+        return _silentSnapshotCommands.TryRemove(cmdId, out _);
+    }
+
+    bool TryTakeSilentSnapshotCommand(string? cmdId, out string kind)
+    {
+        kind = "";
+        return !string.IsNullOrEmpty(cmdId) && _silentSnapshotCommands.TryRemove(cmdId, out kind!);
+    }
 
     public bool SendUserMessage(string machine, string text)
     {
@@ -705,7 +715,7 @@ public sealed class ServerEngine : IDisposable
                         case "processlist" when msg.Processes != null:
                             cl.LastProcessList = msg.Processes;
                             _log.Add($"{cl.MachineName}: procs", Th.Blu);
-                            var silentProcesses = IsSilentSnapshotCommand(msg.CmdId);
+                            var silentProcesses = IsSilentSnapshotCommand(msg.CmdId, "listprocesses");
                             try { ProcessListUpdated?.Invoke(cl); } catch { }
                             if (!silentProcesses && TryRoutePawCommandResult(cl, msg.CmdId, "listprocesses", new ServerCommand { Cmd = "paw_processes", PawSource = cl.MachineName, PawProcesses = msg.Processes }))
                                 break;
@@ -717,7 +727,7 @@ public sealed class ServerEngine : IDisposable
                             _log.Add($"{cl.MachineName}: sysinfo", Th.Cyan);
                             var firstMac = msg.SysInfo.MacAddresses.FirstOrDefault(m => !string.IsNullOrEmpty(m));
                             if (firstMac != null) _store.SetMac(cl.MachineName, firstMac);
-                            var silentSysInfo = IsSilentSnapshotCommand(msg.CmdId);
+                            var silentSysInfo = IsSilentSnapshotCommand(msg.CmdId, "sysinfo");
                             try { SysInfoUpdated?.Invoke(cl); } catch { }
                             if (!silentSysInfo && TryRoutePawCommandResult(cl, msg.CmdId, "sysinfo", new ServerCommand { Cmd = "paw_sysinfo", PawSource = cl.MachineName, PawSysInfo = msg.SysInfo }))
                                 break;
@@ -727,7 +737,7 @@ public sealed class ServerEngine : IDisposable
                         case "servicelist" when msg.ServiceList != null:
                             cl.LastServiceList = msg.ServiceList;
                             _log.Add($"{cl.MachineName}: {msg.ServiceList.Count} services", Th.Grn);
-                            var silentServices = IsSilentSnapshotCommand(msg.CmdId);
+                            var silentServices = IsSilentSnapshotCommand(msg.CmdId, "list_services");
                             try { ServicesUpdated?.Invoke(cl); } catch { }
                             if (!silentServices && TryRoutePawCommandResult(cl, msg.CmdId, "list_services", new ServerCommand { Cmd = "paw_services", PawSource = cl.MachineName, PawServices = msg.ServiceList }))
                                 break;
@@ -737,7 +747,7 @@ public sealed class ServerEngine : IDisposable
                         case "events" when msg.Events != null:
                             cl.LastEvents = msg.Events;
                             _log.Add($"{cl.MachineName}: {msg.Events.Count} events", Th.Cyan);
-                            var silentEvents = IsSilentSnapshotCommand(msg.CmdId);
+                            var silentEvents = IsSilentSnapshotCommand(msg.CmdId, "list_events");
                             try { EventsUpdated?.Invoke(cl); } catch { }
                             if (!silentEvents && TryRoutePawCommandResult(cl, msg.CmdId, "list_events", new ServerCommand { Cmd = "paw_events", PawSource = cl.MachineName, PawEvents = msg.Events }))
                                 break;
@@ -747,12 +757,18 @@ public sealed class ServerEngine : IDisposable
                         case "cpu_detail" when msg.CpuDetail != null:
                             if (!string.IsNullOrEmpty(msg.CpuDetail.MachineName) && msg.CpuDetail.MachineName != cl.MachineName)
                                 msg.CpuDetail.MachineName = cl.MachineName;
-                            var silentCpuDetail = IsSilentSnapshotCommand(msg.CmdId);
+                            var silentCpuDetail = IsSilentSnapshotCommand(msg.CmdId, "cpu_detail");
                             try { CpuDetailUpdated?.Invoke(cl, msg.CpuDetail); } catch { }
                             if (!silentCpuDetail) try { CpuDetailReceived?.Invoke(cl, msg.CpuDetail); } catch { }
                             break;
 
                         case "cmdresult":
+                            if (TryTakeSilentSnapshotCommand(msg.CmdId, out var silentKind))
+                            {
+                                if (silentKind == "screenshot")
+                                    try { ScreenshotUpdated?.Invoke(cl, new ScreenshotData { CmdId = msg.CmdId, Error = msg.Message ?? "Screenshot failed" }); } catch { }
+                                break;
+                            }
                             if (TryRoutePawCommandResult(cl, msg.CmdId, null, new ServerCommand { Cmd = "paw_cmd_result", PawSource = cl.MachineName, PawCmdSuccess = msg.Success, PawCmdMsg = msg.Message, PawCmdId = msg.CmdId }))
                                 break;
                             _log.Add($"[{cl.MachineName}] {msg.CmdId}: {(msg.Success ? "✓" : "✕")} {msg.Message}",
@@ -796,7 +812,7 @@ public sealed class ServerEngine : IDisposable
                             break;
 
                         case "screenshot" when msg.Screenshot != null:
-                            var silentScreenshot = IsSilentSnapshotCommand(msg.CmdId);
+                            var silentScreenshot = IsSilentSnapshotCommand(msg.CmdId, "screenshot");
                             try { ScreenshotUpdated?.Invoke(cl, msg.Screenshot); } catch { }
                             if (!silentScreenshot) try { ScreenshotReceived?.Invoke(cl, msg.Screenshot); } catch { }
                             break;
