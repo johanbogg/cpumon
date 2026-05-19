@@ -1571,6 +1571,12 @@ internal static class Program
         Assert(body.Contains("clientTemplate"), "dashboard shell should include the client card template");
         Assert(body.Contains("/web/app.js"), "dashboard shell should load the app script");
         Assert(!body.Contains("fonts.googleapis.com") && !body.Contains("fonts.gstatic.com"), "dashboard shell should not load remote fonts");
+
+        using var js = h.Get("/web/app.js");
+        Assert((int)js.StatusCode == 200, "app.js should be served");
+        var jsBody = h.Body(js);
+        Assert(jsBody.Contains("function clientCard("), "app.js should include client card rendering");
+        Assert(jsBody.Contains("function ramText("), "app.js should include the RAM formatter used by expanded cards");
     }
 
     static void TestPendingApproveRejectRoutesRequireCsrfAndReturn404()

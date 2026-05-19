@@ -565,6 +565,9 @@ async function setMac(machine) {
 function num(v) {
   return Number.isFinite(Number(v)) ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 }) : '0';
 }
+function ramText(used, total) {
+  return Number(total) > 0 ? `${num(used)}/${num(total)} GB` : '—';
+}
 function fmtGB(gb) {
   const n = Number(gb);
   if (!Number.isFinite(n)) return '?';
