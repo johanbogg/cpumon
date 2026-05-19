@@ -20,6 +20,7 @@ sealed class ServerForm2 : Form
     readonly Button _sortBtn = new() { Text = "Sort: name", AutoSize = true };
     readonly Button _alertsBtn = new() { Text = "Alerts", AutoSize = true };
     readonly Button _approvedBtn = new() { Text = "Approved Clients", AutoSize = true };
+    readonly Button _configureBtn = new() { Text = "Configure", AutoSize = true };
 
     readonly ListView _clients = MakeList("Name", "OS", "Version", "Load %", "Temp", "RAM %", "State");
     readonly ListView _pending = MakeList("Machine", "IP", "Version", "Requested");
@@ -61,6 +62,7 @@ sealed class ServerForm2 : Form
         };
         var trayMenu = new ContextMenuStrip();
         trayMenu.Items.Add("Show", null, (_, _) => RestoreFromTray());
+        trayMenu.Items.Add("Configure...", null, (_, _) => ShowStartupOptions());
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add("Exit", null, (_, _) => ExitFromTray());
         _tray.ContextMenuStrip = trayMenu;
@@ -136,6 +138,13 @@ sealed class ServerForm2 : Form
         catch { Environment.Exit(0); }
     }
 
+    void ShowStartupOptions()
+    {
+        using var d = new ServerStartupSettingsDialog();
+        if (d.ShowDialog(this) == DialogResult.OK)
+            MessageBox.Show(this, "Startup options saved. Restart the server to apply them.", "CPU Monitor", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
     void BuildLayout()
     {
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Th.Bg };
@@ -148,7 +157,7 @@ sealed class ServerForm2 : Form
         tokWrap.Controls.Add(_tokenLabel);
         tokWrap.Controls.Add(_statusLabel);
         top.Controls.Add(tokWrap);
-        foreach (var b in new[] { _regenBtn, _copyBtn, _osFilterBtn, _sortBtn, _alertsBtn, _approvedBtn })
+        foreach (var b in new[] { _regenBtn, _copyBtn, _osFilterBtn, _sortBtn, _alertsBtn, _approvedBtn, _configureBtn })
         { StyleBtn(b); top.Controls.Add(b); }
 
         var middle = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 2, BackColor = Th.Bg };
@@ -214,6 +223,7 @@ sealed class ServerForm2 : Form
         _sortBtn.Click += (_, _) => { _dashboard.CycleSortMode(); Refresh(); };
         _alertsBtn.Click += (_, _) => _dashboard.ShowAlerts();
         _approvedBtn.Click += (_, _) => _dashboard.ShowApprovedClients();
+        _configureBtn.Click += (_, _) => ShowStartupOptions();
 
         _clients.SelectedIndexChanged += (_, _) =>
         {

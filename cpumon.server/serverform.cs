@@ -84,6 +84,7 @@ sealed class ServerForm : BorderlessForm
         };
         var trayMenu = new ContextMenuStrip();
         trayMenu.Items.Add("Show", null, (_, _) => RestoreFromTray());
+        trayMenu.Items.Add("Configure...", null, (_, _) => ShowStartupOptions());
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add("Exit", null, (_, _) => ExitFromTray());
         _tray.ContextMenuStrip = trayMenu;
@@ -168,6 +169,13 @@ sealed class ServerForm : BorderlessForm
         Activate();
     }
 
+    void ShowStartupOptions()
+    {
+        using var d = new ServerStartupSettingsDialog();
+        if (d.ShowDialog(this) == DialogResult.OK)
+            MessageBox.Show(this, "Startup options saved. Restart the server to apply them.", "CPU Monitor", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
     void OnEngineProcessList(RemoteClient cl) => _platform.UpdateProcessDialog(cl);
 
     void OnEngineSysInfo(RemoteClient cl) => _platform.ShowSysInfoDialog(cl);
@@ -204,6 +212,7 @@ sealed class ServerForm : BorderlessForm
             if (a == "newtoken") { _dashboard.RegenerateToken(); _ct.Invalidate(); break; }
             if (a == "copytoken") { _dashboard.CopyToken(); break; }
             if (a == "showapproved") { _dashboard.ShowApprovedClients(); break; }
+            if (a == "configure") { ShowStartupOptions(); break; }
             if (a == "theme") { Th.Toggle(); break; }
             if (a == "alerts") { _dashboard.ShowAlerts(); break; }
             if (a == "os_filter") { CycleOsFilter(); break; }
@@ -531,6 +540,7 @@ sealed class ServerForm : BorderlessForm
         DrawBtn(g, bx, y + 23, 70, 24, "📋 Copy", Th.Blu, "", "copytoken"); bx += 78;
         DrawBtn(g, bx, y + 23, 70, 24, "🔄 New", Th.Org, "", "newtoken"); bx += 78;
         DrawBtn(g, bx, y + 23, 84, 24, "👥 Clients", Th.Cyan, "", "showapproved"); bx += 92;
+        DrawBtn(g, bx, y + 23, 72, 24, "Config", Th.Dim, "", "configure"); bx += 80;
         DrawBtn(g, bx, y + 23, 68, 24, Th.IsDark ? "☀ Light" : "🌙 Dark", Th.Dim, "", "theme"); bx += 76;
         DrawBtn(g, bx, y + 23, 80, 24, "🔔 Alerts", state.AlertsConfigured ? Th.Org : Th.Dim, "", "alerts"); bx += 88;
         var update = state.AvailableUpdate;
