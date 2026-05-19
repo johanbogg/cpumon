@@ -22,11 +22,11 @@ public sealed class SnapshotCache : IDisposable
     public SnapshotCache(ServerEngine engine)
     {
         _engine = engine;
-        _engine.ProcessListReceived += OnProcessList;
-        _engine.SysInfoReceived     += OnSysInfo;
-        _engine.ServicesReceived    += OnServices;
-        _engine.EventsReceived      += OnEvents;
-        _engine.CpuDetailReceived   += OnCpuDetail;
+        _engine.ProcessListUpdated += OnProcessList;
+        _engine.SysInfoUpdated     += OnSysInfo;
+        _engine.ServicesUpdated    += OnServices;
+        _engine.EventsUpdated      += OnEvents;
+        _engine.CpuDetailUpdated   += OnCpuDetail;
     }
 
     public DateTime? ReceivedAt(string machine, SnapshotKind kind)
@@ -63,11 +63,11 @@ public sealed class SnapshotCache : IDisposable
         _triggered[(machine, kind)] = DateTime.UtcNow;
         switch (kind)
         {
-            case SnapshotKind.Processes: _engine.RequestProcessList(machine); break;
-            case SnapshotKind.SysInfo:   _engine.RequestSysInfo(machine); break;
-            case SnapshotKind.Services:  _engine.RequestServices(machine); break;
-            case SnapshotKind.Events:    _engine.RequestEvents(machine); break;
-            case SnapshotKind.CpuDetail: _engine.RequestCpuDetail(machine); break;
+            case SnapshotKind.Processes: _engine.RequestProcessList(machine, notifyUi: false); break;
+            case SnapshotKind.SysInfo:   _engine.RequestSysInfo(machine, notifyUi: false); break;
+            case SnapshotKind.Services:  _engine.RequestServices(machine, notifyUi: false); break;
+            case SnapshotKind.Events:    _engine.RequestEvents(machine, notifyUi: false); break;
+            case SnapshotKind.CpuDetail: _engine.RequestCpuDetail(machine, notifyUi: false); break;
         }
         return true;
     }
@@ -84,11 +84,11 @@ public sealed class SnapshotCache : IDisposable
 
     public void Dispose()
     {
-        _engine.ProcessListReceived -= OnProcessList;
-        _engine.SysInfoReceived     -= OnSysInfo;
-        _engine.ServicesReceived    -= OnServices;
-        _engine.EventsReceived      -= OnEvents;
-        _engine.CpuDetailReceived   -= OnCpuDetail;
+        _engine.ProcessListUpdated -= OnProcessList;
+        _engine.SysInfoUpdated     -= OnSysInfo;
+        _engine.ServicesUpdated    -= OnServices;
+        _engine.EventsUpdated      -= OnEvents;
+        _engine.CpuDetailUpdated   -= OnCpuDetail;
     }
 
     public void MarkReceivedAt(string machine, SnapshotKind kind, DateTime at)
