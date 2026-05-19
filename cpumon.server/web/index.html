@@ -4,29 +4,39 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>cpumon web</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Major+Mono+Display&amp;family=IBM+Plex+Mono:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/web/app.css">
 </head>
 <body>
   <section class="viewport">
+    <div id="viewportLabel" class="viewport-label">populated</div>
+
     <header class="topbar">
       <div class="brand">CPUMON<span id="serverVersion" class="version">web</span></div>
       <div class="token-frame">
         <span class="label">token</span>
         <span id="tokenValue" class="value">----</span>
-        <button id="copyToken" class="token-action" title="Copy token">copy</button>
-        <button id="regenToken" class="token-action" title="Regenerate token">regen</button>
+        <button id="regenToken" class="token-action" title="Regenerate token" aria-label="Regenerate token">&#x21BB;</button>
+        <button id="copyToken" class="token-action" title="Copy token" aria-label="Copy token">&#x29C9;</button>
       </div>
       <div class="status-bank">
         <div class="stat ok"><span id="statConn" class="n">0</span><span class="lbl">conn</span></div>
-        <div class="stat warn"><span id="statPending" class="n">0</span><span class="lbl">pend</span></div>
+        <div id="statPendingWrap" class="stat warn"><span id="statPending" class="n">0</span><span class="lbl">pend</span></div>
         <div class="stat off"><span id="statOffline" class="n">0</span><span class="lbl">off</span></div>
       </div>
-      <button id="signOut" class="chrome-btn">Sign out</button>
+      <div class="btn-row">
+        <button id="btnAlerts" class="ico-btn">Alerts</button>
+        <button id="btnApproved" class="ico-btn">Approved</button>
+        <button id="btnInstall" class="ico-btn accent">+ Install link</button>
+        <button id="signOut" class="ico-btn">Sign out</button>
+      </div>
     </header>
 
     <nav class="modeline">
-      <button id="osFilter" class="pill"><span class="key">os</span><span id="osFilterValue" class="val">all</span></button>
-      <button id="sortMode" class="pill"><span class="key">sort</span><span id="sortModeValue" class="val">name</span></button>
+      <button id="osFilter" class="pill"><span class="key">os</span><span id="osFilterValue" class="val">all</span><span class="caret">&#x25BE;</span></button>
+      <button id="sortMode" class="pill"><span class="key">sort</span><span id="sortModeValue" class="val">name</span><span class="caret">&#x25BE;</span></button>
       <span class="sep"></span>
       <button id="selectAll" class="pill">Select all visible</button>
       <button id="selectOutdated" class="pill">Select outdated</button>
@@ -40,9 +50,9 @@
         <div id="clientList"></div>
         <div id="emptyClients" class="empty-canvas">
           <pre>+-----------------------------+
-|   no clients enrolled      |
+|   no clients enrolled       |
 +-----------------------------+</pre>
-          <h2>awaiting connections<span class="blink">_</span></h2>
+          <h2>awaiting connections<span class="blink">&#x25AE;</span></h2>
           <p>The server is up. Clients on the LAN should discover it automatically; pending approvals appear on the right.</p>
         </div>
 
@@ -56,37 +66,42 @@
           <div id="pendingList"></div>
         </section>
         <section class="side-section">
-          <h3>Stage <span class="rule"></span></h3>
-          <div id="stagePanel" class="activity-panel">No staged release</div>
-        </section>
-        <section class="side-section">
           <h3>Activity <span class="rule"></span></h3>
           <div class="activity-panel">
             <div class="row"><span class="k">auth</span><span id="authCount" class="v">0</span></div>
             <div class="row"><span class="k">connections</span><span id="connectionCount" class="v">0</span></div>
             <div class="row"><span class="k">broadcast</span><span id="broadcastState" class="v">?</span></div>
+            <div class="row"><span class="k">alerts</span><span id="alertsState" class="v">off</span></div>
           </div>
+        </section>
+        <section class="side-section">
+          <h3>Stage <span class="rule"></span></h3>
+          <div id="stagePanel" class="activity-panel stage-panel">No staged release</div>
         </section>
       </aside>
     </main>
 
     <div class="status-bar">
-      <span class="seg ok"><span class="dot"></span>listening</span>
-      <span class="seg">agent <strong>:47201</strong> / web <strong>:47202</strong></span>
+      <span id="segListen" class="seg ok"><span class="dot"></span><span id="segListenText">listening</span></span>
+      <span class="seg">agent <strong>:47201</strong> &middot; web <strong>:47202</strong></span>
       <span class="seg">server <strong id="footerVersion">?</strong></span>
-      <span id="wsState" class="seg">state ws connecting</span>
-      <span id="wsLog" class="seg">log ws connecting</span>
+      <span class="seg">broadcast <strong id="segBroadcast">?</strong></span>
+      <span class="seg"><strong id="segAuthCount">0</strong> authenticated</span>
+      <span class="seg spacer"></span>
+      <button id="updateCta" class="update-cta" hidden></button>
     </div>
 
     <footer id="logPane" class="log-pane"></footer>
   </section>
+
+  <div id="modalRoot"></div>
 
   <template id="clientTemplate">
     <article class="card">
       <div class="card-head">
         <span class="os-badge"></span>
         <div class="name-block"><span class="name"></span><span class="ip"></span></div>
-        <span class="ver"></span>
+        <span class="ver"><span class="num"></span></span>
         <span class="state-tag"><span class="dot"></span><span class="state-text"></span></span>
         <div class="metric cpu"><span class="label">CPU</span><span class="value"></span><div class="bar"><span></span></div></div>
         <div class="metric ram"><span class="label">RAM</span><span class="value"></span><div class="bar"><span></span></div></div>

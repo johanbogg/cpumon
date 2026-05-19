@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 
 public sealed record ServerDashboardState(
+    string ServerVersion,
     string Token,
     DateTime TokenIssuedAt,
     bool BroadcastDisabled,
@@ -104,6 +105,7 @@ public sealed class ServerDashboardStateBuilder
             .ToList();
 
         return new ServerDashboardState(
+            Proto.AppVersion,
             _engine.Token,
             _engine.TokenIssuedAt,
             _engine.BroadcastDisabled,
