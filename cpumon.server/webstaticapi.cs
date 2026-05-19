@@ -31,20 +31,11 @@ public static class WebStaticApi
         {
             if (file.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || !file.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase))
                 return Results.NotFound();
-            return BinaryAsset("fonts." + file, "font/ttf");
+            return Asset("fonts." + file, "font/ttf");
         });
     }
 
     static IResult Asset(string name, string contentType)
-    {
-        var asm = Assembly.GetExecutingAssembly();
-        using var stream = asm.GetManifestResourceStream(Prefix + name);
-        if (stream == null) return Results.NotFound();
-        using var reader = new StreamReader(stream);
-        return Results.Content(reader.ReadToEnd(), contentType);
-    }
-
-    static IResult BinaryAsset(string name, string contentType)
     {
         var asm = Assembly.GetExecutingAssembly();
         using var stream = asm.GetManifestResourceStream(Prefix + name);

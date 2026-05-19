@@ -213,7 +213,7 @@ public static class WebTerminalApi
             if (!terminals.Exists(machine, termId)) return NotFound(ctx, machine);
             var body = await TryRead<TerminalInputRequest>(ctx);
             var input = body?.Input ?? "";
-            if (input.Length > 4000) return Error(ctx, 400, "validation_failed", "Input is too long.");
+            if (input.Length > 4000) return Error(ctx, 400, "input_too_long", "Web terminal input is limited to 4000 characters per send. Split long pastes into multiple lines.");
             if (!engine.RequestTerminalInput(machine, termId, input)) return NotFound(ctx, machine);
             return Results.NoContent();
         });

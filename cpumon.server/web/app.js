@@ -47,10 +47,12 @@ async function loadState() {
   render(await response.json());
 }
 
+function reconnectDelay() { return 1000 + Math.floor(Math.random() * 1500); }
+
 function connectStateWs() {
   const ws = new WebSocket(wsUrl('/ws/state'));
   ws.onopen = () => setWs('state', true);
-  ws.onclose = () => { setWs('state', false); setTimeout(connectStateWs, 1500); };
+  ws.onclose = () => { setWs('state', false); setTimeout(connectStateWs, reconnectDelay()); };
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
     if (msg.type === 'state') render(msg.state);
@@ -60,7 +62,7 @@ function connectStateWs() {
 function connectLogWs() {
   const ws = new WebSocket(wsUrl('/ws/log'));
   ws.onopen = () => setWs('log', true);
-  ws.onclose = () => { setWs('log', false); setTimeout(connectLogWs, 1500); };
+  ws.onclose = () => { setWs('log', false); setTimeout(connectLogWs, reconnectDelay()); };
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
     if (msg.type === 'log') {
@@ -1160,7 +1162,9 @@ function openTerminalDialog(machine) {
 
       function append(text) {
         out.textContent += text;
-        if (out.textContent.length > 120000) out.textContent = out.textContent.slice(-100000);
+        if (out.textContent.length > 120000) {
+          out.textContent = '[…earlier output trimmed…]\n' + out.textContent.slice(-100000);
+        }
         out.scrollTop = out.scrollHeight;
       }
 
@@ -1212,10 +1216,16 @@ function openTerminalDialog(machine) {
         if (!termId || input.disabled) return;
         const text = input.value;
         input.value = '';
-        await api(`/api/clients/${m}/terminal/${encodeURIComponent(termId)}/input`, {
+        const r = await api(`/api/clients/${m}/terminal/${encodeURIComponent(termId)}/input`, {
           method: 'POST',
           body: JSON.stringify({ input: `${text}\n` }),
         });
+        if (r && !r.ok) {
+          const j = await r.json().catch(() => null);
+          status.textContent = j?.message || `send failed (${r.status})`;
+          status.classList.add('err');
+          input.value = text;
+        }
       });
       input.addEventListener('keydown', async (e) => {
         if (e.ctrlKey && e.key.toLowerCase() === 'c' && termId) {
