@@ -29,6 +29,7 @@
     <EmbeddedResource Include="web\login.html" LogicalName="cpumon.server.web.login.html" />
     <EmbeddedResource Include="web\app.css" LogicalName="cpumon.server.web.app.css" />
     <EmbeddedResource Include="web\app.js" LogicalName="cpumon.server.web.app.js" />
+    <EmbeddedResource Include="web\fonts\*.ttf" LogicalName="cpumon.server.web.fonts.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <Target Name="GitVersion" BeforeTargets="CoreCompile;GetAssemblyVersion">

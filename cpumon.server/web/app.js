@@ -17,6 +17,8 @@ const LogColors = {
   '#8C8C9B': { cls: 'dim',  glyph: '·' },
 };
 
+let activeModalClose = null;
+
 function csrf() {
   return document.cookie.split(';').map(x => x.trim()).find(x => x.startsWith('cpumon_csrf='))?.split('=')[1] || '';
 }
@@ -644,14 +646,18 @@ function openModal({ title, mount, size = 'wide' }) {
   overlay.querySelector('.modal-title').textContent = title;
   const body = overlay.querySelector('.modal-body');
   const cleanups = [];
+  let closed = false;
   const ctx = {
     overlay,
     body,
     modal: overlay.querySelector('.modal'),
     onClose: (fn) => cleanups.push(fn),
     close: () => {
+      if (closed) return;
+      closed = true;
       for (const fn of cleanups) try { fn(); } catch {}
       cleanups.length = 0;
+      if (activeModalClose === ctx.close) activeModalClose = null;
       overlay.remove();
     },
   };
@@ -661,11 +667,16 @@ function openModal({ title, mount, size = 'wide' }) {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) ctx.close(); });
   document.addEventListener('keydown', onKey);
   $('modalRoot').appendChild(overlay);
+  activeModalClose = ctx.close;
   mount(body, ctx);
   return ctx;
 }
 
 function closeAllModals() {
+  if (activeModalClose) {
+    activeModalClose();
+    return;
+  }
   const root = $('modalRoot');
   if (root) root.replaceChildren();
 }

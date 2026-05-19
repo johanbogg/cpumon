@@ -1556,6 +1556,13 @@ internal static class Program
         using var css = h.Get("/web/app.css");
         Assert((int)css.StatusCode == 200, "app.css should be served");
         Assert(h.Body(css).Contains("--bg-deep"), "app.css should contain the dashboard palette");
+        Assert(h.Body(css).Contains("/web/fonts/ibm-plex-mono-400.ttf"), "app.css should self-host the web UI fonts");
+        Assert(!h.Body(css).Contains("fonts.googleapis.com") && !h.Body(css).Contains("fonts.gstatic.com"), "app.css should not reference remote font hosts");
+
+        using var font = h.Get("/web/fonts/ibm-plex-mono-400.ttf");
+        Assert((int)font.StatusCode == 200, "self-hosted font should be served");
+        Assert(font.Content.Headers.ContentType?.MediaType == "font/ttf", "self-hosted font should use font/ttf content type");
+        Assert(font.Content.Headers.ContentLength.GetValueOrDefault() > 1000, "self-hosted font should contain binary font bytes");
 
         h.Login();
         using var root = h.Get("/");
@@ -1563,6 +1570,7 @@ internal static class Program
         var body = h.Body(root);
         Assert(body.Contains("clientTemplate"), "dashboard shell should include the client card template");
         Assert(body.Contains("/web/app.js"), "dashboard shell should load the app script");
+        Assert(!body.Contains("fonts.googleapis.com") && !body.Contains("fonts.gstatic.com"), "dashboard shell should not load remote fonts");
     }
 
     static void TestPendingApproveRejectRoutesRequireCsrfAndReturn404()
