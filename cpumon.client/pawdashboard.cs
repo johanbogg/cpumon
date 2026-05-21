@@ -594,6 +594,7 @@ sealed class PawFileBrowserDialogClient : Form
         try
         {
             if (state.Stream == null) { state.TmpPath = state.LocalPath + ".tmp"; state.Stream = new FileStream(state.TmpPath, FileMode.Create, FileAccess.Write); state.TotalSize = chunk.TotalSize; }
+            if (chunk.Offset != state.Received) throw new IOException($"Unexpected download offset {chunk.Offset}, expected {state.Received}");
             if (!string.IsNullOrEmpty(chunk.Data)) { var d = Convert.FromBase64String(chunk.Data); state.Stream.Write(d, 0, d.Length); state.Received += d.Length; }
             if (IsHandleCreated) BeginInvoke(() => { int pct = state.TotalSize > 0 ? (int)(state.Received * 100 / state.TotalSize) : 0; _progressBar.Visible = true; _progressBar.Value = Math.Min(pct, 100); _statusLabel.Text = $"Downloading: {pct}%"; _statusLabel.ForeColor = Th.Blu; });
             if (chunk.IsLast) { state.Stream.Flush(); state.Stream.Dispose(); state.Stream = null; File.Move(state.TmpPath!, state.LocalPath, overwrite: true); state.Complete = true; _downloads.TryRemove(chunk.TransferId, out _); if (IsHandleCreated) BeginInvoke(() => { _progressBar.Visible = false; _statusLabel.Text = $"Downloaded: {chunk.FileName}"; _statusLabel.ForeColor = Th.Grn; }); }

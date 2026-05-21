@@ -69,7 +69,7 @@ public static class WebInstallApi
         // IS the credential.
         app.MapGet("/install/{code}", (HttpContext ctx, string code) =>
         {
-            var link = links.Consume(code);
+            var link = links.GetUnused(code);
             if (link == null) return Error(ctx, 404, "not_found", "Install link is invalid, expired, or already used.");
 
             string? stagedDir = engine.StagedReleaseDir;
@@ -91,6 +91,8 @@ public static class WebInstallApi
                 return Error(ctx, 500, "bundle_failed", "Could not build install bundle.");
             }
 
+            if (links.Consume(code) == null)
+                return Error(ctx, 404, "not_found", "Install link is invalid, expired, or already used.");
             engine.Log.Add($"Install link redeemed from {apiCtx.ClientIp(ctx)}", Th.Cyan);
             ctx.Response.Headers["Content-Disposition"] = $"attachment; filename=\"cpumon-install-{version}.zip\"";
             return Results.Bytes(zipBytes, "application/zip");
@@ -99,10 +101,13 @@ public static class WebInstallApi
 
     static string NormalizeServerIp(string? requested, HttpContext ctx)
     {
-        if (!string.IsNullOrWhiteSpace(requested)) return requested.Trim();
+        if (!string.IsNullOrWhiteSpace(requested)) return SafeServerAddress(requested.Trim());
         var host = ctx.Request.Host.Host;
-        return string.IsNullOrEmpty(host) ? "" : host;
+        return string.IsNullOrEmpty(host) ? "" : SafeServerAddress(host);
     }
+
+    static string SafeServerAddress(string value)
+        => value.IndexOfAny(new[] { '&', '|', '<', '>', '^', '"', '\r', '\n' }) >= 0 ? "" : value;
 
     static TimeSpan? ParseTtl(int? hours)
     {
@@ -151,7 +156,7 @@ public static class WebInstallApi
     static string BuildBatch(string serverIp, string thumb, string token) =>
         "@echo off\r\n" +
         "echo Installing CPU Monitor client...\r\n" +
-        $"\"%~dp0cpumon.client.exe\" --install --server-ip {serverIp} --token {token} --server-thumb {thumb}\r\n" +
+        $"\"%~dp0cpumon.client.exe\" --install --server-ip {BatchArg(serverIp)} --token {BatchArg(token)} --server-thumb {BatchArg(thumb)}\r\n" +
         "if errorlevel 1 (\r\n" +
         "  echo.\r\n" +
         "  echo Install failed.\r\n" +
@@ -161,6 +166,8 @@ public static class WebInstallApi
         "echo.\r\n" +
         "echo Done. The CPU Monitor service is running.\r\n" +
         "pause\r\n";
+
+    static string BatchArg(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";
 
     static string BuildReadme(string version, string serverIp) =>
         $"CPU Monitor client install bundle (v{version})\r\n" +

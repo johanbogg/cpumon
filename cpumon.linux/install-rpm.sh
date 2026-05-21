@@ -157,22 +157,24 @@ WRAPPER
     chmod 755 "$INSTALL_DIR/start.sh"
 }
 
+write_var() { printf '%s=' "$1"; printf '%q' "$2"; printf '\n'; }
+
 write_defaults_file() {
     local server_ip="$1"
     local token="$2"
     local approval="${3:-0}"
 
-    cat > "$DEFAULTS_FILE" <<EOF
-# cpumon client configuration
-# Edit this file then run:  systemctl restart cpumon
-# Clear stored auth key:    rm $STATE_FILE
-
-CPUMON_SERVER_IP=${server_ip}
-CPUMON_TOKEN=${token}
-# Set to 1 to request approval on the server instead of using a token.
-# The server admin clicks Approve in the Awaiting Approval list to issue a key.
-CPUMON_APPROVAL_REQUEST=${approval}
-EOF
+    {
+        echo "# cpumon client configuration"
+        echo "# Edit this file then run:  systemctl restart cpumon"
+        echo "# Clear stored auth key:    rm $STATE_FILE"
+        echo
+        write_var CPUMON_SERVER_IP "$server_ip"
+        write_var CPUMON_TOKEN "$token"
+        echo "# Set to 1 to request approval on the server instead of using a token."
+        echo "# The server admin clicks Approve in the Awaiting Approval list to issue a key."
+        write_var CPUMON_APPROVAL_REQUEST "$approval"
+    } > "$DEFAULTS_FILE"
     chmod 600 "$DEFAULTS_FILE"
 }
 

@@ -283,10 +283,10 @@ public sealed class ServerEngine : IDisposable
         return true;
     }
 
-    public bool RequestFileUploadChunk(string machine, string destPath, FileChunkData chunk)
+    public bool RequestFileUploadChunk(string machine, string cmdId, string destPath, FileChunkData chunk)
     {
         if (!_cls.TryGetValue(machine, out var cl)) return false;
-        cl.Send(new ServerCommand { Cmd = "file_upload_chunk", DestPath = destPath, FileChunk = chunk });
+        cl.Send(new ServerCommand { Cmd = "file_upload_chunk", CmdId = cmdId, DestPath = destPath, FileChunk = chunk });
         return true;
     }
 

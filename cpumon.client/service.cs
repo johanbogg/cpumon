@@ -766,7 +766,15 @@ sealed class CpuMonService : ServiceBase
         {
             if (!_agentConnected || _agentWriter == null) return;
             try { _agentWriter.WriteLine(JsonSerializer.Serialize(msg, Proto.JsonOpts)); _agentWriter.Flush(); }
-            catch (Exception ex) { LogSink.Warn("Service.SendToAgent", "Failed to write to agent pipe", ex); }
+            catch (Exception ex)
+            {
+                LogSink.Warn("Service.SendToAgent", "Failed to write to agent pipe", ex);
+                _agentConnected = false;
+                DisposeQuietly(_agentPipe);
+                _agentPipe = null;
+                _agentWriter = null;
+                _agentReader = null;
+            }
         }
     }
 

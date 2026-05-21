@@ -115,6 +115,7 @@ internal static class Program
             TestPushUpdatesMultiRejectsEmptyBody();
             TestInstallLinkRequiresAuthAndCsrf();
             TestInstallLinkIssueReturnsCodeAndUrl();
+            TestInstallLinkRejectsShellMetacharacters();
             TestInstallLinkListAndRevoke();
             TestInstallLinkDownloadReturns404ForUnknown();
             TestInstallLinkDownloadReturns503WhenNoStagedRelease();
@@ -1542,6 +1543,15 @@ internal static class Program
         Assert(body.Contains("\"active\":true"), "fresh link should report active=true");
     }
 
+    static void TestInstallLinkRejectsShellMetacharacters()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var resp = h.Post("/api/install-links", new { serverIp = "10.0.0.5 & calc", ttlHours = 1 }, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 400, "install link server IP should reject shell metacharacters");
+        Assert(h.Body(resp).Contains("\"error\":\"validation_failed\""), "bad server IP should return validation_failed");
+    }
+
     static void TestInstallLinkListAndRevoke()
     {
         using var h = new WebApiTestHost();
@@ -1582,6 +1592,8 @@ internal static class Program
         using var resp = h.Get($"/install/{code}");
         Assert((int)resp.StatusCode == 503, "download with no staged release should return 503");
         Assert(h.Body(resp).Contains("no_staged_release"), "error code should be no_staged_release");
+        using var retry = h.Get($"/install/{code}");
+        Assert((int)retry.StatusCode == 503, "failed download should not consume the one-shot link");
     }
 
     static void TestInstallLinkDownloadIsOneShotAndContainsExpectedEntries()
@@ -1610,9 +1622,9 @@ internal static class Program
         var batEntry = zip.Entries.First(e => e.FullName == "install.bat");
         using var batReader = new StreamReader(batEntry.Open());
         var batContent = batReader.ReadToEnd();
-        Assert(batContent.Contains("--server-ip 10.0.0.99"), "install.bat must include server IP");
-        Assert(batContent.Contains("--server-thumb "),       "install.bat must include the server thumbprint");
-        Assert(batContent.Contains("--token "),              "install.bat must include the invite token");
+        Assert(batContent.Contains("--server-ip \"10.0.0.99\""), "install.bat must quote server IP");
+        Assert(batContent.Contains("--server-thumb \""),       "install.bat must include the server thumbprint");
+        Assert(batContent.Contains("--token \""),              "install.bat must include the invite token");
 
         // Second download must fail — link is one-shot.
         using var dl2 = h.Get($"/install/{code}");

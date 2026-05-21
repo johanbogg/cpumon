@@ -53,6 +53,17 @@ public sealed class InstallLinkStore
         }
     }
 
+    public InstallLink? GetUnused(string code)
+    {
+        lock (_lock)
+        {
+            if (!_byCode.TryGetValue(code, out var link)) return null;
+            if (link.UsedAt != null) return null;
+            if (link.ExpiresAt < DateTime.UtcNow) return null;
+            return Clone(link);
+        }
+    }
+
     public bool Revoke(string code)
     {
         lock (_lock) return _byCode.Remove(code);

@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Routing;
 public sealed class WebTerminalStore : IDisposable
 {
     static readonly TimeSpan ClosedSessionTtl = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan IdleSessionTtl = TimeSpan.FromMinutes(15);
 
     readonly ServerEngine _engine;
     readonly ConcurrentDictionary<string, Session> _sessions = new(StringComparer.Ordinal);
@@ -54,10 +55,18 @@ public sealed class WebTerminalStore : IDisposable
 
     void SweepClosed()
     {
-        var cutoff = DateTime.UtcNow - ClosedSessionTtl;
+        var now = DateTime.UtcNow;
+        var closedCutoff = now - ClosedSessionTtl;
+        var idleCutoff = now - IdleSessionTtl;
         foreach (var kv in _sessions)
-            if (kv.Value.ClosedAt is { } closedAt && closedAt < cutoff)
+        {
+            if (kv.Value.ClosedAt is { } closedAt && closedAt < closedCutoff)
                 _sessions.TryRemove(kv.Key, out _);
+            else if (kv.Value.UpdatedAt < idleCutoff && _sessions.TryRemove(kv.Key, out var stale))
+            {
+                try { _engine.RequestTerminalClose(stale.Machine, stale.TermId); } catch { }
+            }
+        }
     }
 
     void OnOutput(RemoteClient cl, string termId, string output)
@@ -103,6 +112,7 @@ public sealed class WebTerminalStore : IDisposable
         public string TermId { get; }
         public string Shell { get; }
         public DateTime? ClosedAt { get { lock (_lock) return _closedAt; } }
+        public DateTime UpdatedAt { get { lock (_lock) return _updatedAt; } }
 
         public Session(string machine, string termId, string shell)
         {

@@ -92,10 +92,11 @@ public static class WebSocketApi
 
     static async Task StreamLog(WebSocket ws, CLog log, SessionStore sessions, SessionState session, DateTime sinceUtc, CancellationToken ct)
     {
-        var queue = Channel.CreateUnbounded<LogEntryDto>(new UnboundedChannelOptions
+        var queue = Channel.CreateBounded<LogEntryDto>(new BoundedChannelOptions(512)
         {
             SingleReader = true,
             SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest,
         });
 
         void OnEntry(DateTime ts, string message, Color color)

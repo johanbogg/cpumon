@@ -32,7 +32,12 @@ public sealed class WebFileBrowserStore : IDisposable
     {
         _engine = engine;
         _stagingRoot = AppPaths.DataFile("webdl");
-        try { Directory.CreateDirectory(_stagingRoot); } catch { }
+        try { Directory.CreateDirectory(_stagingRoot); }
+        catch
+        {
+            _stagingRoot = Path.Combine(Path.GetTempPath(), "CpuMon", "webdl");
+            Directory.CreateDirectory(_stagingRoot);
+        }
         _engine.FileListingUpdated += OnListing;
         _engine.FileChunkUpdated   += OnChunk;
         _engine.FileResultUpdated  += OnResult;
@@ -498,7 +503,7 @@ public static class WebFilesApi
                     TotalSize  = total,
                     IsLast     = last,
                 };
-                if (!engine.RequestFileUploadChunk(machine, destPath, chunk))
+                if (!engine.RequestFileUploadChunk(machine, sessionId, destPath, chunk))
                     return NotFound(ctx, machine);
                 offset += got;
                 if (last) break;

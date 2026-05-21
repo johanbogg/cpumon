@@ -281,8 +281,14 @@ def _is_self_service(unit: str) -> bool:
     return (unit or "").strip() in ("cpumon", "cpumon.service")
 
 def _systemctl_detached(action: str, unit: str):
+    if shutil.which("systemd-run"):
+        cmd = ["systemd-run", "--quiet", "--collect", "--on-active=1s",
+               "--unit", f"cpumon-self-{action}", "systemctl",
+               "--no-ask-password", action, unit]
+    else:
+        cmd = ["systemctl", "--no-ask-password", action, unit]
     subprocess.Popen(
-        ["systemctl", "--no-ask-password", action, unit],
+        cmd,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True
     )
@@ -897,11 +903,7 @@ class Client:
         os.replace(tmp_path, script_path)
         os.chmod(script_path, 0o755)
         try:
-            subprocess.Popen(
-                ["systemctl", "restart", "cpumon"],
-                start_new_session=True,
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            _systemctl_detached("restart", "cpumon")
         except Exception:
             pass
         self._running = False
@@ -1022,6 +1024,8 @@ def main():
 
     def _sig(signum, frame):
         client._running = False
+        client._wake.set()
+        client._close()
 
     signal.signal(signal.SIGTERM, _sig)
     signal.signal(signal.SIGINT,  _sig)

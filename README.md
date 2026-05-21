@@ -201,7 +201,7 @@ cpumon.client.exe --reset-auth
 sudo bash install.sh
 ```
 
-`install.sh` installs to `/opt/cpumon`, creates `/etc/default/cpumon` for config, and registers a systemd service running as root. Edit `/etc/default/cpumon` to set `SERVER_IP` and `TOKEN` before or after install.
+`install.sh` installs to `/opt/cpumon`, creates `/etc/default/cpumon` for config, and registers a systemd service running as root. Edit `/etc/default/cpumon` to set `CPUMON_SERVER_IP` and `CPUMON_TOKEN` before or after install.
 
 To update an existing Linux client from a newer release zip, run:
 
