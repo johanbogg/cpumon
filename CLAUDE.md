@@ -110,6 +110,11 @@ cpumon.linux/
                    terminal (pty), file browser, systemctl services, process list
   install.sh     — Debian/Ubuntu installer: /opt/cpumon, /etc/default/cpumon, systemd service.
                    Also supports `install.sh update` for in-place upgrades from a release zip.
+  install-rpm.sh — yum/dnf installer (RHEL/CentOS/Alma/Rocky/Fedora/XCP-ng):
+                   /opt/cpumon, /etc/sysconfig/cpumon, systemd service. Detects dnf vs yum,
+                   pulls python3 + python3-psutil (enables EPEL on RHEL/CentOS 7 if needed,
+                   skipped on Fedora and XCP-ng), falls back to pip3 / ensurepip for psutil.
+                   Same install|update|uninstall commands as install.sh.
   requirements.txt
 ```
 

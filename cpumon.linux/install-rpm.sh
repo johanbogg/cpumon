@@ -1,0 +1,348 @@
+#!/usr/bin/env bash
+# cpumon Linux client installer/updater for yum/dnf distros
+# (RHEL, CentOS, Alma, Rocky, Fedora, XCP-ng).
+# Usage:  sudo bash install-rpm.sh
+#         sudo bash install-rpm.sh update
+#         sudo bash install-rpm.sh uninstall
+
+set -euo pipefail
+
+INSTALL_DIR=/opt/cpumon
+SERVICE_NAME=cpumon
+SERVICE_FILE=/etc/systemd/system/${SERVICE_NAME}.service
+DEFAULTS_FILE=/etc/sysconfig/${SERVICE_NAME}
+STATE_FILE=/var/lib/cpumon/client_auth.json
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+red()   { echo -e "\033[1;31m$*\033[0m"; }
+green() { echo -e "\033[1;32m$*\033[0m"; }
+blue()  { echo -e "\033[1;34m$*\033[0m"; }
+bold()  { echo -e "\033[1m$*\033[0m"; }
+
+require_root() {
+    if [[ $EUID -ne 0 ]]; then
+        red "Run with sudo: sudo bash install-rpm.sh"
+        exit 1
+    fi
+}
+
+require_payload() {
+    if [[ ! -f "$SCRIPT_DIR/cpumon.py" ]]; then
+        red "cpumon.py not found next to install-rpm.sh"
+        exit 1
+    fi
+}
+
+detect_pkg_mgr() {
+    if command -v dnf >/dev/null 2>&1; then
+        PKG=dnf
+    elif command -v yum >/dev/null 2>&1; then
+        PKG=yum
+    else
+        red "Neither dnf nor yum found. This script targets RHEL/CentOS/Alma/Rocky/Fedora/XCP-ng."
+        exit 1
+    fi
+}
+
+detect_distro() {
+    DISTRO_ID=""
+    DISTRO_VER=""
+    if [[ -r /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        DISTRO_ID="${ID:-}"
+        DISTRO_VER="${VERSION_ID:-}"
+    fi
+}
+
+read_existing_config() {
+    existing_ip=""
+    existing_token=""
+    existing_approval=""
+    if [[ -f "$DEFAULTS_FILE" ]]; then
+        existing_ip=$(grep -Po '(?<=^CPUMON_SERVER_IP=).*' "$DEFAULTS_FILE" || true)
+        existing_token=$(grep -Po '(?<=^CPUMON_TOKEN=).*' "$DEFAULTS_FILE" || true)
+        existing_approval=$(grep -Po '(?<=^CPUMON_APPROVAL_REQUEST=).*' "$DEFAULTS_FILE" || true)
+        blue "Existing config found in $DEFAULTS_FILE"
+    fi
+}
+
+have_psutil() {
+    python3 - <<'PY' >/dev/null 2>&1
+import psutil
+PY
+}
+
+pkg_install() {
+    # Install a list of packages; tolerate missing optional ones via the caller.
+    "$PKG" install -y "$@" >/dev/null
+}
+
+maybe_enable_epel() {
+    # EPEL provides python3-psutil on RHEL/CentOS 7 (and is harmless on 8/9 if
+    # already enabled). Skip on Fedora (not applicable) and on XCP-ng (dom0
+    # uses its own pinned repos; touching them is unsafe).
+    case "$DISTRO_ID" in
+        fedora) return 0 ;;
+        xcp-ng) return 0 ;;
+    esac
+    if rpm -q epel-release >/dev/null 2>&1; then
+        return 0
+    fi
+    blue "Enabling EPEL for python3-psutil..."
+    "$PKG" install -y epel-release >/dev/null 2>&1 || true
+}
+
+install_dependencies() {
+    local required="${1:-yes}"
+    if command -v python3 >/dev/null 2>&1 && have_psutil; then
+        blue "Python 3 and psutil already installed."
+        return 0
+    fi
+
+    blue "Installing Python 3 and psutil via $PKG..."
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        if ! pkg_install python3; then
+            if [[ "$required" == "yes" ]]; then
+                red "Failed to install python3"
+                return 1
+            fi
+            red "Failed to install python3; keeping existing environment"
+            return 0
+        fi
+    fi
+
+    if have_psutil; then
+        return 0
+    fi
+
+    # Prefer the distro psutil package; fall back to pip.
+    if "$PKG" install -y python3-psutil >/dev/null 2>&1; then
+        :
+    else
+        maybe_enable_epel
+        if "$PKG" install -y python3-psutil >/dev/null 2>&1; then
+            :
+        elif command -v pip3 >/dev/null 2>&1 && pip3 install --quiet psutil; then
+            :
+        elif python3 -m ensurepip --upgrade >/dev/null 2>&1 \
+             && python3 -m pip install --quiet psutil; then
+            :
+        else
+            if [[ "$required" == "yes" ]]; then
+                red "Could not install psutil (tried python3-psutil and pip)."
+                return 1
+            fi
+            red "Could not install psutil; keeping existing environment"
+        fi
+    fi
+}
+
+write_program_files() {
+    blue "Installing files to $INSTALL_DIR..."
+    mkdir -p "$INSTALL_DIR"
+    cp "$SCRIPT_DIR/cpumon.py" "$INSTALL_DIR/cpumon.py"
+    chmod 755 "$INSTALL_DIR/cpumon.py"
+
+    cat > "$INSTALL_DIR/start.sh" <<'WRAPPER'
+#!/usr/bin/env bash
+source /etc/sysconfig/cpumon
+ARGS=()
+[[ -n "${CPUMON_SERVER_IP:-}" ]] && ARGS+=(--server-ip "$CPUMON_SERVER_IP")
+[[ -n "${CPUMON_TOKEN:-}"     ]] && ARGS+=(--token     "$CPUMON_TOKEN")
+[[ "${CPUMON_APPROVAL_REQUEST:-0}" == "1" ]] && ARGS+=(--approval-request)
+exec python3 /opt/cpumon/cpumon.py "${ARGS[@]}"
+WRAPPER
+    chmod 755 "$INSTALL_DIR/start.sh"
+}
+
+write_defaults_file() {
+    local server_ip="$1"
+    local token="$2"
+    local approval="${3:-0}"
+
+    cat > "$DEFAULTS_FILE" <<EOF
+# cpumon client configuration
+# Edit this file then run:  systemctl restart cpumon
+# Clear stored auth key:    rm $STATE_FILE
+
+CPUMON_SERVER_IP=${server_ip}
+CPUMON_TOKEN=${token}
+# Set to 1 to request approval on the server instead of using a token.
+# The server admin clicks Approve in the Awaiting Approval list to issue a key.
+CPUMON_APPROVAL_REQUEST=${approval}
+EOF
+    chmod 600 "$DEFAULTS_FILE"
+}
+
+write_service_file() {
+    cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=cpumon remote monitoring client
+Documentation=https://github.com/johanbogg/cpumon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=$DEFAULTS_FILE
+ExecStart=$INSTALL_DIR/start.sh
+Restart=always
+RestartSec=5
+# systemd creates /var/lib/cpumon and sets STATE_DIRECTORY
+StateDirectory=cpumon
+WorkingDirectory=/var/lib/cpumon
+# Run as root so shutdown/reboot/kill work without extra config.
+# To harden: create a dedicated user and grant passwordless sudo for
+# /sbin/shutdown, /bin/kill, /bin/systemctl instead.
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+restart_service() {
+    systemctl daemon-reload
+    systemctl enable "$SERVICE_NAME" >/dev/null
+    systemctl restart "$SERVICE_NAME"
+    systemctl is-active --quiet "$SERVICE_NAME"
+}
+
+uninstall() {
+    require_root
+    bold "Uninstalling cpumon..."
+
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+
+    rm -f "$SERVICE_FILE"
+    rm -f "$DEFAULTS_FILE"
+    rm -rf "$INSTALL_DIR"
+
+    systemctl daemon-reload
+    green "cpumon uninstalled."
+    echo "State directory /var/lib/cpumon was kept (stored auth key)."
+    echo "Remove manually with: rm -rf /var/lib/cpumon"
+}
+
+install() {
+    require_root
+    require_payload
+    detect_pkg_mgr
+    detect_distro
+
+    bold "cpumon Linux client - installer ($PKG / ${DISTRO_ID:-unknown} ${DISTRO_VER:-})"
+    echo "Requires Python 3.8+ (installed via $PKG if missing)"
+    echo
+
+    read_existing_config
+
+    read -rp "Server IP [${existing_ip:-auto-discover}]: " input_ip
+    SERVER_IP="${input_ip:-$existing_ip}"
+
+    read -rp "Invite token [${existing_token:-leave blank to use server-side approval}]: " input_token
+    TOKEN="${input_token:-$existing_token}"
+
+    APPROVAL="0"
+    if [[ -z "$TOKEN" ]]; then
+        local default_choice="Y"
+        [[ "$existing_approval" == "1" ]] && default_choice="Y"
+        read -rp "Use server-side approval instead of a token? [Y/n]: " input_approval
+        case "${input_approval:-$default_choice}" in
+            [Nn]*) APPROVAL="0" ;;
+            *)     APPROVAL="1" ;;
+        esac
+    fi
+
+    echo
+    install_dependencies yes
+    write_program_files
+    write_defaults_file "$SERVER_IP" "$TOKEN" "$APPROVAL"
+    write_service_file
+    restart_service
+
+    echo
+    green "cpumon installed and started."
+    print_useful_commands
+
+    if [[ -z "$TOKEN" && "$APPROVAL" != "1" ]]; then
+        echo
+        bold "No token set - on first connect the service will fail auth."
+        echo "Set CPUMON_TOKEN or CPUMON_APPROVAL_REQUEST=1 in $DEFAULTS_FILE and restart:"
+        echo "  systemctl restart cpumon"
+    elif [[ "$APPROVAL" == "1" ]]; then
+        echo
+        bold "Approve this client on the server."
+        echo "It will appear under 'Awaiting Approval' in the server window."
+        echo "Click Approve there; the service will then save its auth key automatically."
+    fi
+}
+
+update() {
+    require_root
+    require_payload
+    detect_pkg_mgr
+    detect_distro
+
+    bold "cpumon Linux client - updater"
+
+    if [[ ! -f "$DEFAULTS_FILE" ]]; then
+        red "No existing $DEFAULTS_FILE found."
+        echo "Run first install instead: sudo bash install-rpm.sh"
+        exit 1
+    fi
+
+    install_dependencies no
+
+    backup=""
+    if [[ -f "$INSTALL_DIR/cpumon.py" ]]; then
+        backup=$(mktemp)
+        cp "$INSTALL_DIR/cpumon.py" "$backup"
+    fi
+
+    write_program_files
+    write_service_file
+    if ! restart_service; then
+        red "Updated service failed to start."
+        if [[ -n "$backup" && -f "$backup" ]]; then
+            red "Rolling back cpumon.py and restarting previous version..."
+            cp "$backup" "$INSTALL_DIR/cpumon.py"
+            chmod 755 "$INSTALL_DIR/cpumon.py"
+            systemctl restart "$SERVICE_NAME" || true
+        fi
+        rm -f "$backup"
+        echo "Check logs with: journalctl -u cpumon -n 100 --no-pager"
+        exit 1
+    fi
+    rm -f "$backup"
+
+    echo
+    green "cpumon updated and restarted."
+    echo "Kept config: $DEFAULTS_FILE"
+    echo "Kept auth:   $STATE_FILE"
+    print_useful_commands
+}
+
+print_useful_commands() {
+    echo
+    bold "Useful commands:"
+    echo "  systemctl status  cpumon      # check status"
+    echo "  systemctl stop    cpumon      # stop"
+    echo "  systemctl start   cpumon      # start"
+    echo "  journalctl -u cpumon -f       # live logs"
+    echo "  nano $DEFAULTS_FILE   # change server IP / token"
+    echo "  rm $STATE_FILE   # clear stored auth key"
+}
+
+case "${1:-install}" in
+    uninstall|remove) uninstall ;;
+    update|upgrade)   update ;;
+    install)          install ;;
+    *)
+        red "Unknown command: $1"
+        echo "Usage: sudo bash install-rpm.sh [install|update|uninstall]"
+        exit 1
+        ;;
+esac
