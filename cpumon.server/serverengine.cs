@@ -118,6 +118,10 @@ public sealed class ServerEngine : IDisposable
         CmdExec.DisposeAll();
     }
 
+    // Test hook: mirrors what UpdateCheckLoop sets when ReleaseStager finishes.
+    // Production code always reaches the field via the staging loop.
+    public void SetStagedReleaseDirForTesting(string? dir) => _stagedReleaseDir = dir;
+
     public void RegenerateToken()
     {
         _tok = Security.GenToken();

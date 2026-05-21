@@ -112,7 +112,6 @@ Implemented:
 Still deferred (per the mockup) until later slices:
 - Screenshot dialog — needs a backend cache + GET endpoint for the latest screenshot bytes.
 - CMD / PowerShell / Files / RDP — each is a long-lived bidirectional channel; one slice per channel.
-- Per-client `Update` button and modeline `Update selected · N` primary action — need `POST /api/clients/{m}/update` and `POST /api/updates/push` routes.
 - `+ Install link` generator — bundle-baking server work.
 - `show` filter pill on the modeline.
 - Activity sparkline counters.
@@ -120,3 +119,47 @@ Still deferred (per the mockup) until later slices:
 Testing plan for this slice:
 - Build: `.\build.ps1` (existing slice-8/9 endpoint tests cover the wire contracts: `TestSnapshot*` × 7, `TestAlerts*` × 2, `TestApproved*` × 3).
 - Manual: open the dashboard, click into each card action; verify dialogs populate within ~1s, filter inputs narrow rows, ESC and overlay click close the modal. Open Alerts and Approved from the header; verify edits round-trip and the page reflects them on next state push.
+
+## Slice 14: Push update from staged release
+
+Status: pushed.
+
+Implemented:
+- `webupdatesapi.cs` exposes `POST /api/clients/{m}/update` and `POST /api/updates/push`. Both pick the artifact from `ServerEngine.StagedReleaseDir`: `client/cpumon.client.exe` for Windows agents, `linux/cpumon.py` for Linux agents. Per-client returns 204 on dispatch (the underlying chunked push runs asynchronously on the engine), 404 if the agent isn't connected, 409 if no release is staged or the platform's artifact is missing. The bulk endpoint accepts `{ machineNames: string[] }`, returns `{ windows, linux, skipped, missingArtifact }` so the operator sees what actually went out vs. what was filtered.
+- `ServerEngine.SetStagedReleaseDirForTesting` is a tiny test hook that mirrors what `UpdateCheckLoop` sets once `ReleaseStager` finishes; production code reaches the field only through that staging loop.
+- Card **Manage** lane gains an `Update` button (warn-coloured), visible only when the server has a staged release. Confirms with the staged version number when available.
+- Modeline gains the mockup's cyan `⇡ Update selected · N` primary action between `Clear` and the count text. Visible only when there is both a selection and a staged release; POSTs to `/api/updates/push` and refreshes state on success.
+- Smoke tests cover: auth/csrf, unknown machine 404, no_staged_release 409, artifact_missing 409, happy-path log entry, bulk summary with mixed Win/Linux/ghost targets, and empty-body 400.
+
+Still deferred (per the mockup) until later slices:
+- Files / RDP — each is a long-lived bidirectional channel; one slice per channel.
+- `show` filter pill on the modeline.
+- Activity sparkline counters.
+- Arbitrary-file push (browse-and-push from the operator's box) — only the staged release is exposed today.
+
+## Slice 15: Install link generator
+
+Status: pushed.
+
+Implemented:
+- `installlinkstore.cs` — in-memory store of one-shot install codes. Each link captures `{ code, createdAt, expiresAt, createdBy, usedAt, serverIp, serverThumbprint }`. 16-char URL-safe codes (~95 bits of entropy). Persistence is intentionally omitted; restarts invalidate unredeemed links and operators re-issue. Auto-prunes entries past `expiresAt + 7d`.
+- `webinstallapi.cs`:
+  - `POST /api/install-links` (auth+csrf) — body `{ serverIp?, ttlHours? }`. Defaults server IP to the Host header host, TTL to 24h, capped at 7d. Returns `{ code, url, expiresAt, ... }`.
+  - `GET /api/install-links` (auth) — list view of all active/used/expired entries with derived `url` and `active` fields.
+  - `DELETE /api/install-links/{code}` (auth+csrf) — revoke.
+  - `GET /install/{code}` — **unauthenticated**, one-shot bundle download. Atomically consumes the code, reads `<staged>/client/cpumon.client.exe`, mints a bundle zip with `cpumon.client.exe` + `install.bat` (`--install --server-ip … --token … --server-thumb …`) + `README.txt`, streams as `application/zip` with the right `Content-Disposition`.
+- Client side: `--server-thumb HEX` arg in `program.cs`. `ServiceManager.Install` validates it and forwards it through the SCM ImagePath alongside `--server-ip` / `--token`. `CpuMonService` reads it on startup and seeds `_sid` when `TokenStore` has no sid yet — so the first TLS handshake rejects any cert that doesn't match the pinned thumbprint, defeating MITM during initial enrollment.
+- `+ Install link` header button opens a modal: server IP (defaults to the operator's current page hostname, editable), TTL dropdown (1h / 24h / 7d), Generate button that surfaces the resulting URL + Copy button + expiry countdown. Below: list of active/used links with Copy and Revoke actions per row.
+- Smoke tests: auth/csrf, issue happy path, list+revoke round-trip, 404 for unknown code, 503 when no staged release, one-shot enforcement, bundle entry inspection (verifies `install.bat` carries server-ip / token / server-thumb).
+
+Tradeoffs:
+- Bundle is a zip + `.bat` rather than a self-extracting exe. Cheaper to build server-side; recipient unzips and right-click-runs.
+- Token is captured at *download* time (not link issue time), so operator token rotations don't invalidate unredeemed links.
+- Windows-only for now. Linux clients have their own `install.sh update <zip>` path; extending the install link to also serve a Linux bundle is a later add.
+- Link codes are unauthenticated bearer credentials; ~95 bits of entropy plus a 24h default TTL plus one-shot consumption gives the right blast radius.
+
+Still deferred (per the mockup) until later slices:
+- Screenshot dialog — needs a backend cache + GET endpoint for the latest screenshot bytes (note: already covers `/api/clients/{m}/screenshot` action; the *inspection dialog* viewing the result is what's missing).
+- Files / RDP — each is a long-lived bidirectional channel; one slice per channel.
+- `show` filter pill on the modeline.
+- Activity sparkline counters.

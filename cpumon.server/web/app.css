@@ -296,6 +296,15 @@ button { cursor: pointer; }
 .pill .key { color: var(--dim); }
 .pill .val { color: var(--brter); font-weight: 500; }
 .pill .caret { font-size: 8px; color: var(--dim); margin-left: 2px; }
+.pill[hidden] { display: none; }
+.pill.action.primary {
+  color: var(--bg-deep);
+  background: var(--grn);
+  border-color: var(--grn);
+  font-weight: 600;
+  text-shadow: none;
+}
+.pill.action.primary:hover { background: #62d18c; border-color: #62d18c; color: var(--bg-deep); }
 .modeline .sep { width: 1px; height: 17px; background: var(--brd); margin: 0 4px; }
 .modeline .count {
   margin-left: auto;

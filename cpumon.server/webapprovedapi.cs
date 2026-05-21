@@ -46,7 +46,9 @@ public static class WebApprovedApi
         {
             if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;
             var canonical = Canonical(engine, machine) ?? machine;
-            engine.Store.Forget(canonical);
+            // ForgetClient = Store.Forget + dispose the live connection if currently online.
+            // Safe to call when offline (the TryRemove is a no-op then).
+            engine.ForgetClient(canonical);
             sessions.ForgetMachineFromAllSessions(canonical);
             apiCtx.Log?.Add($"Web UI: delete approved {canonical}", Th.Yel);
             return Results.NoContent();

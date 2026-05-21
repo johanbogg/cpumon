@@ -106,7 +106,9 @@ sealed class CpuMonService : ServiceBase
         public int State;
     }
 
-    public CpuMonService(string? forceIp = null, string? token = null)
+    readonly string? _initialThumb;
+
+    public CpuMonService(string? forceIp = null, string? token = null, string? serverThumb = null)
     {
         ServiceName = "CpuMonClient";
         CanStop = true;
@@ -114,6 +116,7 @@ sealed class CpuMonService : ServiceBase
         AutoLog = true;
         _fip = forceIp;
         _tok = token;
+        _initialThumb = string.IsNullOrWhiteSpace(serverThumb) ? null : serverThumb.Trim();
         _mon = new HardwareMonitorService();
     }
 
@@ -126,6 +129,10 @@ sealed class CpuMonService : ServiceBase
         if (_tok == null && st != null) _tok = st;
         if (sk != null) _ak = sk;
         if (ssid != null) _sid = ssid;
+        // Pre-pin the server cert thumbprint passed via install bundle when no
+        // pairing has been stored yet. This rejects MITM on the very first
+        // connection (without it, the client would TOFU-trust any cert).
+        if (string.IsNullOrEmpty(_sid) && !string.IsNullOrEmpty(_initialThumb)) _sid = _initialThumb;
 
         _mon.Start();
         _cpu = ReportBuilder.WmiStr("Win32_Processor", "Name");
@@ -1145,13 +1152,15 @@ static class ServiceManager
     static string InstallDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "CpuMon", "Client");
 
-    public static void Install(string? forceIp, string? token)
+    public static void Install(string? forceIp, string? token, string? serverThumb = null)
     {
         if (!IsAdmin()) throw new UnauthorizedAccessException("--install requires administrator privileges.");
         if (!IsValidServiceInstallArg(forceIp, allowEmpty: true, requireIp: true))
             throw new ArgumentException("Invalid --server-ip. Use a literal IPv4 or IPv6 address.");
         if (!IsValidServiceInstallArg(token, allowEmpty: true, requireIp: false))
             throw new ArgumentException("Invalid --token. Tokens must be alphanumeric.");
+        if (!IsValidServiceInstallArg(serverThumb, allowEmpty: true, requireIp: false))
+            throw new ArgumentException("Invalid --server-thumb. Thumbprints must be alphanumeric hex.");
 
         string src  = Environment.ProcessPath ?? throw new InvalidOperationException("Cannot determine exe path.");
         string dest = Path.Combine(InstallDir, Path.GetFileName(src));
@@ -1165,8 +1174,9 @@ static class ServiceManager
 
         // Quote the executable inside the SCM ImagePath so Program Files paths remain unambiguous.
         string binPath = $"{QuoteServiceArg(dest)} --service";
-        if (forceIp != null) binPath += $" --server-ip {forceIp}";
-        if (token   != null) binPath += $" --token {token}";
+        if (forceIp     != null) binPath += $" --server-ip {forceIp}";
+        if (token       != null) binPath += $" --token {token}";
+        if (serverThumb != null) binPath += $" --server-thumb {serverThumb}";
 
         // Remove previous registration gracefully. SCM can keep a service marked for
         // deletion briefly after stop/delete, so wait before recreating it.

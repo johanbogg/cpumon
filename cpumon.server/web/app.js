@@ -129,6 +129,10 @@ function render(data) {
         c3 = countFragment(state.selected.size, 'selected');
   $('selectionCount').append(c1, sep(), c2, sep(), c3);
 
+  const showUpdate = state.selected.size > 0 && !!data.stagedReleaseDir;
+  $('updateSelected').hidden = !showUpdate;
+  $('updateSelectedCount').textContent = state.selected.size;
+
   renderClients(clients);
   renderOffline(offline);
   renderPending(pending);
@@ -288,10 +292,18 @@ function buildCardActions(client, selected) {
         ? [...state.selected].filter(x => x !== client.machineName)
         : [...state.selected, client.machineName],
     })),
+  ];
+  if (state.data?.stagedReleaseDir) {
+    const v = state.data?.availableUpdate?.version;
+    manage.push(action('Update', () => confirmAction(
+      v ? `Push staged update v${v} to ${client.machineName}?`
+        : `Push staged update to ${client.machineName}?`,
+      `/api/clients/${m}/update`), 'warn'));
+  }
+  manage.push(
     action('Restart',  () => confirmAction('Restart client?',  `/api/clients/${m}/restart`),  'warn'),
     action('Shutdown', () => confirmAction('Shutdown client?', `/api/clients/${m}/shutdown`), 'danger'),
-    action('Forget',   () => confirmAction('Forget client?',   `/api/clients/${m}/forget`),   'danger'),
-  ];
+  );
 
   return [
     actionGroup('Inspect',  inspect),
@@ -631,11 +643,19 @@ $('sortMode').addEventListener('click', async () => {
 $('selectAll').addEventListener('click', () => post('/api/state/select', { machineNames: (state.data?.clients || []).map(c => c.machineName) }));
 $('selectOutdated').addEventListener('click', () => post('/api/state/select', { machineNames: (state.data?.clients || []).filter(c => c.isOutdated).map(c => c.machineName) }));
 $('clearSelection').addEventListener('click', () => post('/api/state/select', { machineNames: [] }));
+$('updateSelected').addEventListener('click', async () => {
+  const machineNames = [...state.selected];
+  if (!machineNames.length) return;
+  const v = state.data?.availableUpdate?.version;
+  if (!confirm(v
+    ? `Push staged update v${v} to ${machineNames.length} client(s)?`
+    : `Push staged update to ${machineNames.length} client(s)?`)) return;
+  const r = await api('/api/updates/push', { method: 'POST', body: JSON.stringify({ machineNames }) });
+  if (r?.ok) await loadState();
+});
 $('btnAlerts').addEventListener('click', () => openAlertsDialog());
 $('btnApproved').addEventListener('click', () => openApprovedDialog());
-$('btnInstall').addEventListener('click', () => {
-  alert('Install link generator is coming in a later slice.');
-});
+$('btnInstall').addEventListener('click', () => openInstallLinkDialog());
 
 // ── modal substrate ──────────────────────────────────────────────
 function openModal({ title, mount, size = 'wide' }) {
@@ -1446,6 +1466,145 @@ async function openApprovedDialog() {
       setTimeout(() => filter.focus(), 0);
     },
   });
+}
+
+// ── install link dialog ─────────────────────────────────────────
+async function openInstallLinkDialog() {
+  openModal({
+    title: 'Install link',
+    mount: async (body, ctx) => {
+      body.innerHTML = `
+        <div class="form-grid" style="margin-bottom: 8px;">
+          <div class="form-row"><label>Server address</label><input name="serverIp" placeholder="e.g. 192.168.1.10"></div>
+          <div class="form-row">
+            <label>Link valid for</label>
+            <select name="ttl">
+              <option value="1">1 hour</option>
+              <option value="24" selected>24 hours</option>
+              <option value="168">7 days</option>
+            </select>
+          </div>
+          <div class="form-row wide">
+            <button type="button" class="a-btn primary" data-k="generate">Generate install link</button>
+            <span class="hint" data-k="hint">A one-time URL the recipient downloads. The bundle includes the staged client exe and pins this server's TLS thumbprint.</span>
+          </div>
+          <div class="form-row wide" data-k="result" hidden>
+            <label>Install URL</label>
+            <div style="display:flex; gap:6px; align-items:stretch;">
+              <input data-k="url" readonly style="flex:1;">
+              <button type="button" class="a-btn" data-k="copy">Copy</button>
+            </div>
+            <span class="hint" data-k="resultMeta"></span>
+          </div>
+        </div>
+        <div class="section-bar" style="margin-top:14px;"><span class="label">Active links</span><span class="rule"></span></div>
+        <div data-k="links"></div>`;
+      const errorEl = document.createElement('div');
+      errorEl.className = 'form-error-line';
+      body.appendChild(errorEl);
+
+      const get = (k) => body.querySelector(`[data-k="${k}"]`);
+      const ipInput = body.querySelector('[name="serverIp"]');
+      const ttlSelect = body.querySelector('[name="ttl"]');
+      ipInput.value = guessServerHost();
+
+      async function refreshList() {
+        const r = await api('/api/install-links');
+        if (!r?.ok) return;
+        const items = await r.json();
+        const wrap = get('links');
+        wrap.replaceChildren();
+        if (!items.length) {
+          const empty = document.createElement('div');
+          empty.className = 'empty-side';
+          empty.textContent = 'no install links issued';
+          wrap.appendChild(empty);
+          return;
+        }
+        for (const item of items) wrap.appendChild(linkRow(item));
+      }
+
+      function linkRow(item) {
+        const row = document.createElement('div');
+        row.className = 'approved-row';
+        row.style.gridTemplateColumns = 'minmax(0, 1fr) 110px 110px 80px auto';
+        row.innerHTML = `
+          <div style="min-width:0;">
+            <div style="font-size:11px;color:var(--brter); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" data-k="url"></div>
+            <div class="meta" data-k="meta"></div>
+          </div>
+          <span class="meta" data-k="created"></span>
+          <span class="meta" data-k="expires"></span>
+          <span class="toggle" data-k="state"></span>
+          <div class="actions">
+            <button type="button" class="a-btn" data-k="copy">Copy</button>
+            <button type="button" class="a-btn danger" data-k="revoke">Revoke</button>
+          </div>`;
+        row.querySelector('[data-k="url"]').textContent = item.url;
+        row.querySelector('[data-k="url"]').title = item.url;
+        row.querySelector('[data-k="meta"]').textContent = `${item.serverIp || '?'} · by ${item.createdBy || '?'}`;
+        row.querySelector('[data-k="created"]').textContent = timeAgo(item.createdAt);
+        row.querySelector('[data-k="expires"]').textContent = item.usedAt
+          ? `used ${timeAgo(item.usedAt)}`
+          : `in ${timeUntil(item.expiresAt)}`;
+        const stateEl = row.querySelector('[data-k="state"]');
+        stateEl.textContent = item.active ? 'ACTIVE' : item.usedAt ? 'USED' : 'EXPIRED';
+        if (item.active) stateEl.classList.add('on');
+        row.querySelector('[data-k="copy"]').addEventListener('click', () => navigator.clipboard?.writeText(item.url));
+        row.querySelector('[data-k="revoke"]').addEventListener('click', async () => {
+          if (!confirm(`Revoke this install link?`)) return;
+          const r = await api(`/api/install-links/${encodeURIComponent(item.code)}`, { method: 'DELETE' });
+          if (r?.status === 204) await refreshList();
+        });
+        return row;
+      }
+
+      get('generate').addEventListener('click', async () => {
+        errorEl.textContent = '';
+        const ttlHours = parseInt(ttlSelect.value, 10) || 24;
+        const r = await api('/api/install-links', { method: 'POST', body: JSON.stringify({
+          serverIp: ipInput.value.trim() || null,
+          ttlHours,
+        })});
+        if (r?.status !== 200) {
+          const j = await r?.json().catch(() => null);
+          errorEl.textContent = j?.message || `Generate failed (${r?.status})`;
+          return;
+        }
+        const link = await r.json();
+        get('result').hidden = false;
+        get('url').value = link.url;
+        get('resultMeta').textContent = `Expires in ${timeUntil(link.expiresAt)} · single use · share this URL with the target user`;
+        await refreshList();
+      });
+
+      get('copy').addEventListener('click', () => {
+        const url = get('url').value;
+        if (url) navigator.clipboard?.writeText(url);
+      });
+
+      await refreshList();
+      setTimeout(() => ipInput.focus(), 0);
+    },
+  });
+}
+
+function guessServerHost() {
+  // Prefer the host part of the current page URL (sans port). Operator can override.
+  return location.hostname || '';
+}
+
+function timeUntil(input) {
+  const ts = typeof input === 'number' ? input : Date.parse(input);
+  if (!Number.isFinite(ts)) return '?';
+  const seconds = Math.max(0, Math.round((ts - Date.now()) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  return `${days}d`;
 }
 
 // ── shared formatting helpers used by dialogs ────────────────────

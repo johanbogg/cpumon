@@ -100,6 +100,19 @@ internal static class Program
             TestPerClientExpandTogglesClientFlag();
             TestPerClientPawTogglesStoreFlag();
             TestPerClientMessageValidatesBody();
+            TestPushUpdateRequiresAuthAndCsrf();
+            TestPushUpdateReturns404ForUnknownMachine();
+            TestPushUpdateReturns409WhenNoStagedRelease();
+            TestPushUpdateReturns409WhenArtifactMissing();
+            TestPushUpdateRoutesToEngineForWindowsClient();
+            TestPushUpdatesMultiSummary();
+            TestPushUpdatesMultiRejectsEmptyBody();
+            TestInstallLinkRequiresAuthAndCsrf();
+            TestInstallLinkIssueReturnsCodeAndUrl();
+            TestInstallLinkListAndRevoke();
+            TestInstallLinkDownloadReturns404ForUnknown();
+            TestInstallLinkDownloadReturns503WhenNoStagedRelease();
+            TestInstallLinkDownloadIsOneShotAndContainsExpectedEntries();
             TestWebTerminalOpenDefaultsShellPerOs();
             TestWebTerminalSessionInputOutputAndCloseRoutes();
             TestSnapshotEndpointsRequireAuth();
@@ -112,6 +125,7 @@ internal static class Program
             TestApprovedListReturnsProjectedEntries();
             TestApprovedPatchUpdatesAliasAndPaw();
             TestApprovedDeleteRemovesFromStore();
+            TestApprovedDeleteKicksOnlineClient();
             TestOfflineWakeReturns404ForUnknownMachine();
             TestOfflineMacValidatesFormat();
             TestAlertsGetPutRoundTripUpdatesService();
@@ -1393,6 +1407,215 @@ internal static class Program
         Assert(h.Body(ghost).Contains("\"error\":\"not_found\""), "unknown machine error should be not_found");
     }
 
+    static void TestPushUpdateRequiresAuthAndCsrf()
+    {
+        using var h = new WebApiTestHost();
+        using var noAuth = h.Post("/api/clients/box/update", body: null, csrfHeader: null);
+        Assert((int)noAuth.StatusCode == 401, "push update without session should return 401");
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        using var noCsrf = h.Post("/api/clients/box/update", body: null, csrfHeader: null);
+        Assert((int)noCsrf.StatusCode == 403, "push update without csrf should return 403");
+        using var bulkNoCsrf = h.Post("/api/updates/push", new { machineNames = new[] { "box" } }, csrfHeader: null);
+        Assert((int)bulkNoCsrf.StatusCode == 403, "bulk push update without csrf should return 403");
+    }
+
+    static void TestPushUpdateReturns404ForUnknownMachine()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var resp = h.Post("/api/clients/ghost/update", body: null, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 404, "push update on unknown machine should return 404");
+        Assert(h.Body(resp).Contains("\"error\":\"not_found\""), "error code should be not_found");
+    }
+
+    static void TestPushUpdateReturns409WhenNoStagedRelease()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        using var single = h.Post("/api/clients/box/update", body: null, csrfHeader: h.Csrf);
+        Assert((int)single.StatusCode == 409, "push update with no staged release should return 409");
+        Assert(h.Body(single).Contains("\"error\":\"no_staged_release\""), "error code should be no_staged_release");
+        using var bulk = h.Post("/api/updates/push", new { machineNames = new[] { "box" } }, csrfHeader: h.Csrf);
+        Assert((int)bulk.StatusCode == 409, "bulk push with no staged release should return 409");
+    }
+
+    static void TestPushUpdateReturns409WhenArtifactMissing()
+    {
+        using var h = new WebApiTestHost();
+        using var stage = new TempDir();
+        // staged dir set but client subfolder is empty
+        h.Engine.SetStagedReleaseDirForTesting(stage.Path);
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        using var resp = h.Post("/api/clients/box/update", body: null, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 409, "push update with missing artifact should return 409");
+        Assert(h.Body(resp).Contains("\"error\":\"artifact_missing\""), "error code should be artifact_missing");
+    }
+
+    static void TestPushUpdateRoutesToEngineForWindowsClient()
+    {
+        using var h = new WebApiTestHost();
+        using var stage = new TempDir();
+        string clientDir = Path.Combine(stage.Path, "client");
+        Directory.CreateDirectory(clientDir);
+        File.WriteAllText(Path.Combine(clientDir, "cpumon.client.exe"), "stub-exe-bytes");
+        h.Engine.SetStagedReleaseDirForTesting(stage.Path);
+        h.Login();
+        AddReportedClient(h.Engine, "box-a", "Microsoft Windows 11", Proto.AppVersion);
+
+        int beforeCount = h.Engine.Log.Recent(200).Count;
+        using var resp = h.Post("/api/clients/box-a/update", body: null, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 204, "push update on connected Windows client should return 204");
+        var newEntries = h.Engine.Log.Recent(200).Skip(beforeCount).Select(e => e.M).ToList();
+        Assert(newEntries.Any(m => m.Contains("pushing update") && m.Contains("box-a")),
+            "engine log should record the web-initiated push");
+    }
+
+    static void TestPushUpdatesMultiSummary()
+    {
+        using var h = new WebApiTestHost();
+        using var stage = new TempDir();
+        string clientDir = Path.Combine(stage.Path, "client");
+        Directory.CreateDirectory(clientDir);
+        File.WriteAllText(Path.Combine(clientDir, "cpumon.client.exe"), "stub");
+        h.Engine.SetStagedReleaseDirForTesting(stage.Path);
+        h.Login();
+        AddReportedClient(h.Engine, "win-a", "Microsoft Windows 11", Proto.AppVersion);
+        AddReportedClient(h.Engine, "win-b", "Microsoft Windows 10", Proto.AppVersion);
+        AddReportedClient(h.Engine, "lnx-a", "Linux Debian", "1.0.0-linux");
+
+        using var resp = h.Post("/api/updates/push", new { machineNames = new[] { "win-a", "win-b", "lnx-a", "ghost" } }, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 200, "bulk push with mixed targets should return 200");
+        var body = h.Body(resp);
+        Assert(body.Contains("\"windows\":2"),  "summary should count two Windows pushes");
+        Assert(body.Contains("\"linux\":0"),    "summary should report zero Linux pushes since no linux artifact is staged");
+        Assert(body.Contains("\"skipped\":1"),  "summary should count the unknown ghost machine as skipped");
+        Assert(body.Contains("\"missingArtifact\":1"), "summary should count the linux client as missingArtifact");
+    }
+
+    static void TestPushUpdatesMultiRejectsEmptyBody()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var empty = h.Post("/api/updates/push", new { machineNames = Array.Empty<string>() }, csrfHeader: h.Csrf);
+        Assert((int)empty.StatusCode == 400, "bulk push with empty machineNames should return 400");
+        Assert(h.Body(empty).Contains("\"error\":\"validation_failed\""), "error code should be validation_failed");
+    }
+
+    static void TestInstallLinkRequiresAuthAndCsrf()
+    {
+        using var h = new WebApiTestHost();
+        using var noAuth = h.Post("/api/install-links", new { serverIp = "10.0.0.1" }, csrfHeader: null);
+        Assert((int)noAuth.StatusCode == 401, "POST without session should return 401");
+        h.Login();
+        using var noCsrf = h.Post("/api/install-links", new { serverIp = "10.0.0.1" }, csrfHeader: null);
+        Assert((int)noCsrf.StatusCode == 403, "POST without csrf should return 403");
+        using var delNoCsrf = h.Delete("/api/install-links/some-code", csrfHeader: null);
+        Assert((int)delNoCsrf.StatusCode == 403, "DELETE without csrf should return 403");
+    }
+
+    static void TestInstallLinkIssueReturnsCodeAndUrl()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var resp = h.Post("/api/install-links", new { serverIp = "10.0.0.42", ttlHours = 1 }, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 200, "issue should return 200");
+        var body = h.Body(resp);
+        Assert(body.Contains("\"code\":\""), "response should include a code");
+        Assert(body.Contains("\"url\":\""), "response should include a url");
+        Assert(body.Contains("\"serverIp\":\"10.0.0.42\""), "response should echo the requested server IP");
+        Assert(body.Contains("\"active\":true"), "fresh link should report active=true");
+    }
+
+    static void TestInstallLinkListAndRevoke()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var issued = h.Post("/api/install-links", new { serverIp = "10.0.0.5" }, csrfHeader: h.Csrf);
+        var code = ExtractJsonString(h.Body(issued), "code");
+        Assert(!string.IsNullOrEmpty(code), "issued response must include a code");
+
+        using var list = h.Get("/api/install-links");
+        Assert((int)list.StatusCode == 200, "list should return 200");
+        Assert(h.Body(list).Contains($"\"code\":\"{code}\""), "list should include the issued code");
+
+        using var revoke = h.Delete($"/api/install-links/{code}", csrfHeader: h.Csrf);
+        Assert((int)revoke.StatusCode == 204, "revoke should return 204");
+        using var listAfter = h.Get("/api/install-links");
+        Assert(!h.Body(listAfter).Contains($"\"code\":\"{code}\""), "revoked code should be gone from list");
+
+        using var revokeAgain = h.Delete($"/api/install-links/{code}", csrfHeader: h.Csrf);
+        Assert((int)revokeAgain.StatusCode == 404, "revoking an unknown code should return 404");
+    }
+
+    static void TestInstallLinkDownloadReturns404ForUnknown()
+    {
+        using var h = new WebApiTestHost();
+        using var resp = h.Get("/install/no-such-code");
+        Assert((int)resp.StatusCode == 404, "GET /install/{unknown} should return 404");
+        Assert(h.Body(resp).Contains("\"error\":\"not_found\""), "error code should be not_found");
+    }
+
+    static void TestInstallLinkDownloadReturns503WhenNoStagedRelease()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var issued = h.Post("/api/install-links", new { serverIp = "10.0.0.5" }, csrfHeader: h.Csrf);
+        var code = ExtractJsonString(h.Body(issued), "code");
+        Assert(!string.IsNullOrEmpty(code), "must issue a code");
+        // No staged release set — download must fail clean.
+        using var resp = h.Get($"/install/{code}");
+        Assert((int)resp.StatusCode == 503, "download with no staged release should return 503");
+        Assert(h.Body(resp).Contains("no_staged_release"), "error code should be no_staged_release");
+    }
+
+    static void TestInstallLinkDownloadIsOneShotAndContainsExpectedEntries()
+    {
+        using var h = new WebApiTestHost();
+        using var stage = new TempDir();
+        string clientDir = Path.Combine(stage.Path, "client");
+        Directory.CreateDirectory(clientDir);
+        File.WriteAllText(Path.Combine(clientDir, "cpumon.client.exe"), "stub-exe-bytes");
+        h.Engine.SetStagedReleaseDirForTesting(stage.Path);
+        h.Login();
+        using var issued = h.Post("/api/install-links", new { serverIp = "10.0.0.99" }, csrfHeader: h.Csrf);
+        var code = ExtractJsonString(h.Body(issued), "code");
+        Assert(!string.IsNullOrEmpty(code), "must issue a code");
+
+        using var dl1 = h.Get($"/install/{code}");
+        Assert((int)dl1.StatusCode == 200, "first download should return 200");
+        Assert(dl1.Content.Headers.ContentType?.MediaType == "application/zip", "content-type should be application/zip");
+        var bytes = dl1.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+        using var zipStream = new MemoryStream(bytes);
+        using var zip = new ZipArchive(zipStream, ZipArchiveMode.Read);
+        var names = zip.Entries.Select(e => e.FullName).ToList();
+        Assert(names.Contains("cpumon.client.exe"), "bundle should include cpumon.client.exe");
+        Assert(names.Contains("install.bat"),       "bundle should include install.bat");
+        Assert(names.Contains("README.txt"),        "bundle should include README.txt");
+        var batEntry = zip.Entries.First(e => e.FullName == "install.bat");
+        using var batReader = new StreamReader(batEntry.Open());
+        var batContent = batReader.ReadToEnd();
+        Assert(batContent.Contains("--server-ip 10.0.0.99"), "install.bat must include server IP");
+        Assert(batContent.Contains("--server-thumb "),       "install.bat must include the server thumbprint");
+        Assert(batContent.Contains("--token "),              "install.bat must include the invite token");
+
+        // Second download must fail — link is one-shot.
+        using var dl2 = h.Get($"/install/{code}");
+        Assert((int)dl2.StatusCode == 404, "second download should return 404 (one-shot)");
+    }
+
+    static string ExtractJsonString(string body, string key)
+    {
+        var marker = $"\"{key}\":\"";
+        int i = body.IndexOf(marker, StringComparison.Ordinal);
+        if (i < 0) return "";
+        int start = i + marker.Length;
+        int end = body.IndexOf('"', start);
+        return end < 0 ? "" : body[start..end];
+    }
+
     static void TestWebTerminalOpenDefaultsShellPerOs()
     {
         using var h = new WebApiTestHost();
@@ -1481,6 +1704,19 @@ internal static class Program
         using var resp = h.Delete("/api/approved/doomed", csrfHeader: h.Csrf);
         Assert((int)resp.StatusCode == 204, "DELETE should return 204");
         Assert(!h.Engine.Store.All().Any(c => c.Name == "doomed"), "doomed should be gone from store");
+    }
+
+    static void TestApprovedDeleteKicksOnlineClient()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        h.Engine.Store.Approve("live-box", "k", "10.0.0.7");
+        AddReportedClient(h.Engine, "live-box", "Microsoft Windows 11", Proto.AppVersion);
+        Assert(h.Engine.Clients.ContainsKey("live-box"), "fixture: live-box should be in the live client set");
+        using var resp = h.Delete("/api/approved/live-box", csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 204, "DELETE should return 204 for an online client");
+        Assert(!h.Engine.Store.All().Any(c => c.Name == "live-box"), "live-box should be gone from the store");
+        Assert(!h.Engine.Clients.ContainsKey("live-box"), "live-box should also be evicted from the live client set");
     }
 
     static void TestOfflineWakeReturns404ForUnknownMachine()
@@ -1977,6 +2213,7 @@ internal static class Program
         public SnapshotCache             Snapshots  { get; }
         public WebTerminalStore          Terminals  { get; }
         public AlertService              Alerts     { get; }
+        public InstallLinkStore          Links      { get; }
         readonly TempDir _td;
         readonly CookieContainer _cookies;
 
@@ -1993,6 +2230,7 @@ internal static class Program
             Controller = new ServerDashboardController(Engine, new FakeServerPlatformServices());
             Snapshots  = new SnapshotCache(Engine);
             Terminals  = new WebTerminalStore(Engine);
+            Links      = new InstallLinkStore();
             Host       = new WebHost();
             Host.StartAsync(new WebHostOptions
             {
@@ -2003,6 +2241,8 @@ internal static class Program
                     WebAuthApi.Map(app, Operators, Sessions, Bootstrap, RateLimit, ctx);
                     WebDashboardApi.Map(app, Engine, Controller, Sessions, ctx);
                     WebClientActionsApi.Map(app, Engine, Controller, Sessions, ctx);
+                    WebUpdatesApi.Map(app, Engine, Sessions, ctx);
+                    WebInstallApi.Map(app, Engine, Links, Sessions, ctx);
                     WebSnapshotApi.Map(app, Engine, Snapshots, Sessions, ctx);
                     WebTerminalApi.Map(app, Engine, Terminals, Sessions, ctx);
                     WebOfflineApi.Map(app, Engine, Sessions, ctx);

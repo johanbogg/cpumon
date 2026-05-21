@@ -38,7 +38,7 @@ internal static class Program
 
         bool daemon = false, serviceMode = false, agentMode = false, install = false, uninstall = false, resetAuth = false;
         bool fromElevation = false;
-        string? forceIp = null, token = null;
+        string? forceIp = null, token = null, serverThumb = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -61,6 +61,8 @@ internal static class Program
                 forceIp = args[++i];
             else if ((a.Equals("--token", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
                 token = args[++i];
+            else if (a.Equals("--server-thumb", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                serverThumb = args[++i];
         }
 
         // Non-GUI paths — no WinForms pump needed
@@ -76,13 +78,13 @@ internal static class Program
             Environment.ExitCode = ok ? 0 : 1;
             return;
         }
-        if (install)   { RunCliAction(() => ServiceManager.Install(forceIp, token)); return; }
+        if (install)   { RunCliAction(() => ServiceManager.Install(forceIp, token, serverThumb)); return; }
         if (uninstall) { RunCliAction(ServiceManager.Uninstall); return; }
 
         // SCM starts the service and blocks here until the service stops
         if (serviceMode)
         {
-            ServiceBase.Run(new CpuMonService(forceIp, token));
+            ServiceBase.Run(new CpuMonService(forceIp, token, serverThumb));
             return;
         }
 

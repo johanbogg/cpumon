@@ -25,18 +25,20 @@ public sealed class WebStartup : IDisposable
     public RateLimiter          RateLimit  { get; }
     public SnapshotCache        Snapshots  { get; }
     public WebTerminalStore     Terminals  { get; }
+    public InstallLinkStore     InstallLinks { get; }
 
     WebStartup(WebHost host, OperatorStore operators, SessionStore sessions,
                BootstrapTokenIssuer bootstrap, RateLimiter rateLimit, SnapshotCache snapshots,
-               WebTerminalStore terminals)
+               WebTerminalStore terminals, InstallLinkStore installLinks)
     {
-        Host       = host;
-        Operators  = operators;
-        Sessions   = sessions;
-        Bootstrap  = bootstrap;
-        RateLimit  = rateLimit;
-        Snapshots  = snapshots;
-        Terminals  = terminals;
+        Host         = host;
+        Operators    = operators;
+        Sessions     = sessions;
+        Bootstrap    = bootstrap;
+        RateLimit    = rateLimit;
+        Snapshots    = snapshots;
+        Terminals    = terminals;
+        InstallLinks = installLinks;
     }
 
     public static async Task<WebStartup> StartAsync(ServerEngine engine,
@@ -50,6 +52,7 @@ public sealed class WebStartup : IDisposable
         var rateLimit = new RateLimiter();
         var snapshots = new SnapshotCache(engine);
         var terminals = new WebTerminalStore(engine);
+        var installLinks = new InstallLinkStore();
 
         var host = new WebHost();
         await host.StartAsync(new WebHostOptions
@@ -69,6 +72,8 @@ public sealed class WebStartup : IDisposable
                 WebAuthApi.Map(app, operators, sessions, bootstrap, rateLimit, ctx);
                 WebDashboardApi.Map(app, engine, controller, sessions, ctx);
                 WebClientActionsApi.Map(app, engine, controller, sessions, ctx);
+                WebUpdatesApi.Map(app, engine, sessions, ctx);
+                WebInstallApi.Map(app, engine, installLinks, sessions, ctx);
                 WebSnapshotApi.Map(app, engine, snapshots, sessions, ctx);
                 WebTerminalApi.Map(app, engine, terminals, sessions, ctx);
                 WebOfflineApi.Map(app, engine, sessions, ctx);
@@ -86,7 +91,7 @@ public sealed class WebStartup : IDisposable
             token => $"{scheme}://localhost:{host.Port}/setup?t={token}",
             engine.Log);
 
-        return new WebStartup(host, operators, sessions, bootstrap, rateLimit, snapshots, terminals);
+        return new WebStartup(host, operators, sessions, bootstrap, rateLimit, snapshots, terminals, installLinks);
     }
 
     public void Dispose()
