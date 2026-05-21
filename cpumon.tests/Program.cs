@@ -18,6 +18,12 @@ internal static class Program
 {
     static int Main()
     {
+        // ServerEngine persists its CLog to cpumon_server.log next to the test exe;
+        // entries accumulate across runs and old assertions using Recent(200).Count
+        // as a baseline break once the loaded backlog exceeds 200. Scrub before any
+        // ServerEngine is constructed so every run starts from a clean log.
+        try { if (File.Exists("cpumon_server.log")) File.Delete("cpumon_server.log"); } catch { }
+
         try
         {
             TestReceiveChunkCompletesAndValidatesOffsets();
@@ -115,6 +121,13 @@ internal static class Program
             TestInstallLinkDownloadIsOneShotAndContainsExpectedEntries();
             TestWebTerminalOpenDefaultsShellPerOs();
             TestWebTerminalSessionInputOutputAndCloseRoutes();
+            TestWebFilesEndpointsRequireAuth();
+            TestWebFilesEndpointsRequireCsrf();
+            TestWebFilesOpenReturns404ForUnknownMachine();
+            TestWebFilesListingRoundTripsThroughEngineEvent();
+            TestWebFilesMkdirRoutesResultBackThroughSession();
+            TestWebFilesDownloadDeliversAggregatedChunks();
+            TestWebFilesUploadStreamsChunksToEngine();
             TestSnapshotEndpointsRequireAuth();
             TestSnapshotReturns204AndTriggersFetchWhenEmpty();
             TestSnapshotReturnsCachedAndDoesNotTriggerWhenFresh();
@@ -2204,6 +2217,193 @@ internal static class Program
             Assert(h.Snapshots.TriggeredAt("box", kind) == null, $"health GET must not trigger a fetch for {kind}");
     }
 
+    static void TestWebFilesEndpointsRequireAuth()
+    {
+        using var h = new WebApiTestHost();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        foreach (var (method, path) in new (HttpMethod, string)[]
+        {
+            (HttpMethod.Post, "/api/clients/box/files/open"),
+            (HttpMethod.Get,  "/api/clients/box/files/web-anything"),
+            (HttpMethod.Post, "/api/clients/box/files/web-anything/list"),
+            (HttpMethod.Post, "/api/clients/box/files/web-anything/mkdir"),
+            (HttpMethod.Post, "/api/clients/box/files/web-anything/delete"),
+            (HttpMethod.Post, "/api/clients/box/files/web-anything/rename"),
+            (HttpMethod.Post, "/api/clients/box/files/web-anything/download"),
+            (HttpMethod.Get,  "/api/clients/box/files/web-anything/download/dl-x"),
+            (HttpMethod.Post, "/api/clients/box/files/web-anything/upload?dest=x&name=y"),
+            (HttpMethod.Post, "/api/clients/box/files/web-anything/close"),
+        })
+        {
+            using var resp = h.Send(method, path, body: null, csrfHeader: null);
+            Assert((int)resp.StatusCode == 401, $"{method} {path} should require auth");
+        }
+    }
+
+    static void TestWebFilesEndpointsRequireCsrf()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        foreach (var (method, path) in new (HttpMethod, string)[]
+        {
+            (HttpMethod.Post, "/api/clients/box/files/open"),
+            (HttpMethod.Post, "/api/clients/box/files/sid/list"),
+            (HttpMethod.Post, "/api/clients/box/files/sid/mkdir"),
+            (HttpMethod.Post, "/api/clients/box/files/sid/delete"),
+            (HttpMethod.Post, "/api/clients/box/files/sid/rename"),
+            (HttpMethod.Post, "/api/clients/box/files/sid/download"),
+            (HttpMethod.Post, "/api/clients/box/files/sid/upload?dest=x&name=y"),
+            (HttpMethod.Post, "/api/clients/box/files/sid/close"),
+        })
+        {
+            using var resp = h.Send(method, path, body: null, csrfHeader: null);
+            Assert((int)resp.StatusCode == 403, $"{method} {path} should require CSRF");
+        }
+    }
+
+    static void TestWebFilesOpenReturns404ForUnknownMachine()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var resp = h.Post("/api/clients/ghost/files/open", body: null, csrfHeader: h.Csrf);
+        Assert((int)resp.StatusCode == 404, "open on unknown machine should 404");
+        Assert(h.Body(resp).Contains("\"error\":\"not_found\""), "error code should be not_found");
+    }
+
+    static void TestWebFilesListingRoundTripsThroughEngineEvent()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+
+        using var open = h.Post("/api/clients/box/files/open", body: null, csrfHeader: h.Csrf);
+        Assert((int)open.StatusCode == 200, "open should return 200");
+        using var openDoc = JsonDocument.Parse(h.Body(open));
+        var sessionId = openDoc.RootElement.GetProperty("sessionId").GetString()!;
+
+        using var list = h.Post($"/api/clients/box/files/{sessionId}/list", new { path = @"C:\some\path" }, csrfHeader: h.Csrf);
+        Assert((int)list.StatusCode == 204, "list should return 204 on dispatch");
+
+        var session = h.Files.Get("box", sessionId);
+        Assert(session != null, "session should be retrievable from the store");
+        session!.PutListing(new FileListing
+        {
+            Path    = @"C:\some\path",
+            Entries = new System.Collections.Generic.List<FileEntryInfo>
+            {
+                new() { Name = "alpha", IsDirectory = true,  ModifiedUtcMs = 1700000000000 },
+                new() { Name = "beta.txt", IsDirectory = false, Size = 1234, ModifiedUtcMs = 1700000000000 },
+            },
+        });
+
+        using var snap = h.Get($"/api/clients/box/files/{sessionId}");
+        Assert((int)snap.StatusCode == 200, "snapshot should return 200");
+        var body = h.Body(snap);
+        Assert(body.Contains("\"path\":\"C:\\\\some\\\\path\""), "snapshot should echo path");
+        Assert(body.Contains("\"name\":\"beta.txt\""), "snapshot should contain file entry");
+        Assert(body.Contains("\"listingSeq\":1"), "listing seq should advance to 1");
+
+        using var close = h.Post($"/api/clients/box/files/{sessionId}/close", body: null, csrfHeader: h.Csrf);
+        Assert((int)close.StatusCode == 204, "close should return 204");
+        using var after = h.Get($"/api/clients/box/files/{sessionId}");
+        Assert((int)after.StatusCode == 404, "snapshot after close should 404");
+    }
+
+    static void TestWebFilesMkdirRoutesResultBackThroughSession()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+
+        using var open = h.Post("/api/clients/box/files/open", body: null, csrfHeader: h.Csrf);
+        var sessionId = JsonDocument.Parse(h.Body(open)).RootElement.GetProperty("sessionId").GetString()!;
+
+        using var bad = h.Post($"/api/clients/box/files/{sessionId}/mkdir", new { path = "" }, csrfHeader: h.Csrf);
+        Assert((int)bad.StatusCode == 400, "mkdir without path should 400");
+
+        using var ok = h.Post($"/api/clients/box/files/{sessionId}/mkdir", new { path = @"C:\new" }, csrfHeader: h.Csrf);
+        Assert((int)ok.StatusCode == 204, "mkdir should dispatch with 204");
+
+        h.Files.Get("box", sessionId)!.PutResult(true, @"Created: C:\new");
+
+        using var snap = h.Get($"/api/clients/box/files/{sessionId}");
+        var body = h.Body(snap);
+        Assert(body.Contains("\"resultOk\":true"), "result ok should propagate");
+        Assert(body.Contains(@"Created: C:\\new"), "result message should propagate");
+        Assert(body.Contains("\"resultSeq\":1"), "result seq should advance to 1");
+    }
+
+    static void TestWebFilesDownloadDeliversAggregatedChunks()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+
+        using var open = h.Post("/api/clients/box/files/open", body: null, csrfHeader: h.Csrf);
+        var sessionId = JsonDocument.Parse(h.Body(open)).RootElement.GetProperty("sessionId").GetString()!;
+
+        using var dl = h.Post($"/api/clients/box/files/{sessionId}/download", new { path = @"C:\file.bin" }, csrfHeader: h.Csrf);
+        Assert((int)dl.StatusCode == 200, "download start should 200");
+        using var dlDoc = JsonDocument.Parse(h.Body(dl));
+        var transferId = dlDoc.RootElement.GetProperty("transferId").GetString()!;
+
+        using var pending = h.Get($"/api/clients/box/files/{sessionId}/download/{transferId}");
+        Assert((int)pending.StatusCode == 204, "in-progress download should 204");
+
+        var session = h.Files.Get("box", sessionId)!;
+        var transfer = session.GetTransfer(transferId);
+        Assert(transfer != null, "transfer should be tracked on the session");
+        transfer!.ReceiveChunk(new FileChunkData
+        {
+            TransferId = transferId, FileName = "file.bin",
+            Offset = 0, TotalSize = 6, IsLast = false,
+            Data = Convert.ToBase64String(Encoding.UTF8.GetBytes("abc")),
+        });
+        transfer.ReceiveChunk(new FileChunkData
+        {
+            TransferId = transferId, FileName = "file.bin",
+            Offset = 3, TotalSize = 6, IsLast = true,
+            Data = Convert.ToBase64String(Encoding.UTF8.GetBytes("def")),
+        });
+
+        using var ready = h.Get($"/api/clients/box/files/{sessionId}/download/{transferId}");
+        Assert((int)ready.StatusCode == 200, "complete download should 200");
+        var bytes = ready.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+        Assert(Encoding.UTF8.GetString(bytes) == "abcdef", "downloaded bytes should match assembled chunks");
+
+        using var after = h.Get($"/api/clients/box/files/{sessionId}/download/{transferId}");
+        Assert((int)after.StatusCode == 404, "transfer should be consumed after the first 200 read");
+    }
+
+    static void TestWebFilesUploadStreamsChunksToEngine()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+
+        using var open = h.Post("/api/clients/box/files/open", body: null, csrfHeader: h.Csrf);
+        var sessionId = JsonDocument.Parse(h.Body(open)).RootElement.GetProperty("sessionId").GetString()!;
+
+        var payload = new byte[Proto.FileChunkSize + 1024];
+        new Random(7).NextBytes(payload);
+
+        var req = new HttpRequestMessage(HttpMethod.Post, $"/api/clients/box/files/{sessionId}/upload?dest=" + Uri.EscapeDataString(@"C:\dest") + "&name=hello.bin");
+        req.Headers.Add("X-CSRF-Token", h.Csrf);
+        req.Content = new ByteArrayContent(payload);
+        req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        req.Content.Headers.ContentLength = payload.Length;
+        using var resp = h.Client.SendAsync(req).GetAwaiter().GetResult();
+        Assert((int)resp.StatusCode == 204, "upload should return 204");
+
+        var missingDest = new HttpRequestMessage(HttpMethod.Post, $"/api/clients/box/files/{sessionId}/upload?name=x");
+        missingDest.Headers.Add("X-CSRF-Token", h.Csrf);
+        missingDest.Content = new ByteArrayContent(Array.Empty<byte>());
+        missingDest.Content.Headers.ContentLength = 0;
+        using var bad = h.Client.SendAsync(missingDest).GetAwaiter().GetResult();
+        Assert((int)bad.StatusCode == 400, "upload without dest should 400");
+    }
+
     sealed class WebApiTestHost : IDisposable
     {
         public WebHost                   Host       { get; }
@@ -2216,6 +2416,7 @@ internal static class Program
         public ServerDashboardController Controller { get; }
         public SnapshotCache             Snapshots  { get; }
         public WebTerminalStore          Terminals  { get; }
+        public WebFileBrowserStore       Files      { get; }
         public AlertService              Alerts     { get; }
         public InstallLinkStore          Links      { get; }
         readonly TempDir _td;
@@ -2234,6 +2435,7 @@ internal static class Program
             Controller = new ServerDashboardController(Engine, new FakeServerPlatformServices());
             Snapshots  = new SnapshotCache(Engine);
             Terminals  = new WebTerminalStore(Engine);
+            Files      = new WebFileBrowserStore(Engine);
             Links      = new InstallLinkStore();
             Host       = new WebHost();
             Host.StartAsync(new WebHostOptions
@@ -2249,6 +2451,7 @@ internal static class Program
                     WebInstallApi.Map(app, Engine, Links, Sessions, ctx);
                     WebSnapshotApi.Map(app, Engine, Snapshots, Sessions, ctx);
                     WebTerminalApi.Map(app, Engine, Terminals, Sessions, ctx);
+                    WebFilesApi.Map(app, Engine, Files, Sessions, ctx);
                     WebOfflineApi.Map(app, Engine, Sessions, ctx);
                     WebApprovedApi.Map(app, Engine, Sessions, ctx);
                     WebAlertsApi.Map(app, Alerts, Sessions, ctx);
@@ -2341,6 +2544,7 @@ internal static class Program
         {
             Client.Dispose();
             Terminals.Dispose();
+            Files.Dispose();
             Host.DisposeAsync().GetAwaiter().GetResult();
             Snapshots.Dispose();
             Sessions.Dispose();

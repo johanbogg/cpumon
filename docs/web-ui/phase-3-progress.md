@@ -163,3 +163,34 @@ Still deferred (per the mockup) until later slices:
 - Files / RDP — each is a long-lived bidirectional channel; one slice per channel.
 - `show` filter pill on the modeline.
 - Activity sparkline counters.
+
+## Slice 16: Web file browser
+
+Status: pushed.
+
+Implemented:
+- `webfilesapi.cs` brings the `FileBrowserDialog` surface to the browser. `WebFileBrowserStore` subscribes to three new `ServerEngine` events — `FileListingUpdated`, `FileChunkUpdated`, `FileResultUpdated` — fired from the existing `file_listing` / `file_chunk` / result message handlers so the WinForms `FileBrowserDialog` keeps working unchanged. The store keeps per-session state keyed by a random `sessionId` (used both as the engine `CmdId` for listings/results and as the routing key for transfers), buffers the latest listing, the latest result, and the set of active downloads.
+- `ServerEngine` gets request-style methods that mirror the terminal pattern: `RequestFileList`, `RequestFileMkdir`, `RequestFileDelete`, `RequestFileRename`, `RequestFileDownload`, `RequestFileUploadChunk`. None of them touch WinForms; same `cl.Send(...)` shape as the existing snapshot requests.
+- REST surface:
+  - `POST /api/clients/{m}/files/open` → `{ sessionId }`. Allocates a session, no agent contact yet.
+  - `POST /api/clients/{m}/files/{sessionId}/list` `{ path }` → 204. Triggers `file_list`; listing arrives async into the store.
+  - `GET  /api/clients/{m}/files/{sessionId}` → snapshot of `{ listing, listingSeq, result, resultOk, resultSeq, transfers[] }`. Frontend polls at ~700ms.
+  - `POST /api/clients/{m}/files/{sessionId}/mkdir|delete|rename` → 204; result lands in the snapshot via `FileResultUpdated`.
+  - `POST /api/clients/{m}/files/{sessionId}/download` `{ path }` → `{ transferId, fileName }`. Chunks aggregate to `%ProgramData%\CpuMon\webdl\<sessionId>\<transferId>.part`.
+  - `GET  /api/clients/{m}/files/{sessionId}/download/{transferId}` → 204 while in flight (poll); 200 + `application/octet-stream` when complete (file is then deleted from the staging dir); 409 if the agent reported an error or the transfer exceeded the cap.
+  - `POST /api/clients/{m}/files/{sessionId}/upload?dest=…&name=…` (`application/octet-stream`, `Content-Length` required) → server reads in 64 KB blocks and dispatches `file_upload_chunk` with matching offsets. Returns 204 once the last chunk goes out.
+  - `POST /api/clients/{m}/files/{sessionId}/close` → 204. Disposes the session and removes any pending download files.
+- Frontend: Files button on the Inspect lane (always available — both Windows and Linux agents support the protocol). The modal reuses the existing `openModal` + sticky-table substrate. Toolbar with Up / Root / Refresh / path input / Go and a status pill; table with name + size + modified columns, per-row Download / Rename / Delete buttons; per-row click navigates folders and triggers download on files; footer uploader bar with Upload picker, New folder button, and a drag-and-drop target that uploads to the current path. Progress text on download/upload renders into the footer.
+- Limits: 200 MB cap per transfer (download or upload) — large enough for typical sysadmin payloads, small enough to keep in-memory and staging overhead bounded. Uploads with no `Content-Length` are rejected (`400 missing_length`). Sessions are swept after 30 min idle.
+- Tests (`cpumon.tests`): auth/csrf gating on the full endpoint set, open 404 for unknown machine, listing round-trip via the store, mkdir result round-trip, download chunk reassembly + one-shot consumption, upload happy path + missing-`dest` rejection.
+
+Tradeoffs:
+- Two-step download (`POST /download` returns transferId, then `GET … /download/{tid}` polls for 204/200) instead of streaming back as chunks arrive. Simpler client code, no SSE/WS plumbing, but adds ~400ms latency on the start of small files.
+- Downloads stage to disk, not memory, so the server can keep handling other operators while a big file aggregates. The staging dir is deleted on store dispose and on transfer hand-off.
+- No range/resume support; if a transfer fails partway, the operator restarts it.
+- Per-session sweep is 30 min idle — long enough for a tab the operator left open during lunch, short enough that abandoned tabs don't pile up.
+
+Still deferred:
+- RDP — separate long-lived bidirectional channel; next slice.
+- `show` filter pill on the modeline.
+- Activity sparkline counters.

@@ -93,6 +93,9 @@ public sealed class ServerEngine : IDisposable
     public event Action<RemoteClient, ScreenshotData>? ScreenshotUpdated;
     public event Action<RemoteClient, string, string>? TerminalOutputUpdated;
     public event Action<RemoteClient, string>? TerminalClosedUpdated;
+    public event Action<RemoteClient, string?, FileListing>? FileListingUpdated;
+    public event Action<RemoteClient, FileChunkData>? FileChunkUpdated;
+    public event Action<RemoteClient, string, bool, string>? FileResultUpdated;
     public event Action? UpdateAvailable;
     public event Action? ReleaseStaged;
 
@@ -242,6 +245,48 @@ public sealed class ServerEngine : IDisposable
     {
         if (!_cls.TryGetValue(machine, out var cl)) return false;
         cl.Send(new ServerCommand { Cmd = "terminal_close", TermId = termId });
+        return true;
+    }
+
+    public bool RequestFileList(string machine, string cmdId, string? path)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "file_list", Path = path ?? "", CmdId = cmdId });
+        return true;
+    }
+
+    public bool RequestFileMkdir(string machine, string cmdId, string path)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "file_mkdir", Path = path, CmdId = cmdId });
+        return true;
+    }
+
+    public bool RequestFileDelete(string machine, string cmdId, string path, bool recursive)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "file_delete", Path = path, Recursive = recursive, CmdId = cmdId });
+        return true;
+    }
+
+    public bool RequestFileRename(string machine, string cmdId, string path, string newName)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "file_rename", Path = path, NewName = newName, CmdId = cmdId });
+        return true;
+    }
+
+    public bool RequestFileDownload(string machine, string cmdId, string transferId, string path)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "file_download", Path = path, TransferId = transferId, CmdId = cmdId });
+        return true;
+    }
+
+    public bool RequestFileUploadChunk(string machine, string destPath, FileChunkData chunk)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "file_upload_chunk", DestPath = destPath, FileChunk = chunk });
         return true;
     }
 
@@ -810,6 +855,7 @@ public sealed class ServerEngine : IDisposable
                                 foreach (var fb in cl.FileBrowserDialogs.Values)
                                     try { fb.ReceiveCmdResult(msg.Success, msg.Message ?? ""); } catch { }
                                 cl.ServiceResultCallback?.Invoke(msg.Success, msg.Message ?? "");
+                                try { FileResultUpdated?.Invoke(cl, msg.CmdId, msg.Success, msg.Message ?? ""); } catch { }
                             }
                             break;
 
@@ -834,6 +880,7 @@ public sealed class ServerEngine : IDisposable
                                 break;
                             if (msg.CmdId != null && cl.FileBrowserDialogs.TryGetValue(msg.CmdId, out var fbListing))
                                 fbListing.ReceiveListing(msg.FileListing);
+                            try { FileListingUpdated?.Invoke(cl, msg.CmdId, msg.FileListing); } catch { }
                             break;
 
                         case "file_chunk" when msg.FileChunk != null:
@@ -843,6 +890,7 @@ public sealed class ServerEngine : IDisposable
                             {
                                 try { fb.ReceiveFileChunk(msg.FileChunk); } catch { }
                             }
+                            try { FileChunkUpdated?.Invoke(cl, msg.FileChunk); } catch { }
                             break;
 
                         case "screenshot" when msg.Screenshot != null:

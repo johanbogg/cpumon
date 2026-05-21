@@ -25,11 +25,12 @@ public sealed class WebStartup : IDisposable
     public RateLimiter          RateLimit  { get; }
     public SnapshotCache        Snapshots  { get; }
     public WebTerminalStore     Terminals  { get; }
+    public WebFileBrowserStore  Files      { get; }
     public InstallLinkStore     InstallLinks { get; }
 
     WebStartup(WebHost host, OperatorStore operators, SessionStore sessions,
                BootstrapTokenIssuer bootstrap, RateLimiter rateLimit, SnapshotCache snapshots,
-               WebTerminalStore terminals, InstallLinkStore installLinks)
+               WebTerminalStore terminals, WebFileBrowserStore files, InstallLinkStore installLinks)
     {
         Host         = host;
         Operators    = operators;
@@ -38,6 +39,7 @@ public sealed class WebStartup : IDisposable
         RateLimit    = rateLimit;
         Snapshots    = snapshots;
         Terminals    = terminals;
+        Files        = files;
         InstallLinks = installLinks;
     }
 
@@ -52,6 +54,7 @@ public sealed class WebStartup : IDisposable
         var rateLimit = new RateLimiter();
         var snapshots = new SnapshotCache(engine);
         var terminals = new WebTerminalStore(engine);
+        var files = new WebFileBrowserStore(engine);
         var installLinks = new InstallLinkStore();
 
         var host = new WebHost();
@@ -76,6 +79,7 @@ public sealed class WebStartup : IDisposable
                 WebInstallApi.Map(app, engine, installLinks, sessions, ctx);
                 WebSnapshotApi.Map(app, engine, snapshots, sessions, ctx);
                 WebTerminalApi.Map(app, engine, terminals, sessions, ctx);
+                WebFilesApi.Map(app, engine, files, sessions, ctx);
                 WebOfflineApi.Map(app, engine, sessions, ctx);
                 WebApprovedApi.Map(app, engine, sessions, ctx);
                 WebAlertsApi.Map(app, engine.Alerts, sessions, ctx);
@@ -91,12 +95,13 @@ public sealed class WebStartup : IDisposable
             token => $"{scheme}://localhost:{host.Port}/setup?t={token}",
             engine.Log);
 
-        return new WebStartup(host, operators, sessions, bootstrap, rateLimit, snapshots, terminals, installLinks);
+        return new WebStartup(host, operators, sessions, bootstrap, rateLimit, snapshots, terminals, files, installLinks);
     }
 
     public void Dispose()
     {
         Terminals.Dispose();
+        Files.Dispose();
         Snapshots.Dispose();
         Host.DisposeAsync().AsTask().ConfigureAwait(false).GetAwaiter().GetResult();
         Bootstrap.Dispose();

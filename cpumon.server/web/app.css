@@ -967,6 +967,34 @@ button { cursor: pointer; }
   padding: 6px 10px 8px;
 }
 
+.files-toolbar { gap: 6px; flex-wrap: wrap; }
+.files-toolbar .modal-filter { min-width: 280px; }
+.files-table td.files-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+.files-table td.files-name a { color: var(--brt); text-decoration: none; }
+.files-table td.files-name a:hover { color: var(--cyan); text-decoration: underline; }
+.files-table td.files-name.files-dir a { color: var(--yel); }
+.files-table td.files-name.files-drive a { color: var(--grn); }
+.files-table .files-icon { display: inline-block; width: 18px; color: var(--dim); margin-right: 4px; }
+.files-table .files-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.files-table .files-actions .a-btn { padding: 2px 8px; font-size: 11px; }
+.files-uploader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--brd);
+  background: var(--bg-deep);
+  flex-wrap: wrap;
+}
+.files-uploader.drag { background: var(--card-hi); }
+.files-uploader .files-hint { color: var(--dim); font-size: 10.5px; }
+.files-uploader .files-progress {
+  margin-left: auto;
+  color: var(--cyan);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .terminal-pane {
   display: flex;
   flex-direction: column;

@@ -280,6 +280,7 @@ function buildCardActions(client, selected) {
   if (client.canTerminal)  inspect.push(action('Terminal',   () => openTerminalDialog(client.machineName)));
   if (client.canScreenshot) inspect.push(action('Screenshot', () => openScreenshotDialog(client.machineName)));
   if (client.canCpuDetail) inspect.push(action('CPU detail', () => openCpuDetailDialog(client.machineName)));
+  inspect.push(action('Files', () => openFilesDialog(client.machineName)));
 
   const interact = [
     action('PAW', () => post(`/api/clients/${m}/paw`)),
@@ -1267,6 +1268,345 @@ function openTerminalDialog(machine) {
       });
     },
   });
+}
+
+// ── files dialog ─────────────────────────────────────────────────
+function openFilesDialog(machine) {
+  openModal({
+    title: `Files · ${machine}`,
+    mount: async (body, ctx) => {
+      body.classList.add('flush');
+      body.innerHTML = `
+        <div class="modal-toolbar files-toolbar">
+          <button class="a-btn" data-k="up" type="button" title="Up one level">▲ Up</button>
+          <button class="a-btn" data-k="drives" type="button" title="Drives / root">⏏ Root</button>
+          <button class="a-btn" data-k="refresh" type="button" title="Refresh">↻</button>
+          <input class="modal-filter" data-k="path" type="text" placeholder="path" autocomplete="off" spellcheck="false">
+          <button class="a-btn" data-k="go" type="button">Go</button>
+          <span class="modal-status" data-k="status">opening…</span>
+        </div>
+        <div class="modal-scroll">
+          <table class="modal-table files-table">
+            <thead><tr>
+              <th>Name</th>
+              <th class="right">Size</th>
+              <th>Modified</th>
+              <th class="right">Actions</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="files-uploader" data-k="dropzone">
+          <input type="file" data-k="picker" hidden>
+          <button class="a-btn" data-k="upload" type="button">⇡ Upload…</button>
+          <button class="a-btn" data-k="mkdir" type="button">+ New folder</button>
+          <span class="files-hint">drag & drop into the table to upload here</span>
+          <span class="files-progress" data-k="progress" hidden></span>
+        </div>`;
+
+      const m       = encodeURIComponent(machine);
+      const pathBox = body.querySelector('[data-k="path"]');
+      const tbody   = body.querySelector('tbody');
+      const status  = body.querySelector('[data-k="status"]');
+      const progEl  = body.querySelector('[data-k="progress"]');
+      const dz      = body.querySelector('[data-k="dropzone"]');
+      const picker  = body.querySelector('[data-k="picker"]');
+      let sessionId = null;
+      let currentPath = '';
+      let lastListingSeq = 0;
+      let lastResultSeq  = 0;
+      let pollTimer = null;
+      let stopped = false;
+      let pendingPath = '';   // set when issuing a list; latched into currentPath when listing arrives
+
+      async function openSession() {
+        const r = await api(`/api/clients/${m}/files/open`, { method: 'POST' });
+        if (!r?.ok) {
+          status.textContent = r?.status === 404 ? 'client unavailable' : 'open failed';
+          status.classList.add('err');
+          return null;
+        }
+        const j = await r.json();
+        return j.sessionId;
+      }
+
+      async function nav(path) {
+        pendingPath = path ?? '';
+        pathBox.value = pendingPath;
+        status.textContent = 'loading…';
+        status.classList.remove('err');
+        const r = await api(`/api/clients/${m}/files/${sessionId}/list`, {
+          method: 'POST',
+          body: JSON.stringify({ path: pendingPath }),
+        });
+        if (r?.status === 404) { status.textContent = 'client unavailable'; status.classList.add('err'); }
+      }
+
+      function parent(path) {
+        if (!path) return '';
+        if (path.startsWith('/')) {
+          const trimmed = path.replace(/\/+$/, '');
+          if (trimmed.length <= 1) return '/';
+          const slash = trimmed.lastIndexOf('/');
+          return slash <= 0 ? '/' : trimmed.slice(0, slash);
+        }
+        const m1 = path.match(/^([a-zA-Z]:\\)$/);
+        if (m1) return '';
+        const trimmed = path.replace(/[\\/]+$/, '');
+        const slash = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'));
+        if (slash < 0) return '';
+        if (trimmed[slash - 1] === ':') return trimmed.slice(0, slash + 1);
+        return trimmed.slice(0, slash);
+      }
+
+      function joinPath(dir, name) {
+        if (!dir) return name;
+        if (dir.startsWith('/')) return dir === '/' ? '/' + name : dir.replace(/\/+$/, '') + '/' + name;
+        return dir.replace(/[\\/]+$/, '') + '\\' + name;
+      }
+
+      function fmtSize(b) {
+        if (!Number.isFinite(Number(b))) return '';
+        b = Number(b);
+        if (b < 1024) return `${b} B`;
+        if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
+        if (b < 1073741824) return `${(b / 1048576).toFixed(1)} MB`;
+        return `${(b / 1073741824).toFixed(2)} GB`;
+      }
+
+      function fmtTime(ms) {
+        const n = Number(ms);
+        if (!Number.isFinite(n) || n <= 0) return '';
+        return new Date(n).toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      }
+
+      function renderListing(listing) {
+        tbody.replaceChildren();
+        if (listing?.error) {
+          status.textContent = `error: ${listing.error}`;
+          status.classList.add('err');
+          return;
+        }
+        status.classList.remove('err');
+        currentPath = listing?.path ?? '';
+        pathBox.value = currentPath;
+        if (listing?.drives) {
+          for (const d of listing.drives) {
+            const used = d.ready ? `${d.freeGB?.toFixed?.(1) ?? d.freeGB}/${d.totalGB?.toFixed?.(1) ?? d.totalGB} GB free` : '';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td class="files-name files-drive"><span class="files-icon">⛁</span><a href="#">${escapeHtml(d.name)}</a> <span class="dim">${escapeHtml(d.label || '')}</span></td><td class="right mono">${escapeHtml(used)}</td><td>${escapeHtml(d.format || '')}</td><td class="right"></td>`;
+            tr.querySelector('a').addEventListener('click', (e) => { e.preventDefault(); nav(d.name); });
+            tbody.appendChild(tr);
+          }
+          status.textContent = `${listing.drives.length} drives`;
+          return;
+        }
+        const entries = (listing?.entries || []).slice();
+        entries.sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+        if (currentPath) {
+          const up = document.createElement('tr');
+          up.innerHTML = `<td class="files-name"><span class="files-icon">↰</span><a href="#">..</a></td><td></td><td></td><td class="right"></td>`;
+          up.querySelector('a').addEventListener('click', (e) => { e.preventDefault(); nav(parent(currentPath)); });
+          tbody.appendChild(up);
+        }
+        let dirs = 0, fileCount = 0;
+        for (const e of entries) {
+          const tr = document.createElement('tr');
+          const childPath = joinPath(currentPath, e.name);
+          const icon = e.isDir ? '▤' : '▢';
+          const nameCls = e.hidden ? 'dim' : (e.isDir ? 'files-dir' : '');
+          tr.innerHTML = `<td class="files-name ${nameCls}"><span class="files-icon">${icon}</span><a href="#">${escapeHtml(e.name)}</a></td>
+            <td class="right mono">${e.isDir ? '' : fmtSize(e.size)}</td>
+            <td class="mono dim">${escapeHtml(fmtTime(e.modified))}</td>
+            <td class="right files-actions"></td>`;
+          const link = tr.querySelector('a');
+          link.addEventListener('click', (ev) => { ev.preventDefault(); if (e.isDir) nav(childPath); else download(childPath, e.name); });
+          const cell = tr.querySelector('.files-actions');
+          if (!e.isDir) {
+            const dl = document.createElement('button');
+            dl.className = 'a-btn';
+            dl.textContent = '⇣';
+            dl.title = 'Download';
+            dl.addEventListener('click', () => download(childPath, e.name));
+            cell.appendChild(dl);
+          }
+          const rn = document.createElement('button');
+          rn.className = 'a-btn';
+          rn.textContent = '✎';
+          rn.title = 'Rename';
+          rn.addEventListener('click', () => renamePrompt(childPath, e.name));
+          cell.appendChild(rn);
+          const del = document.createElement('button');
+          del.className = 'a-btn danger';
+          del.textContent = '✕';
+          del.title = 'Delete';
+          del.addEventListener('click', () => deletePrompt(childPath, e.isDir));
+          cell.appendChild(del);
+          (e.isDir ? ++dirs : ++fileCount);
+          tbody.appendChild(tr);
+        }
+        status.textContent = `${dirs} folder · ${fileCount} files`;
+      }
+
+      async function tick() {
+        if (stopped || !sessionId) return;
+        try {
+          const r = await api(`/api/clients/${m}/files/${sessionId}`);
+          if (!r?.ok) {
+            if (r?.status === 404) {
+              status.textContent = 'session expired';
+              status.classList.add('err');
+              stopped = true;
+              return;
+            }
+          } else {
+            const snap = await r.json();
+            if (snap.listingSeq && snap.listingSeq !== lastListingSeq) {
+              lastListingSeq = snap.listingSeq;
+              renderListing(snap.listing);
+            }
+            if (snap.resultSeq && snap.resultSeq !== lastResultSeq) {
+              lastResultSeq = snap.resultSeq;
+              status.textContent = snap.result || '';
+              status.classList.toggle('err', !snap.resultOk);
+              if (snap.resultOk) setTimeout(() => nav(currentPath), 250);
+            }
+          }
+        } catch { /* keep polling */ }
+        if (!stopped) pollTimer = setTimeout(tick, 700);
+      }
+
+      async function renamePrompt(path, currentName) {
+        const next = prompt(`Rename "${currentName}" to:`, currentName);
+        if (!next || next === currentName) return;
+        await api(`/api/clients/${m}/files/${sessionId}/rename`, {
+          method: 'POST',
+          body: JSON.stringify({ path, newName: next }),
+        });
+      }
+
+      async function deletePrompt(path, isDir) {
+        if (!confirm(`Delete ${isDir ? 'folder (recursive)' : 'file'} "${path}"?`)) return;
+        await api(`/api/clients/${m}/files/${sessionId}/delete`, {
+          method: 'POST',
+          body: JSON.stringify({ path, recursive: !!isDir }),
+        });
+      }
+
+      async function mkdirPrompt() {
+        if (!currentPath) { status.textContent = 'navigate to a folder first'; status.classList.add('err'); return; }
+        const name = prompt('New folder name:');
+        if (!name) return;
+        await api(`/api/clients/${m}/files/${sessionId}/mkdir`, {
+          method: 'POST',
+          body: JSON.stringify({ path: joinPath(currentPath, name) }),
+        });
+      }
+
+      async function download(path, name) {
+        progEl.hidden = false;
+        progEl.textContent = `download ${name}: starting`;
+        const r = await api(`/api/clients/${m}/files/${sessionId}/download`, {
+          method: 'POST',
+          body: JSON.stringify({ path }),
+        });
+        if (!r?.ok) {
+          progEl.textContent = `download failed (${r?.status})`;
+          return;
+        }
+        const { transferId } = await r.json();
+        const dl = `/api/clients/${m}/files/${sessionId}/download/${encodeURIComponent(transferId)}`;
+        while (true) {
+          await new Promise(res => setTimeout(res, 400));
+          const probe = await api(dl);
+          if (probe?.status === 204) {
+            const snap = await fetchSnapshot();
+            const t = snap?.transfers?.find(x => x.transferId === transferId);
+            if (t) progEl.textContent = `download ${name}: ${fmtSize(t.received)}${t.total ? ' / ' + fmtSize(t.total) : ''}`;
+            continue;
+          }
+          if (probe?.status === 200) {
+            const blob = await probe.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = name;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            progEl.textContent = `download complete: ${name}`;
+            return;
+          }
+          progEl.textContent = `download failed (${probe?.status})`;
+          return;
+        }
+      }
+
+      async function fetchSnapshot() {
+        const r = await api(`/api/clients/${m}/files/${sessionId}`);
+        return r?.ok ? r.json() : null;
+      }
+
+      async function uploadFile(file) {
+        if (!currentPath) { status.textContent = 'navigate to a folder first'; status.classList.add('err'); return; }
+        progEl.hidden = false;
+        progEl.textContent = `upload ${file.name}: sending ${fmtSize(file.size)}`;
+        const url = `/api/clients/${m}/files/${sessionId}/upload?dest=${encodeURIComponent(currentPath)}&name=${encodeURIComponent(file.name)}`;
+        try {
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': csrf(), 'Content-Type': 'application/octet-stream', 'Content-Length': String(file.size) },
+            body: file,
+          });
+          if (r.status === 204) {
+            progEl.textContent = `upload complete: ${file.name}`;
+            setTimeout(() => nav(currentPath), 200);
+          } else {
+            const j = await r.json().catch(() => null);
+            progEl.textContent = j?.message || `upload failed (${r.status})`;
+          }
+        } catch (e) {
+          progEl.textContent = `upload error: ${e.message || e}`;
+        }
+      }
+
+      body.querySelector('[data-k="up"]').addEventListener('click', () => nav(parent(currentPath)));
+      body.querySelector('[data-k="drives"]').addEventListener('click', () => nav(''));
+      body.querySelector('[data-k="refresh"]').addEventListener('click', () => nav(currentPath));
+      body.querySelector('[data-k="go"]').addEventListener('click', () => nav(pathBox.value.trim()));
+      pathBox.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); nav(pathBox.value.trim()); } });
+      body.querySelector('[data-k="mkdir"]').addEventListener('click', mkdirPrompt);
+      body.querySelector('[data-k="upload"]').addEventListener('click', () => picker.click());
+      picker.addEventListener('change', () => {
+        const f = picker.files?.[0];
+        if (f) uploadFile(f);
+        picker.value = '';
+      });
+      ['dragenter', 'dragover'].forEach(t => dz.addEventListener(t, (e) => { e.preventDefault(); dz.classList.add('drag'); }));
+      ['dragleave', 'drop'].forEach(t => dz.addEventListener(t, (e) => { e.preventDefault(); dz.classList.remove('drag'); }));
+      dz.addEventListener('drop', (e) => {
+        const f = e.dataTransfer?.files?.[0];
+        if (f) uploadFile(f);
+      });
+
+      ctx.onClose(() => {
+        stopped = true;
+        if (pollTimer) clearTimeout(pollTimer);
+        if (sessionId) api(`/api/clients/${m}/files/${sessionId}/close`, { method: 'POST' }).catch(() => {});
+      });
+
+      sessionId = await openSession();
+      if (!sessionId) return;
+      status.textContent = 'ready';
+      tick();
+      nav('');
+    },
+  });
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 // ── alerts dialog ────────────────────────────────────────────────

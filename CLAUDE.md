@@ -86,9 +86,16 @@ cpumon.server/
   versioning.cs            — Versioning.TryNormalize/IsOlder/IsNewer: strips leading 'v',
                              keeps numeric prefix, pads to three parts. Used by
                              UpdateChecker.IsNewer and ServerEngine.ClientNeedsUpdate.
+  webfilesapi.cs           — WebFileBrowserStore + WebFilesApi for the browser-side file
+                             browser. Subscribes to ServerEngine.FileListingUpdated /
+                             FileChunkUpdated / FileResultUpdated, keeps per-tab session
+                             state (listing snapshot, result, active transfers), stages
+                             downloads to %ProgramData%\CpuMon\webdl\<sessionId>\, and
+                             chunks browser-side uploads into file_upload_chunk sends.
+                             200 MB cap per transfer.
 
 cpumon.tests/
-  Program.cs — 19 smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
+  Program.cs — smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail
               TestReceiveChunkCompletesAndValidatesOffsets, TestReceiveChunkReplacesDuplicateTransfer,
               TestLineLengthLimitedStream, TestUpdateIntegrity,
               TestSendPacerWakesOnModeChange, TestSendPacerWakesOnDemand,
@@ -197,7 +204,7 @@ cpumon.linux/
 
 ## Release checklist
 
-1. `.\build.ps1` — runs the 19 smoke tests and publishes; versioned zips for client/server/linux are created automatically in `dist\` (filename pattern `cpumon-{client|server|linux}-X.Y.Z.zip`), along with `dist\SHA256SUMS-X.Y.Z.txt` (sha256sum-compatible format, lowercase hash, two spaces, LF line endings, no BOM).
+1. `.\build.ps1` — runs the smoke tests and publishes; versioned zips for client/server/linux are created automatically in `dist\` (filename pattern `cpumon-{client|server|linux}-X.Y.Z.zip`), along with `dist\SHA256SUMS-X.Y.Z.txt` (sha256sum-compatible format, lowercase hash, two spaces, LF line endings, no BOM).
 2. Commit, push, tag `vX.Y.Z` (matches the version printed by build.ps1), push tag.
 3. `gh release create vX.Y.Z dist\cpumon-client-X.Y.Z.zip dist\cpumon-server-X.Y.Z.zip dist\cpumon-linux-X.Y.Z.zip dist\SHA256SUMS-X.Y.Z.txt --title "vX.Y.Z - <one-line>" --notes-file <notes.md> --latest`.
 4. Existing v1.0.128+ servers will pick the new release up within 6 hours and surface the "↑ Update vX.Y.Z" button.
