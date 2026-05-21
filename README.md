@@ -1,8 +1,8 @@
 # cpumon
 
-A lightweight remote management and monitoring tool for home networks and small businesses. Monitor CPU, RAM, and disk in real time; open terminals, browse files, stream a remote desktop, and manage Windows services — all over a TLS connection from a single console window.
+A lightweight remote management and monitoring tool for home networks and small businesses. Monitor CPU, RAM, and disk in real time; open terminals, browse files, stream a remote desktop, and manage Windows services — all over a TLS connection from the WinForms console or a browser.
 
-Windows server · Windows clients · Linux clients (Python)
+Windows server · Windows clients · Linux clients (Python) · Optional web dashboard
 
 ---
 
@@ -26,9 +26,11 @@ Windows server · Windows clients · Linux clients (Python)
 - **Auto-discovery** — clients find the server automatically via UDP beacon; direct IP override available
 - **Per-client mode control** — server switches Windows clients between 1-second live reporting and idle keepalive pings based on whether the card is expanded; Linux clients use monitor mode while collapsed to avoid stale UI flicker
 - **Auto-update for clients** — server can push a new Windows client exe; service applies it via a scheduled task. Linux clients can update via `install.sh update` from a release zip or by pushing `cpumon.py` / `cpumon-linux-*.zip` from the server.
-- **GitHub update check** — server polls GitHub releases every 6 hours and surfaces a "↑ Update vX.Y.Z" button in the status bar when a newer release is available
+- **GitHub update check** — server polls GitHub releases every 6 hours and surfaces a "↑ Update vX.Y.Z" button in the status bar when a newer release is available. Releases are staged and SHA256-verified locally; once staged the button switches to "📁 vX.Y.Z ready" and opens the folder.
+- **Web dashboard (optional)** — start the server with `--web` to expose a browser UI on port 47202. Operator login is Argon2id-hashed and lives in `operator.json`; first run prints a one-shot bootstrap URL to claim the operator account. The dashboard streams over websockets and covers live cards with expand/collapse, per-client actions (restart, shutdown, send message, wake/forget), process/services/events/sysinfo/CPU-detail/screenshot inspection, in-browser terminal sessions, push update, alerts and approval management, the rolling log, and one-shot install-link issuance for new agents.
 - **Light / dark theme** — toggle from the status bar; all custom GDI rendering refreshes immediately
-- **Close-to-tray (server)** — closing the server window hides it to the systray and keeps it running; double-click the tray icon to restore. Minimize (─) goes to the taskbar as normal. Tray right-click menu offers Show / Exit.
+- **Close-to-tray (server)** — closing the server window hides it to the systray and keeps it running; double-click the tray icon to restore. Minimize (─) goes to the taskbar as normal. Tray right-click menu offers Show, Startup Options… (edit `server_settings.json` defaults), and Exit.
+- **Persistent server startup options** — Tray → Startup Options… saves defaults (hide-to-tray, web UI enabled/port/TLS, behind-proxy, broadcast, new-UI spike) to `%ProgramData%\CpuMon\server_settings.json`. Command-line flags still override the persisted defaults for any given launch.
 - **Branded application icon** — server and client exes embed a green/blue cpumon hex glyph (multi-size, generated programmatically)
 
 ---
@@ -47,9 +49,10 @@ cpumon.linux     — Linux monitored machine agent (Python 3.8+)
 | Channel | Protocol | Purpose |
 |---------|----------|---------|
 | UDP port 47200 | Broadcast beacon | Clients auto-discover the server; includes cert thumbprint |
-| TCP port 47201 | TLS (self-signed ECDSA) | All control traffic |
+| TCP port 47201 | TLS (self-signed ECDSA) | Agent control traffic |
+| TCP port 47202 | HTTPS (Kestrel, optional) | Web dashboard — only bound when started with `--web` |
 
-Messages are newline-delimited JSON: `ClientMessage` (client → server) and `ServerCommand` (server → client). All readers are wrapped in a 4 MB per-line limit to prevent memory exhaustion from malformed messages.
+Messages on the agent channel are newline-delimited JSON: `ClientMessage` (client → server) and `ServerCommand` (server → client). All readers are wrapped in a 4 MB per-line limit to prevent memory exhaustion from malformed messages. The cpumon port range is `47200–47299`.
 
 ### Auth flow
 
@@ -80,6 +83,19 @@ The service launches an agent process in the interactive user session automatica
 ### PAW relay
 
 When a client is granted PAW status the server relays every incoming report to it and routes commands from it to the target clients. The PAW client shows a `PawDashboardForm` with the same expand/collapse cards, terminals, file browser, and RDP viewer as the server. Commands are validated against an explicit allowlist and checked for replay (nonce deduplication + 60-second IssuedAt window).
+
+### Web dashboard
+
+Started with `--web` (or by enabling the Web UI in Tray → Startup Options…). The host runs in-process on Kestrel and shares the same `ServerEngine` + `ServerDashboardController` as the WinForms console; the engine is the single source of truth. State updates are pushed over `/api/ws/state` and `/api/ws/log`. On-demand snapshots (process list, services, events, sysinfo, CPU detail, screenshot) are coalesced through `SnapshotCache` with per-kind TTLs so multiple browser tabs cannot saturate slow agents.
+
+Authentication is operator-password based:
+- Argon2id-hashed credentials live in `operator.json` (one operator account, created via bootstrap URL).
+- On first start with no operator, the server prints and surfaces a one-shot bootstrap URL containing a single-use token; visiting it opens the setup page to set a username and password.
+- Logins issue a session cookie and a CSRF token; mutating endpoints require both. Five failed logins from one IP rate-limits further attempts.
+
+The web file map (`cpumon.server/web*.cs` and `cpumon.server/web/`) covers: static assets (`webstaticapi`, `web/index.html`, `web/login.html`, `web/app.css`, `web/app.js`, self-hosted IBM Plex Mono + Major Mono Display fonts), auth and sessions (`webauth*`, `websessions.cs`, `websetuppage.cs`, `webratelimit.cs`), dashboard state (`webdashboardapi.cs`, `websessiondashboard.cs`, `websocketapi.cs`), per-client actions (`webclientactionsapi.cs`), snapshot inspection (`websnapshotapi.cs`, `snapshotcache.cs`), terminals (`webterminalapi.cs`), offline/approved/alerts/log management (`weboffapi.cs`, `webapprovedapi.cs`, `webalertsapi.cs`, `weblogapi.cs`), update pushes (`webupdatesapi.cs`), and one-shot install links (`webinstallapi.cs`, `installlinkstore.cs`).
+
+Install links bundle a copy of the staged client release + the pinned server thumbprint and IP into a short URL the operator can hand to a new machine; the link is one-shot and expires (default 24 h, max 7 d).
 
 ---
 
@@ -129,10 +145,21 @@ The Linux client is pure Python — no build step needed.
 cpumon.server.exe
 ```
 
-The window shows the invite token. Keep this window open — all client cards appear here.
+The window shows the invite token. Keep this window open — all client cards appear here. Closing the window hides to the systray (the server keeps running); right-click the tray icon for Show / Startup Options… / Exit.
 
-Options:
-- `--no-broadcast` — disable UDP beacon (clients must connect via `--server-ip <ip>`)
+Command-line flags (override anything saved in `server_settings.json`):
+
+| Flag | Purpose |
+|------|---------|
+| `--no-broadcast` / `--broadcast` | Disable / re-enable the UDP discovery beacon (clients must then connect via `--server-ip <ip>`) |
+| `--web` / `--no-web` | Start (or skip) the web dashboard alongside the WinForms console |
+| `--web-port <n>` | Override the web port (default `47202`) |
+| `--web-tls` / `--web-no-tls` | Toggle TLS on the web port (default on) |
+| `--web-behind-proxy` / `--web-not-behind-proxy` | Respect / ignore `X-Forwarded-For` and emit `Secure` cookies for an upstream HTTPS reverse proxy |
+| `--systray` (`--tray`) / `--no-systray` (`--no-tray`) | Start minimized to the systray (or force the window visible) |
+| `--new-ui` / `--old-ui` | Switch between the legacy custom-painted dashboard and the experimental standard-WinForms spike (`ServerForm2`) |
+
+The first time the web UI is enabled it prints a one-shot bootstrap URL (and shows it in a modal). Open the URL on the machine the server runs on to set a username + password; subsequent logins use the regular login page.
 
 ### Windows client (monitored machine)
 
@@ -209,13 +236,33 @@ cpumon/
 │   ├── protocol.cs        — Proto constants, ClientMessage, ServerCommand, auth stores, CLog, LogSink, AgentIpc
 │   ├── services.cs        — RdpCaptureSession, CmdExec, TerminalSession, FileBrowserService, RemoteClient, …
 │   ├── ui.cs              — RdpViewerDialog, TerminalDialog, FileBrowserDialog, Th (theme), BorderlessForm
+│   ├── dwmdark.cs         — DWM dark-mode title-bar shim for the WinForms host
 │   └── cpumon.shared.csproj
 ├── cpumon.server/
 │   ├── serverengine.cs    — ServerEngine: server-side state, protocol loops, PAW relay, approval flow (no WinForms dependency)
-│   ├── serverform.cs      — server UI: drawing, input, dialog ownership; subscribes to engine events
+│   ├── serverform.cs      — legacy custom-painted dashboard; subscribes to engine events
+│   ├── serverform2.cs     — experimental --new-ui standard-WinForms spike over the same engine/controller
+│   ├── dashboardstate.cs  — UI-neutral DTO snapshots projected from engine state
+│   ├── dashboardcontroller.cs — UI-neutral user actions (selection, OS filter, sort, dialogs)
+│   ├── serverplatformservices.cs — IServerPlatformServices + WinForms implementation
+│   ├── serverstartupsettings.cs — persisted server defaults + Startup Options dialog
 │   ├── serverdialogs.cs   — ApprovedClientsDialog, ProcDialog, SysInfoDialog, ServicesDialog, EventViewerDialog
 │   ├── email.cs           — AlertConfig, AlertService, AlertConfigDialog (SMTP threshold notifications)
 │   ├── updatechecker.cs   — UpdateChecker + ReleaseInfo (GitHub releases polling)
+│   ├── releasestager.cs   — downloads and SHA256-verifies release zips into %ProgramData%\CpuMon\releases\
+│   ├── linuxupdatepayload.cs — validates a .py or release zip before push to a Linux client
+│   ├── versioning.cs      — TryNormalize / IsNewer / IsOlder used for cross-minor comparisons
+│   ├── snapshotcache.cs   — per-kind TTLs for process/services/events/sysinfo/cpu-detail/screenshot snapshots
+│   ├── installlinkstore.cs — one-shot install link issuance
+│   ├── webhost.cs         — Kestrel host, TLS cert loading, security headers, /api/healthz
+│   ├── webstartup.cs      — composes every web module onto an engine+controller+platform
+│   ├── webauth.cs / webauthapi.cs / websessions.cs / webratelimit.cs — operator auth, sessions, CSRF, rate limiting
+│   ├── webbootstrap.cs / websetuppage.cs — bootstrap token + first-run setup page
+│   ├── webdashboardapi.cs / websessiondashboard.cs / websocketapi.cs — dashboard state + per-session view + live websockets
+│   ├── webclientactionsapi.cs / webterminalapi.cs / webupdatesapi.cs — per-client actions, browser terminals, push update
+│   ├── websnapshotapi.cs / weboffapi.cs / webapprovedapi.cs / webalertsapi.cs / weblogapi.cs — snapshots, offline, approved clients, alerts, log
+│   ├── webinstallapi.cs / webstaticapi.cs / webplatformservices.cs — install links, static assets, platform shim
+│   ├── web/               — index.html / login.html / app.css / app.js + self-hosted fonts (embedded as resources)
 │   ├── program.cs
 │   └── cpumon.server.csproj
 ├── cpumon.client/
@@ -226,7 +273,7 @@ cpumon/
 │   ├── program.cs
 │   └── cpumon.client.csproj
 ├── cpumon.tests/
-│   ├── Program.cs         — 19 smoke tests run automatically by build.ps1 before publish
+│   ├── Program.cs         — 125 smoke tests run automatically by build.ps1 before publish
 │   └── cpumon.tests.csproj
 ├── tools/
 │   └── iconGen/           — one-shot console tool that calls Th.MakeHexIconBytes(Color) and
@@ -236,6 +283,7 @@ cpumon/
 │   ├── cpumon.py          — Python client (discovery, TLS/TOFU, auth, terminal, file browser, systemctl)
 │   ├── install.sh         — Debian/Ubuntu installer; supports `update` mode for in-place upgrades
 │   └── requirements.txt
+├── docs/web-ui/           — ADRs and design notes for the web dashboard (frontend stack, auth, TLS, port, proxy, update delivery)
 ├── build.ps1              — runs smoke tests, publishes client + server to dist/, packages versioned zips
 ├── install.ps1            — PowerShell install/uninstall helper
 └── cpumon.slnx
@@ -245,10 +293,14 @@ Runtime files (created automatically):
 
 | File | Location | Contents |
 |------|----------|---------|
-| `cpumon.pfx` | `%ProgramData%\CpuMon\` | Auto-generated TLS certificate (ECDSA P-256) |
+| `cpumon.pfx` | `%ProgramData%\CpuMon\` | Auto-generated TLS certificate (ECDSA P-256) — used for both the agent listener and the web host unless `webcert.pfx` is present |
+| `webcert.pfx` | `%ProgramData%\CpuMon\` (optional) | Optional dedicated web TLS certificate; loaded in preference to `cpumon.pfx` when present |
 | `approved_clients.json` | `%ProgramData%\CpuMon\` | Approved client keys (DPAPI-encrypted) and metadata (alias, MAC, PAW flag, salt) |
 | `client_auth.json` | `%ProgramData%\CpuMon\` | Saved auth key and pinned server thumbprint (DPAPI-encrypted) |
 | `alert_config.json` | `%ProgramData%\CpuMon\` | Threshold alert thresholds and SMTP settings |
+| `operator.json` | `%ProgramData%\CpuMon\` | Argon2id-hashed web operator credentials (created via the bootstrap URL on first run with `--web`) |
+| `server_settings.json` | `%ProgramData%\CpuMon\` | Persisted server startup defaults (hide-to-tray, web UI on/off/port/TLS/behind-proxy, broadcast, new-UI) — written from Tray → Startup Options… |
+| `releases\vX.Y.Z\` | `%ProgramData%\CpuMon\` | Staged release artifacts (client/server/linux zips extracted, SHA256-verified, `stage.ok` marker) |
 | `cpumon_server.log` | Server working dir | Rolling on-screen log entries (2 MB cap) |
 | `/var/lib/cpumon/client_auth.json` | Linux client | Same as above; chmod 600 |
 | `cpumon-YYYY-MM-DD.jsonl` | `%ProgramData%\CpuMon\logs\` | Structured diagnostics for server/client/service paths (10 MB cap, auto-rotates) |
@@ -269,3 +321,5 @@ Set `CPUMON_LOG_LEVEL=debug` before starting a process if you need more verbose 
 - PAW status grants broad relay access — assign it only to machines you fully control.
 - The named pipe between service and agent is secured by verifying the connecting process exe path via `GetNamedPipeClientProcessId`, not a shared secret on the command line.
 - If the server certificate is replaced (e.g. after reinstalling), run `cpumon.client.exe --reset-auth` on each Windows client to clear its saved key and pinned thumbprint. If needed, manually delete `client_auth.json`; Linux clients use `/var/lib/cpumon/client_auth.json`.
+- **Web dashboard auth:** operator credentials are stored in `operator.json` as an Argon2id hash; the bootstrap token used to claim the account is single-use, 10-minute-bounded, and never logged. Sessions use HTTP-only sliding-expiry cookies and a paired CSRF token; mutating endpoints require both. Five failed logins from one IP trip a rate limiter. Install links are one-shot, expire (24 h default, 7 d max), and the bundled cert thumbprint + invite token are kept in process memory only — never persisted to disk.
+- The web host binds `0.0.0.0` by default. Restrict access via firewall, bind explicitly with a reverse proxy (`--web-behind-proxy --web-no-tls` + an HTTPS-terminating proxy), or leave TLS on with the self-signed cert and trust it on operator machines.
