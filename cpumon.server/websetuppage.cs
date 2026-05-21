@@ -1,16 +1,16 @@
 using System.Net;
 
 // Minimal first-run HTML page surfaced at GET /setup?t=<bootstrapToken>.
-// Phase 1 doesn't include the SPA yet (Phase 3); this is the one page the
-// operator hits during initial provisioning. Inline CSS so there are no
-// asset routes to mount; the page POSTs JSON to /api/auth/bootstrap.
+// The one page the operator hits during initial provisioning. Inline CSS so
+// there are no asset routes to mount; the page POSTs JSON to /api/auth/bootstrap
+// and on success the browser is redirected to the dashboard at /.
 public static class WebSetupPage
 {
     public static string Render(bool operatorExists, string token)
     {
         if (operatorExists)
             return Wrap("Setup complete",
-                "<p>The operator account already exists. The SPA login arrives in Phase 3 — until then, drive the API directly via <code>POST /api/auth/login</code>.</p>");
+                "<p>The operator account already exists. <a href=\"/login\">Sign in here</a> to open the dashboard.</p>");
 
         if (string.IsNullOrWhiteSpace(token))
             return Wrap("Missing setup token",
@@ -54,8 +54,9 @@ document.getElementById('f').addEventListener('submit', async (ev) => {{
     }});
     if (r.status === 204) {{
       msg.className = 'msg ok';
-      msg.textContent = 'Operator account created. Cookies issued. The SPA arrives in Phase 3 — until then your session cookie works against /api/*.';
+      msg.textContent = 'Operator account created. Opening dashboard…';
       f.querySelector('button').disabled = true;
+      setTimeout(() => {{ window.location = '/'; }}, 600);
       return;
     }}
     const err = await r.json().catch(() => null);

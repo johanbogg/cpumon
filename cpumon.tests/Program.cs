@@ -1036,7 +1036,7 @@ internal static class Program
             Assert(GetHeader(resp, "Referrer-Policy") == "no-referrer", "Referrer-Policy should be no-referrer");
             var csp = GetHeader(resp, "Content-Security-Policy");
             Assert(csp.Contains("default-src 'self'"), "CSP should restrict default-src to self");
-            Assert(csp.Contains("script-src 'self' 'unsafe-inline'"), "script-src must allow inline so /setup's bootstrap form works; tighten with nonces in Phase 3");
+            Assert(csp.Contains("script-src 'self' 'unsafe-inline'"), "script-src must allow inline so /setup's bootstrap form works");
             Assert(GetHeader(resp, "Server") == "cpumon/hdrtest", "Server header should embed ServerVersion");
             Assert(GetHeader(resp, "Strict-Transport-Security") == "", "HSTS must NOT be set in plain-HTTP mode");
         }
@@ -1760,6 +1760,8 @@ internal static class Program
         Assert(formBody.Contains("method=\"post\""), "form must POST so a no-JS fallback can't leak credentials into a URL");
         Assert(formBody.Contains("action=\"/api/auth/bootstrap\""), "form action must target the bootstrap endpoint, not the current URL");
         Assert(formBody.Contains("autocomplete=\"off\""), "form should opt out of browser autofill");
+        Assert(formBody.Contains("window.location = '/'"), "success branch must redirect to the dashboard once cookies are issued");
+        Assert(!formBody.Contains("Phase 3"), "setup page must not reference the obsolete 'Phase 3' SPA placeholder");
 
         h.Operators.Create("admin", "correctpassword12");
         using var done = h.Get("/setup?t=ABCDEF1234567890");
@@ -1767,6 +1769,8 @@ internal static class Program
         var doneBody = h.Body(done);
         Assert(doneBody.Contains("Setup complete"), "post-bootstrap branch should say setup is done");
         Assert(!doneBody.Contains("<form"), "post-bootstrap branch must not render a form");
+        Assert(doneBody.Contains("href=\"/login\""), "post-bootstrap branch should link the operator to /login");
+        Assert(!doneBody.Contains("Phase 3"), "post-bootstrap branch must not reference the obsolete 'Phase 3' SPA placeholder");
     }
 
     static void TestWebStartupComposesAllRoutesAndSurfacesBootstrapUrl()
