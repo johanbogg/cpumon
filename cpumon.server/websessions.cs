@@ -81,6 +81,22 @@ public sealed class SessionStore : IDisposable
     public bool Invalidate(string sessionId)
         => !string.IsNullOrEmpty(sessionId) && _sessions.TryRemove(sessionId, out _);
 
+    /// <summary>Kicks every session that belongs to the named operator. Called when a user
+    /// is deleted or has their password reset from outside the web flow, so a stale browser
+    /// session cannot continue to act under that identity.</summary>
+    public int InvalidateByUsername(string username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return 0;
+        var matches = _sessions
+            .Where(kv => string.Equals(kv.Value.Username, username, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => kv.Key)
+            .ToList();
+        int removed = 0;
+        foreach (var id in matches)
+            if (_sessions.TryRemove(id, out _)) removed++;
+        return removed;
+    }
+
     /// <summary>Removes a machine name from every session's selection and expansion sets.</summary>
     public void ForgetMachineFromAllSessions(string machineName)
     {

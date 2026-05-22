@@ -68,6 +68,11 @@ internal static class Program
             TestOperatorStoreCreateAndVerify();
             TestOperatorStorePersistsAcrossInstances();
             TestOperatorStoreRejectsDoubleCreate();
+            TestOperatorStoreSupportsMultipleUsers();
+            TestOperatorStoreUsernameLookupIsCaseInsensitive();
+            TestOperatorStoreRemoveLastUserBlocked();
+            TestOperatorStoreChangePasswordUpdatesHashAndTimestamp();
+            TestOperatorStoreLegacyFileMigratesOnLoad();
             TestArgon2HelperRoundTripAndRejectsTamper();
             TestBootstrapTokenSingleUseAndShape();
             TestBootstrapTokenExpiryClearsAndRejects();
@@ -75,6 +80,8 @@ internal static class Program
             TestSessionStoreSlidingExpiryRejectsStale();
             TestSessionStoreTouchRefreshesLastUsed();
             TestSessionStoreInvalidateRemoves();
+            TestSessionStoreInvalidateByUsername();
+            TestBootstrapTokenIssuerClearStopsAcceptance();
             TestSessionStorePruneRemovesExpiredEntries();
             TestWebHostStartsAndStopsCleanly();
             TestWebHostHealthzReturnsJson();
@@ -399,7 +406,7 @@ internal static class Program
 
     static void TestServerEngineInitialState()
     {
-        using var engine = new ServerEngine(noBroadcast: true);
+        using var engine = new ServerEngine(noBroadcast: true, logFile: null);
         Assert(engine.BroadcastDisabled, "BroadcastDisabled flag should reflect ctor argument");
         Assert(!string.IsNullOrEmpty(engine.Token), "engine should generate a token at construction");
         Assert(engine.ConnectionCount == 0, "connection count should start at zero");
@@ -410,7 +417,7 @@ internal static class Program
 
     static void TestServerEngineRegenerateToken()
     {
-        using var engine = new ServerEngine(noBroadcast: true);
+        using var engine = new ServerEngine(noBroadcast: true, logFile: null);
         string original = engine.Token;
         DateTime originalAt = engine.TokenIssuedAt;
         Thread.Sleep(20);
@@ -497,7 +504,7 @@ internal static class Program
 
     static void TestServerEnginePendingApprovalMissing()
     {
-        using var engine = new ServerEngine(noBroadcast: true);
+        using var engine = new ServerEngine(noBroadcast: true, logFile: null);
         Assert(!engine.ApprovePending("no-such-machine"), "approving unknown machine should return false");
         Assert(!engine.RejectPending("no-such-machine"), "rejecting unknown machine should return false");
         Assert(!engine.RequestRestart("no-such-machine"), "restart on unknown machine should return false");
@@ -507,7 +514,7 @@ internal static class Program
 
     static void TestDashboardStateInitialState()
     {
-        using var engine = new ServerEngine(noBroadcast: true);
+        using var engine = new ServerEngine(noBroadcast: true, logFile: null);
         var builder = new ServerDashboardStateBuilder(engine);
         var state = builder.Build(Array.Empty<string>(), "all", "name");
 
@@ -523,7 +530,7 @@ internal static class Program
 
     static void TestDashboardStatePendingApprovalsSorted()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         engine.PendingApprovals["zeta"] = new PendingClientApproval
         {
             MachineName = "zeta",
@@ -550,7 +557,7 @@ internal static class Program
 
     static void TestDashboardStateWaitingClientsStayVisibleUnderOsFilters()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         var waiting = FakeRemoteClient();
         waiting.MachineName = "waiting-client";
         waiting.ClientVersion = Proto.AppVersion;
@@ -564,7 +571,7 @@ internal static class Program
 
     static void TestDashboardStateClientProjectionFlags()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         var linux = FakeRemoteClient();
         linux.MachineName = "linux-box";
         linux.ClientVersion = "0.0.1-linux";
@@ -587,7 +594,7 @@ internal static class Program
 
     static void TestDashboardStateOsSortPlacesWindowsBeforeLinuxAndKeepsNameOrder()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         AddReportedClient(engine, "z-win", "Microsoft Windows 11", Proto.AppVersion);
         AddReportedClient(engine, "a-lnx", "Linux Debian", "0.0.1-linux");
         AddReportedClient(engine, "m-win", "Microsoft Windows 10", Proto.AppVersion);
@@ -602,7 +609,7 @@ internal static class Program
 
     static void TestDashboardStateCapabilityFlagsForLinuxAndWindows()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         AddReportedClient(engine, "win-box", "Microsoft Windows 11", Proto.AppVersion);
         AddReportedClient(engine, "linux-box", "Linux Debian", "0.0.1-linux");
 
@@ -629,7 +636,7 @@ internal static class Program
 
     static void TestDashboardControllerOwnsFiltersSortAndSelection()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         var linux = FakeRemoteClient();
         linux.MachineName = "linux-box";
         linux.ClientVersion = "0.0.1-linux";
@@ -670,7 +677,7 @@ internal static class Program
 
     static void TestDashboardControllerSelectAllVisibleRespectsOsFilter()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         AddReportedClient(engine, "win-box", "Microsoft Windows 11", Proto.AppVersion);
         AddReportedClient(engine, "linux-box", "Linux Debian", "0.0.1-linux");
 
@@ -684,7 +691,7 @@ internal static class Program
 
     static void TestDashboardControllerSelectOutdatedVisibleRespectsVersionComparison()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         AddReportedClient(engine, "old-box", "Microsoft Windows 11", "0.0.1");
         AddReportedClient(engine, "current-box", "Microsoft Windows 11", Proto.AppVersion);
         AddReportedClient(engine, "future-box", "Microsoft Windows 11", "9.9.9");
@@ -697,7 +704,7 @@ internal static class Program
 
     static void TestDashboardControllerPurgeStaleClientsRemovesAndDeselects()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         var fresh = AddReportedClient(engine, "fresh", "Microsoft Windows 11", Proto.AppVersion);
         fresh.LastSeen = DateTime.UtcNow;
         var stale = AddReportedClient(engine, "stale", "Microsoft Windows 11", Proto.AppVersion);
@@ -714,7 +721,7 @@ internal static class Program
 
     static void TestDashboardControllerPendingDelegatesReturnFalseForMissing()
     {
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), new FakeServerPlatformServices());
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true, logFile: null), new FakeServerPlatformServices());
         Assert(!controller.ApprovePending("no-such-machine"), "controller approving missing pending client should return false");
         Assert(!controller.RejectPending("no-such-machine"), "controller rejecting missing pending client should return false");
     }
@@ -722,7 +729,7 @@ internal static class Program
     static void TestDashboardControllerRestartRaisesWarningConfirmation()
     {
         var platform = new FakeServerPlatformServices { ConfirmReturn = false };
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true, logFile: null), platform);
         controller.RestartClient("box-a");
         Assert(platform.LastConfirm != null, "RestartClient should route confirmation through platform services");
         Assert(platform.LastConfirm!.Value.Kind == DashboardConfirmKind.Warning, "restart confirmation should be a warning");
@@ -732,7 +739,7 @@ internal static class Program
     static void TestDashboardControllerForgetClientConfirmationInvokesEngineOnConfirm()
     {
         var platform = new FakeServerPlatformServices { ConfirmReturn = false };
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true, logFile: null), platform);
         controller.ForgetClient("doomed-box");
         Assert(platform.LastConfirm != null, "ForgetClient should route confirmation through platform services");
         Assert(platform.LastConfirm!.Value.Kind == DashboardConfirmKind.Question, "forget confirmation should default to question");
@@ -741,7 +748,7 @@ internal static class Program
 
     static void TestDashboardControllerCopyTokenRaisesClipboardEvent()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         var platform = new FakeServerPlatformServices();
         var controller = new ServerDashboardController(engine, platform);
         controller.CopyToken();
@@ -750,7 +757,7 @@ internal static class Program
 
     static void TestDashboardControllerUsesPlatformServicesWhenProvided()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         var linux = FakeRemoteClient();
         linux.MachineName = "lnx";
         linux.LastReport = new MachineReport { MachineName = linux.MachineName, OsVersion = "Linux Debian" };
@@ -802,7 +809,7 @@ internal static class Program
 
     static void TestDashboardControllerToggleExpandedFlipsClient()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         var client = FakeRemoteClient();
         client.MachineName = "card-box";
         client.Expanded = false;
@@ -817,7 +824,7 @@ internal static class Program
 
     static void TestDashboardControllerPushUpdatePicksLinuxFilterForLinuxClient()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         var linux = FakeRemoteClient();
         linux.MachineName = "lnx";
         linux.LastReport = new MachineReport { MachineName = linux.MachineName, OsVersion = "Linux Debian" };
@@ -833,7 +840,7 @@ internal static class Program
     static void TestDashboardControllerOpenTerminalCarriesShellArgument()
     {
         var platform = new FakeServerPlatformServices();
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true, logFile: null), platform);
         controller.OpenTerminal("shell-box", "powershell");
         Assert(platform.ShowTerminalCall != null, "OpenTerminal should route through platform services");
         Assert(platform.ShowTerminalCall!.Value.Machine == "shell-box", "terminal call should carry the machine name");
@@ -842,7 +849,7 @@ internal static class Program
 
     static void TestDashboardControllerSendUserMessageDropsBlankPrompt()
     {
-        var engine = new ServerEngine(noBroadcast: true);
+        var engine = new ServerEngine(noBroadcast: true, logFile: null);
         var platform = new FakeServerPlatformServices { PromptUserMessageReturn = "  " };
         var controller = new ServerDashboardController(engine, platform);
         controller.SendUserMessage("box");
@@ -856,7 +863,7 @@ internal static class Program
     static void TestDashboardControllerSetOfflineMacRoutesPromptToEngine()
     {
         var platform = new FakeServerPlatformServices();
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true, logFile: null), platform);
         controller.RequestSetOfflineMac("offline-box");
         Assert(platform.LastPrompt != null, "RequestSetOfflineMac should route prompt through platform services");
         Assert(platform.LastPrompt!.Value.Title == "Set MAC", "prompt should be titled Set MAC");
@@ -894,7 +901,91 @@ internal static class Program
         var store = new OperatorStore(Path.Combine(td.Path, "operator.json"));
         store.Create("admin", "firstpasswordfirst");
         AssertThrows<InvalidOperationException>(() => store.Create("admin", "secondpassword12"),
-            "creating an operator twice in the same instance should throw");
+            "creating an operator with a duplicate username should throw");
+        AssertThrows<InvalidOperationException>(() => store.Create("ADMIN", "thirdpassword123"),
+            "duplicate-username check must be case-insensitive");
+    }
+
+    static void TestOperatorStoreSupportsMultipleUsers()
+    {
+        using var td = new TempDir();
+        var path = Path.Combine(td.Path, "operator.json");
+        var store = new OperatorStore(path);
+        store.Create("alice", "alicepassword12");
+        store.Create("bob",   "bobpassword123456");
+        Assert(store.Count == 2, "store should hold both operators");
+        Assert(store.Verify("alice", "alicepassword12"), "alice should verify");
+        Assert(store.Verify("bob",   "bobpassword123456"), "bob should verify");
+        Assert(!store.Verify("alice", "bobpassword123456"), "cross-account passwords must not verify");
+
+        var fresh = new OperatorStore(path);
+        Assert(fresh.Count == 2, "both operators should persist across instances");
+        Assert(fresh.Verify("bob", "bobpassword123456"), "reloaded bob should verify");
+    }
+
+    static void TestOperatorStoreUsernameLookupIsCaseInsensitive()
+    {
+        using var td = new TempDir();
+        var store = new OperatorStore(Path.Combine(td.Path, "operator.json"));
+        store.Create("Admin", "casecheckpassword");
+        Assert(store.Verify("ADMIN", "casecheckpassword"), "verify must be case-insensitive on username");
+        Assert(store.Contains("admin"), "Contains must be case-insensitive");
+        Assert(store.Find("ADMIN")?.Username == "Admin", "Find must return the originally-cased username");
+    }
+
+    static void TestOperatorStoreRemoveLastUserBlocked()
+    {
+        using var td = new TempDir();
+        var store = new OperatorStore(Path.Combine(td.Path, "operator.json"));
+        store.Create("admin", "onlyoperatorpwd1");
+        AssertThrows<InvalidOperationException>(() => store.Remove("admin"),
+            "Remove must refuse to delete the last operator");
+        store.Create("backup", "backupoperatorpwd");
+        store.Remove("admin");
+        Assert(store.Count == 1, "removing one of two should leave one");
+        Assert(!store.Verify("admin", "onlyoperatorpwd1"), "removed operator must not verify");
+        Assert(store.Verify("backup", "backupoperatorpwd"), "remaining operator should still verify");
+    }
+
+    static void TestOperatorStoreChangePasswordUpdatesHashAndTimestamp()
+    {
+        using var td = new TempDir();
+        var path = Path.Combine(td.Path, "operator.json");
+        var store = new OperatorStore(path);
+        store.Create("admin", "originalpassword12");
+        var before = store.Find("admin")!.PasswordChangedAt;
+        System.Threading.Thread.Sleep(10);
+        store.ChangePassword("admin", "rotatedpassword345");
+        var after = store.Find("admin")!.PasswordChangedAt;
+        Assert(after > before, "PasswordChangedAt must advance on ChangePassword");
+        Assert(!store.Verify("admin", "originalpassword12"), "old password must not verify after change");
+        Assert(store.Verify("admin", "rotatedpassword345"), "new password must verify");
+        var fresh = new OperatorStore(path);
+        Assert(fresh.Verify("admin", "rotatedpassword345"), "password change must persist");
+    }
+
+    static void TestOperatorStoreLegacyFileMigratesOnLoad()
+    {
+        using var td = new TempDir();
+        var path = Path.Combine(td.Path, "operator.json");
+        // Write the legacy single-record shape that pre-multi-user builds produced.
+        var legacy = "{\"username\":\"legacy\",\"passwordHash\":\"" +
+                     Argon2Helper.Hash("legacypassword12", memoryKiB: 1024, iterations: 1, parallelism: 1) +
+                     "\",\"createdAt\":\"2026-01-01T00:00:00Z\",\"passwordChangedAt\":\"2026-01-01T00:00:00Z\"}";
+        File.WriteAllText(path, legacy);
+
+        var store = new OperatorStore(path);
+        Assert(store.Count == 1, "legacy single-record file should load as one operator");
+        Assert(store.Username == "legacy", "legacy operator's username should survive migration");
+        Assert(store.Verify("legacy", "legacypassword12"), "legacy operator's password should verify after migration");
+
+        // Adding a second user rewrites the file in the new { accounts: [...] } shape.
+        store.Create("second", "secondpassword12");
+        var rewritten = File.ReadAllText(path);
+        Assert(rewritten.Contains("\"accounts\""), "save after migration must use the new accounts[] shape");
+
+        var fresh = new OperatorStore(path);
+        Assert(fresh.Count == 2, "rewritten file must round-trip both operators");
     }
 
     static void TestArgon2HelperRoundTripAndRejectsTamper()
@@ -976,6 +1067,31 @@ internal static class Program
         Assert(store.Invalidate(s.Id), "invalidate should report removal");
         Assert(store.Validate(s.Id) == null, "invalidated session should not validate");
         Assert(!store.Invalidate(s.Id), "second invalidate should report nothing removed");
+    }
+
+    static void TestSessionStoreInvalidateByUsername()
+    {
+        using var store = new SessionStore(startPruner: false);
+        var alice1 = store.Issue("alice", "::1", "");
+        var alice2 = store.Issue("Alice", "::2", "");
+        var bob    = store.Issue("bob",   "::3", "");
+        int kicked = store.InvalidateByUsername("ALICE");
+        Assert(kicked == 2, "InvalidateByUsername must remove every matching session, case-insensitive");
+        Assert(store.Validate(alice1.Id) == null, "alice's first session must be gone");
+        Assert(store.Validate(alice2.Id) == null, "alice's second session must be gone");
+        Assert(store.Validate(bob.Id)    != null, "other operators' sessions must be untouched");
+        Assert(store.InvalidateByUsername("nobody") == 0, "InvalidateByUsername must be a no-op for unknown users");
+        Assert(store.InvalidateByUsername("")       == 0, "InvalidateByUsername must be a no-op for blank input");
+    }
+
+    static void TestBootstrapTokenIssuerClearStopsAcceptance()
+    {
+        using var issuer = new BootstrapTokenIssuer();
+        var (token, _) = issuer.Issue();
+        issuer.Clear();
+        Assert(!issuer.IsActive,         "Clear must mark the issuer inactive");
+        Assert(issuer.ExpiresAt == null, "Clear must drop the recorded expiry");
+        Assert(!issuer.Consume(token),   "a token consumed after Clear must be rejected");
     }
 
     static void TestSessionStorePruneRemovesExpiredEntries()
@@ -1803,7 +1919,8 @@ internal static class Program
         using var td = new TempDir();
         using var engine = new ServerEngine(noBroadcast: true,
             store: new ApprovedClientStore(Path.Combine(td.Path, "approved.json")),
-            alerts: new AlertService(new CLog(), Path.Combine(td.Path, "alerts.json")));
+            alerts: new AlertService(new CLog(), Path.Combine(td.Path, "alerts.json")),
+            logFile: null);
         var platform = new FakeServerPlatformServices();
         var controller = new ServerDashboardController(engine, platform);
         var opts = new WebStartupOptions
@@ -2443,7 +2560,7 @@ internal static class Program
             RateLimit  = new RateLimiter();
             Alerts     = new AlertService(new CLog(), Path.Combine(_td.Path, "alerts.json"));
             var store  = new ApprovedClientStore(Path.Combine(_td.Path, "approved_clients.json"));
-            Engine     = new ServerEngine(noBroadcast: true, store: store, alerts: Alerts);
+            Engine     = new ServerEngine(noBroadcast: true, store: store, alerts: Alerts, logFile: null);
             Controller = new ServerDashboardController(Engine, new FakeServerPlatformServices());
             Snapshots  = new SnapshotCache(Engine);
             Terminals  = new WebTerminalStore(Engine);

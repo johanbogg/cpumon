@@ -46,9 +46,11 @@ public sealed class WebStartup : IDisposable
     public static async Task<WebStartup> StartAsync(ServerEngine engine,
                                                     ServerDashboardController controller,
                                                     IServerPlatformServices platform,
-                                                    WebStartupOptions opts)
+                                                    WebStartupOptions opts,
+                                                    OperatorStore? operatorsOverride = null)
     {
-        var operators = new OperatorStore(opts.OperatorPath ?? AppPaths.DataFile("operator.json"));
+        var operators = operatorsOverride
+                        ?? new OperatorStore(opts.OperatorPath ?? AppPaths.DataFile("operator.json"));
         var sessions  = new SessionStore();
         var bootstrap = new BootstrapTokenIssuer();
         var rateLimit = new RateLimiter();

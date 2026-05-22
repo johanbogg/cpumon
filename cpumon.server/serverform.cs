@@ -17,6 +17,7 @@ sealed class ServerForm : BorderlessForm
     readonly NotifyIcon _tray;
     readonly WebStartupOptions? _webOpts;
     readonly bool _startInTray;
+    readonly OperatorStore _operators;
     WebStartup? _web;
     bool _exitRequested;
     bool _trayBalloonShown;
@@ -34,6 +35,7 @@ sealed class ServerForm : BorderlessForm
         _engine = new ServerEngine(noBroadcast);
         _webOpts = webOpts;
         _startInTray = startInTray;
+        _operators = new OperatorStore(webOpts?.OperatorPath ?? AppPaths.DataFile("operator.json"));
 
         Text = $"CPU Monitor — Server  v{Proto.AppVersion}";
         StartPosition = FormStartPosition.Manual;
@@ -85,6 +87,7 @@ sealed class ServerForm : BorderlessForm
         var trayMenu = new ContextMenuStrip();
         trayMenu.Items.Add("Show", null, (_, _) => RestoreFromTray());
         trayMenu.Items.Add("Configure...", null, (_, _) => ShowStartupOptions());
+        trayMenu.Items.Add("Web operators...", null, (_, _) => ShowUsersDialog());
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add("Exit", null, (_, _) => ExitFromTray());
         _tray.ContextMenuStrip = trayMenu;
@@ -105,7 +108,7 @@ sealed class ServerForm : BorderlessForm
             _tm.Start();
             if (_webOpts != null)
             {
-                try { _web = WebStartup.StartAsync(_engine, _dashboard, _platform, _webOpts).GetAwaiter().GetResult(); }
+                try { _web = WebStartup.StartAsync(_engine, _dashboard, _platform, _webOpts, _operators).GetAwaiter().GetResult(); }
                 catch (Exception ex) { _engine.Log.Add($"Web UI failed to start: {ex.Message}", Th.Red); }
             }
             if (_startInTray)
@@ -193,6 +196,12 @@ sealed class ServerForm : BorderlessForm
         using var d = new ServerStartupSettingsDialog();
         if (d.ShowDialog(this) == DialogResult.OK)
             MessageBox.Show(this, "Startup options saved. Restart the server to apply them.", "CPU Monitor", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    void ShowUsersDialog()
+    {
+        using var d = new UsersDialog(_operators, _web?.Sessions, _web?.Bootstrap, _engine.Log);
+        d.ShowDialog(this);
     }
 
     void OnEngineProcessList(RemoteClient cl) => _platform.UpdateProcessDialog(cl);

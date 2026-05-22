@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -15,11 +17,20 @@ public sealed class OperatorAccount
     [JsonPropertyName("passwordChangedAt")] public DateTime PasswordChangedAt  { get; set; }
 }
 
+sealed class OperatorFile
+{
+    [JsonPropertyName("accounts")] public List<OperatorAccount> Accounts { get; set; } = new();
+}
+
+// Operator accounts persisted to operator.json. The on-disk shape grew from a single
+// record { username, passwordHash, ... } in the bootstrap-only era to { accounts: [...] }
+// once multi-user support landed; legacy files are migrated in-memory on load and
+// rewritten in the new shape the next time the store is modified.
 public sealed class OperatorStore
 {
     readonly string _path;
     readonly object _l = new();
-    OperatorAccount? _cached;
+    readonly Dictionary<string, OperatorAccount> _accounts = new(StringComparer.Ordinal);
 
     static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -36,61 +47,152 @@ public sealed class OperatorStore
         Load();
     }
 
-    public bool      Exists            { get { lock (_l) return _cached != null; } }
-    public string?   Username          { get { lock (_l) return _cached?.Username; } }
-    public DateTime? CreatedAt         { get { lock (_l) return _cached?.CreatedAt; } }
-    public DateTime? PasswordChangedAt { get { lock (_l) return _cached?.PasswordChangedAt; } }
+    public bool Exists { get { lock (_l) return _accounts.Count > 0; } }
+    public int  Count  { get { lock (_l) return _accounts.Count; } }
+
+    // First operator's display name in CreatedAt order; useful for single-user callers
+    // and tests written before multi-user existed.
+    public string? Username
+    {
+        get { lock (_l) return _accounts.Values.OrderBy(a => a.CreatedAt).FirstOrDefault()?.Username; }
+    }
+
+    // Snapshot ordered by CreatedAt for UI listings.
+    public IReadOnlyList<OperatorAccount> List()
+    {
+        lock (_l)
+            return _accounts.Values.OrderBy(a => a.CreatedAt).Select(Clone).ToList();
+    }
+
+    public bool Contains(string username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return false;
+        lock (_l) return _accounts.ContainsKey(Key(username));
+    }
+
+    public OperatorAccount? Find(string username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return null;
+        lock (_l) return _accounts.TryGetValue(Key(username), out var a) ? Clone(a) : null;
+    }
 
     public void Create(string username, string password)
     {
-        if (string.IsNullOrWhiteSpace(username)) throw new ArgumentException("username required", nameof(username));
-        if (password == null || password.Length < 12) throw new ArgumentException("password must be at least 12 chars", nameof(password));
+        ValidateUsername(username);
+        ValidatePassword(password);
         lock (_l)
         {
-            if (_cached != null) throw new InvalidOperationException("Operator already exists");
+            var key = Key(username);
+            if (_accounts.ContainsKey(key)) throw new InvalidOperationException("Operator with that username already exists");
             var now = DateTime.UtcNow;
-            var account = new OperatorAccount
+            _accounts[key] = new OperatorAccount
             {
                 Username          = username,
                 PasswordHash      = Argon2Helper.Hash(password),
                 CreatedAt         = now,
                 PasswordChangedAt = now
             };
-            Save(account);
-            _cached = account;
+            SaveLocked();
+        }
+    }
+
+    public void Remove(string username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) throw new ArgumentException("username required", nameof(username));
+        lock (_l)
+        {
+            var key = Key(username);
+            if (!_accounts.ContainsKey(key)) throw new KeyNotFoundException("Unknown operator");
+            if (_accounts.Count <= 1) throw new InvalidOperationException("Cannot remove the last operator");
+            _accounts.Remove(key);
+            SaveLocked();
+        }
+    }
+
+    public void ChangePassword(string username, string newPassword)
+    {
+        if (string.IsNullOrWhiteSpace(username)) throw new ArgumentException("username required", nameof(username));
+        ValidatePassword(newPassword);
+        lock (_l)
+        {
+            if (!_accounts.TryGetValue(Key(username), out var acct))
+                throw new KeyNotFoundException("Unknown operator");
+            acct.PasswordHash      = Argon2Helper.Hash(newPassword);
+            acct.PasswordChangedAt = DateTime.UtcNow;
+            SaveLocked();
         }
     }
 
     public bool Verify(string username, string password)
     {
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password)) return false;
         OperatorAccount? account;
-        lock (_l) { account = _cached; }
+        lock (_l) { _accounts.TryGetValue(Key(username), out account); }
         if (account == null) return false;
-        if (!string.Equals(account.Username, username, StringComparison.Ordinal)) return false;
         return Argon2Helper.Verify(password, account.PasswordHash);
+    }
+
+    static string Key(string username) => username.Trim().ToLowerInvariant();
+
+    static OperatorAccount Clone(OperatorAccount a) => new()
+    {
+        Username          = a.Username,
+        PasswordHash      = a.PasswordHash,
+        CreatedAt         = a.CreatedAt,
+        PasswordChangedAt = a.PasswordChangedAt,
+    };
+
+    static void ValidateUsername(string username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) throw new ArgumentException("username required", nameof(username));
+        if (username.Trim().Length < 1) throw new ArgumentException("username required", nameof(username));
+    }
+
+    static void ValidatePassword(string password)
+    {
+        if (password == null || password.Length < 12) throw new ArgumentException("password must be at least 12 chars", nameof(password));
     }
 
     void Load()
     {
         try
         {
-            if (!File.Exists(_path)) { _cached = null; return; }
+            if (!File.Exists(_path)) return;
             var json = File.ReadAllText(_path);
-            _cached = JsonSerializer.Deserialize<OperatorAccount>(json, JsonOpts);
+            if (string.IsNullOrWhiteSpace(json)) return;
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                doc.RootElement.TryGetProperty("accounts", out _))
+            {
+                var file = JsonSerializer.Deserialize<OperatorFile>(json, JsonOpts);
+                if (file?.Accounts != null)
+                    foreach (var a in file.Accounts)
+                        if (!string.IsNullOrWhiteSpace(a.Username))
+                            _accounts[Key(a.Username)] = a;
+            }
+            else
+            {
+                // Legacy single-record shape. Migrated in-memory; persisted in the new
+                // shape on the next Save.
+                var legacy = JsonSerializer.Deserialize<OperatorAccount>(json, JsonOpts);
+                if (legacy != null && !string.IsNullOrWhiteSpace(legacy.Username))
+                    _accounts[Key(legacy.Username)] = legacy;
+            }
         }
         catch (Exception ex)
         {
-            LogSink.Warn("OperatorStore", "Failed to load operator.json — operator absent", ex);
-            _cached = null;
+            LogSink.Warn("OperatorStore", "Failed to load operator.json — operator(s) absent", ex);
+            _accounts.Clear();
         }
     }
 
-    void Save(OperatorAccount account)
+    void SaveLocked()
     {
         var dir = Path.GetDirectoryName(_path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        var file = new OperatorFile { Accounts = _accounts.Values.OrderBy(a => a.CreatedAt).ToList() };
         var tmp = _path + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(account, JsonOpts));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(file, JsonOpts));
         File.Move(tmp, _path, overwrite: true);
     }
 }
@@ -202,6 +304,14 @@ public sealed class BootstrapTokenIssuer : IDisposable
     public DateTime? ExpiresAt
     {
         get { lock (_l) return _token == null ? null : _expiresAt; }
+    }
+
+    // Cancels any outstanding bootstrap token without re-firing Expired. Useful when
+    // the first operator was created out-of-band (e.g. via the tray dialog) so the
+    // pre-issued URL must not work afterwards.
+    public void Clear()
+    {
+        lock (_l) { ClearLocked(); }
     }
 
     void OnExpiry()
