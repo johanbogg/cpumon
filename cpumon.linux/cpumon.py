@@ -683,7 +683,7 @@ class Client:
             path = cmd.get("path")
             tid  = cmd.get("transferId")
             if path and tid:
-                threading.Thread(target=self._send_file, args=(path, tid), daemon=True).start()
+                threading.Thread(target=self._send_file, args=(path, tid, cmd.get("cmdId")), daemon=True).start()
 
         elif c == "file_upload_chunk":
             chunk = cmd.get("fileChunk")
@@ -754,7 +754,7 @@ class Client:
         except Exception as e:
             print(f"processes error: {e}", flush=True)
 
-    def _send_file(self, path: str, transfer_id: str):
+    def _send_file(self, path: str, transfer_id: str, cmd_id):
         chunk_size = 65536
         try:
             total = os.path.getsize(path)
@@ -764,23 +764,29 @@ class Client:
                 while True:
                     data    = fh.read(chunk_size)
                     is_last = len(data) < chunk_size
-                    self._send({"type": "file_chunk", "transferId": transfer_id, "fileChunk": {
+                    envelope = {"type": "file_chunk", "transferId": transfer_id, "fileChunk": {
                         "transferId": transfer_id,
                         "fileName":   fname,
                         "data":       base64.b64encode(data).decode() if data else "",
                         "offset":     offset,
                         "totalSize":  total,
                         "isLast":     is_last or not data,
-                    }})
+                    }}
+                    if cmd_id:
+                        envelope["cmdId"] = cmd_id
+                    self._send(envelope)
                     offset += len(data)
                     if not data or is_last:
                         break
                     time.sleep(0.005)
         except Exception as e:
-            self._send({"type": "file_chunk", "transferId": transfer_id, "fileChunk": {
+            envelope = {"type": "file_chunk", "transferId": transfer_id, "fileChunk": {
                 "transferId": transfer_id, "fileName": "", "data": "",
                 "offset": 0, "totalSize": 0, "isLast": True, "error": str(e),
-            }})
+            }}
+            if cmd_id:
+                envelope["cmdId"] = cmd_id
+            self._send(envelope)
 
     def _recv_chunk(self, chunk: dict, dest_dir: str) -> str:
         tid    = chunk.get("transferId", "")

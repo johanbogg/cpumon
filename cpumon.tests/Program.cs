@@ -136,6 +136,8 @@ internal static class Program
             TestWebFilesMkdirRoutesResultBackThroughSession();
             TestWebFilesDownloadDeliversAggregatedChunks();
             TestWebFilesUploadStreamsChunksToEngine();
+            TestWebFilesChunkRoutesBySessionCmdIdNotJustTransferId();
+            TestWebFilesChunkRoutingFallsBackWhenCmdIdMissing();
             TestSnapshotEndpointsRequireAuth();
             TestSnapshotReturns204AndTriggersFetchWhenEmpty();
             TestSnapshotReturnsCachedAndDoesNotTriggerWhenFresh();
@@ -2530,6 +2532,53 @@ internal static class Program
         missingDest.Content.Headers.ContentLength = 0;
         using var bad = h.Client.SendAsync(missingDest).GetAwaiter().GetResult();
         Assert((int)bad.StatusCode == 400, "upload without dest should 400");
+    }
+
+    static void TestWebFilesChunkRoutesBySessionCmdIdNotJustTransferId()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        var cl = AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+
+        // Two web sessions against the same machine, one transfer each. Same transferId
+        // on both — the old routing would have leaked a chunk into whichever session was
+        // enumerated first; cmdId-keyed routing must deliver it only to the session
+        // whose sessionId equals the chunk's cmdId.
+        var sessionA = h.Files.Create("box");
+        var sessionB = h.Files.Create("box");
+        const string sharedTransferId = "dl-shared";
+        var transferA = sessionA.NewDownload(sharedTransferId, "a.bin");
+        var transferB = sessionB.NewDownload(sharedTransferId, "b.bin");
+
+        var chunk = new FileChunkData
+        {
+            TransferId = sharedTransferId, FileName = "b.bin",
+            Offset = 0, TotalSize = 3, IsLast = true,
+            Data = Convert.ToBase64String(Encoding.UTF8.GetBytes("bbb")),
+        };
+        h.Files.OnChunk(cl, sessionB.SessionId, chunk);
+
+        Assert(transferB.Complete,  "chunk routed by cmdId must complete the matching session's transfer");
+        Assert(!transferA.Complete, "chunk routed by cmdId must NOT touch the sibling session's transfer");
+    }
+
+    static void TestWebFilesChunkRoutingFallsBackWhenCmdIdMissing()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        var cl = AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+
+        // An older agent might omit cmdId on file_chunk; the store should still route
+        // to a session that has a matching transferId for that machine.
+        var session = h.Files.Create("box");
+        var transfer = session.NewDownload("dl-legacy", "legacy.bin");
+        h.Files.OnChunk(cl, cmdId: null, new FileChunkData
+        {
+            TransferId = "dl-legacy", FileName = "legacy.bin",
+            Offset = 0, TotalSize = 3, IsLast = true,
+            Data = Convert.ToBase64String(Encoding.UTF8.GetBytes("xyz")),
+        });
+        Assert(transfer.Complete, "legacy agent chunks (no cmdId) must still route by transferId");
     }
 
     sealed class WebApiTestHost : IDisposable

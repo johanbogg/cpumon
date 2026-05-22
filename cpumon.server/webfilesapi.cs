@@ -92,9 +92,21 @@ public sealed class WebFileBrowserStore : IDisposable
             session.PutResult(ok, message);
     }
 
-    void OnChunk(RemoteClient cl, FileChunkData chunk)
+    // Routing for incoming file_chunk messages. Public so tests can drive the same path
+    // the engine's FileChunkUpdated event invokes.
+    public void OnChunk(RemoteClient cl, string? cmdId, FileChunkData chunk)
     {
         if (string.IsNullOrEmpty(chunk.TransferId)) return;
+        // Preferred path: the agent echoes the originating file_download cmdId on every
+        // chunk, so we look the session up directly by sessionId. The fallback walks the
+        // machine's sessions for backwards compatibility with older agents that do not
+        // stamp cmdId yet.
+        if (!string.IsNullOrEmpty(cmdId) && _sessions.TryGetValue(cmdId, out var direct))
+        {
+            if (string.Equals(direct.Machine, cl.MachineName, StringComparison.Ordinal))
+                direct.TryReceiveChunk(chunk);
+            return;
+        }
         foreach (var session in _sessions.Values)
         {
             if (!string.Equals(session.Machine, cl.MachineName, StringComparison.Ordinal)) continue;

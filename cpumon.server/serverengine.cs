@@ -94,7 +94,7 @@ public sealed class ServerEngine : IDisposable
     public event Action<RemoteClient, string, string>? TerminalOutputUpdated;
     public event Action<RemoteClient, string>? TerminalClosedUpdated;
     public event Action<RemoteClient, string?, FileListing>? FileListingUpdated;
-    public event Action<RemoteClient, FileChunkData>? FileChunkUpdated;
+    public event Action<RemoteClient, string?, FileChunkData>? FileChunkUpdated;
     public event Action<RemoteClient, string, bool, string>? FileResultUpdated;
     public event Action? UpdateAvailable;
     public event Action? ReleaseStaged;
@@ -890,7 +890,7 @@ public sealed class ServerEngine : IDisposable
                             {
                                 try { fb.ReceiveFileChunk(msg.FileChunk); } catch { }
                             }
-                            try { FileChunkUpdated?.Invoke(cl, msg.FileChunk); } catch { }
+                            try { FileChunkUpdated?.Invoke(cl, msg.CmdId, msg.FileChunk); } catch { }
                             break;
 
                         case "screenshot" when msg.Screenshot != null:
