@@ -44,11 +44,25 @@ public sealed class WebFileBrowserStore : IDisposable
             _stagingRoot = Path.Combine(Path.GetTempPath(), "CpuMon", "webdl");
             Directory.CreateDirectory(_stagingRoot);
         }
+        SweepOrphanedStagingDirs();
         _engine.FileListingUpdated += OnListing;
         _engine.FileChunkUpdated   += OnChunk;
         _engine.FileResultUpdated  += OnResult;
         if (startPruner)
             _pruner = new Timer(_ => Prune(), null, PruneInterval, PruneInterval);
+    }
+
+    // The server runs as a single instance; any subdirs already in _stagingRoot
+    // belong to a prior process that exited without disposing its sessions. Reap
+    // them so the staging root does not grow without bound across restarts.
+    void SweepOrphanedStagingDirs()
+    {
+        try
+        {
+            foreach (var dir in Directory.EnumerateDirectories(_stagingRoot))
+                try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+        catch { }
     }
 
     public Session Create(string machine)
@@ -134,9 +148,13 @@ public sealed class WebFileBrowserStore : IDisposable
         _engine.FileListingUpdated -= OnListing;
         _engine.FileChunkUpdated   -= OnChunk;
         _engine.FileResultUpdated  -= OnResult;
+        // Each Session.Dispose removes its own staging subdir; we deliberately leave
+        // _stagingRoot in place because it can be shared (production: a single store
+        // per process; tests: multiple stores constructed against the same %ProgramData%
+        // path). Stale subdirs from a crashed previous process get reaped by Prune as
+        // sessions age out, or on next startup by Session.Dispose taking ownership.
         foreach (var s in _sessions.Values) s.Dispose();
         _sessions.Clear();
-        try { Directory.Delete(_stagingRoot, recursive: true); } catch { }
     }
 
     public sealed class Session : IDisposable
