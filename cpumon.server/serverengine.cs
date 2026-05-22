@@ -20,7 +20,7 @@ public sealed class ServerEngine : IDisposable
 {
     readonly bool _nb;
     readonly CancellationTokenSource _cts = new();
-    readonly CLog _log;
+    readonly CLog _log = new(500, "cpumon_server.log");
     readonly ConcurrentDictionary<string, RemoteClient> _cls = new();
     readonly ConcurrentDictionary<string, PendingClientApproval> _pendingApprovals = new();
     readonly ApprovedClientStore _store;
@@ -58,11 +58,9 @@ public sealed class ServerEngine : IDisposable
         "rdp_open", "rdp_close", "rdp_set_fps", "rdp_set_quality", "rdp_refresh", "rdp_input", "rdp_set_monitor", "rdp_set_bandwidth",
     };
 
-    public ServerEngine(bool noBroadcast, ApprovedClientStore? store = null, AlertService? alerts = null,
-                        string? logFile = "cpumon_server.log")
+    public ServerEngine(bool noBroadcast, ApprovedClientStore? store = null, AlertService? alerts = null)
     {
         _nb = noBroadcast;
-        _log = new CLog(500, logFile);
         _store = store ?? new ApprovedClientStore();
         _alertSvc = alerts ?? new AlertService(_log);
         _tok = Security.GenToken();

@@ -406,7 +406,7 @@ internal static class Program
 
     static void TestServerEngineInitialState()
     {
-        using var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        using var engine = new ServerEngine(noBroadcast: true);
         Assert(engine.BroadcastDisabled, "BroadcastDisabled flag should reflect ctor argument");
         Assert(!string.IsNullOrEmpty(engine.Token), "engine should generate a token at construction");
         Assert(engine.ConnectionCount == 0, "connection count should start at zero");
@@ -417,7 +417,7 @@ internal static class Program
 
     static void TestServerEngineRegenerateToken()
     {
-        using var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        using var engine = new ServerEngine(noBroadcast: true);
         string original = engine.Token;
         DateTime originalAt = engine.TokenIssuedAt;
         Thread.Sleep(20);
@@ -504,7 +504,7 @@ internal static class Program
 
     static void TestServerEnginePendingApprovalMissing()
     {
-        using var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        using var engine = new ServerEngine(noBroadcast: true);
         Assert(!engine.ApprovePending("no-such-machine"), "approving unknown machine should return false");
         Assert(!engine.RejectPending("no-such-machine"), "rejecting unknown machine should return false");
         Assert(!engine.RequestRestart("no-such-machine"), "restart on unknown machine should return false");
@@ -514,7 +514,7 @@ internal static class Program
 
     static void TestDashboardStateInitialState()
     {
-        using var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        using var engine = new ServerEngine(noBroadcast: true);
         var builder = new ServerDashboardStateBuilder(engine);
         var state = builder.Build(Array.Empty<string>(), "all", "name");
 
@@ -530,7 +530,7 @@ internal static class Program
 
     static void TestDashboardStatePendingApprovalsSorted()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         engine.PendingApprovals["zeta"] = new PendingClientApproval
         {
             MachineName = "zeta",
@@ -557,7 +557,7 @@ internal static class Program
 
     static void TestDashboardStateWaitingClientsStayVisibleUnderOsFilters()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         var waiting = FakeRemoteClient();
         waiting.MachineName = "waiting-client";
         waiting.ClientVersion = Proto.AppVersion;
@@ -571,7 +571,7 @@ internal static class Program
 
     static void TestDashboardStateClientProjectionFlags()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         var linux = FakeRemoteClient();
         linux.MachineName = "linux-box";
         linux.ClientVersion = "0.0.1-linux";
@@ -594,7 +594,7 @@ internal static class Program
 
     static void TestDashboardStateOsSortPlacesWindowsBeforeLinuxAndKeepsNameOrder()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         AddReportedClient(engine, "z-win", "Microsoft Windows 11", Proto.AppVersion);
         AddReportedClient(engine, "a-lnx", "Linux Debian", "0.0.1-linux");
         AddReportedClient(engine, "m-win", "Microsoft Windows 10", Proto.AppVersion);
@@ -609,7 +609,7 @@ internal static class Program
 
     static void TestDashboardStateCapabilityFlagsForLinuxAndWindows()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         AddReportedClient(engine, "win-box", "Microsoft Windows 11", Proto.AppVersion);
         AddReportedClient(engine, "linux-box", "Linux Debian", "0.0.1-linux");
 
@@ -636,7 +636,7 @@ internal static class Program
 
     static void TestDashboardControllerOwnsFiltersSortAndSelection()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         var linux = FakeRemoteClient();
         linux.MachineName = "linux-box";
         linux.ClientVersion = "0.0.1-linux";
@@ -677,7 +677,7 @@ internal static class Program
 
     static void TestDashboardControllerSelectAllVisibleRespectsOsFilter()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         AddReportedClient(engine, "win-box", "Microsoft Windows 11", Proto.AppVersion);
         AddReportedClient(engine, "linux-box", "Linux Debian", "0.0.1-linux");
 
@@ -691,7 +691,7 @@ internal static class Program
 
     static void TestDashboardControllerSelectOutdatedVisibleRespectsVersionComparison()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         AddReportedClient(engine, "old-box", "Microsoft Windows 11", "0.0.1");
         AddReportedClient(engine, "current-box", "Microsoft Windows 11", Proto.AppVersion);
         AddReportedClient(engine, "future-box", "Microsoft Windows 11", "9.9.9");
@@ -704,7 +704,7 @@ internal static class Program
 
     static void TestDashboardControllerPurgeStaleClientsRemovesAndDeselects()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         var fresh = AddReportedClient(engine, "fresh", "Microsoft Windows 11", Proto.AppVersion);
         fresh.LastSeen = DateTime.UtcNow;
         var stale = AddReportedClient(engine, "stale", "Microsoft Windows 11", Proto.AppVersion);
@@ -721,7 +721,7 @@ internal static class Program
 
     static void TestDashboardControllerPendingDelegatesReturnFalseForMissing()
     {
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true, logFile: null), new FakeServerPlatformServices());
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), new FakeServerPlatformServices());
         Assert(!controller.ApprovePending("no-such-machine"), "controller approving missing pending client should return false");
         Assert(!controller.RejectPending("no-such-machine"), "controller rejecting missing pending client should return false");
     }
@@ -729,7 +729,7 @@ internal static class Program
     static void TestDashboardControllerRestartRaisesWarningConfirmation()
     {
         var platform = new FakeServerPlatformServices { ConfirmReturn = false };
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true, logFile: null), platform);
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
         controller.RestartClient("box-a");
         Assert(platform.LastConfirm != null, "RestartClient should route confirmation through platform services");
         Assert(platform.LastConfirm!.Value.Kind == DashboardConfirmKind.Warning, "restart confirmation should be a warning");
@@ -739,7 +739,7 @@ internal static class Program
     static void TestDashboardControllerForgetClientConfirmationInvokesEngineOnConfirm()
     {
         var platform = new FakeServerPlatformServices { ConfirmReturn = false };
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true, logFile: null), platform);
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
         controller.ForgetClient("doomed-box");
         Assert(platform.LastConfirm != null, "ForgetClient should route confirmation through platform services");
         Assert(platform.LastConfirm!.Value.Kind == DashboardConfirmKind.Question, "forget confirmation should default to question");
@@ -748,7 +748,7 @@ internal static class Program
 
     static void TestDashboardControllerCopyTokenRaisesClipboardEvent()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         var platform = new FakeServerPlatformServices();
         var controller = new ServerDashboardController(engine, platform);
         controller.CopyToken();
@@ -757,7 +757,7 @@ internal static class Program
 
     static void TestDashboardControllerUsesPlatformServicesWhenProvided()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         var linux = FakeRemoteClient();
         linux.MachineName = "lnx";
         linux.LastReport = new MachineReport { MachineName = linux.MachineName, OsVersion = "Linux Debian" };
@@ -809,7 +809,7 @@ internal static class Program
 
     static void TestDashboardControllerToggleExpandedFlipsClient()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         var client = FakeRemoteClient();
         client.MachineName = "card-box";
         client.Expanded = false;
@@ -824,7 +824,7 @@ internal static class Program
 
     static void TestDashboardControllerPushUpdatePicksLinuxFilterForLinuxClient()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         var linux = FakeRemoteClient();
         linux.MachineName = "lnx";
         linux.LastReport = new MachineReport { MachineName = linux.MachineName, OsVersion = "Linux Debian" };
@@ -840,7 +840,7 @@ internal static class Program
     static void TestDashboardControllerOpenTerminalCarriesShellArgument()
     {
         var platform = new FakeServerPlatformServices();
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true, logFile: null), platform);
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
         controller.OpenTerminal("shell-box", "powershell");
         Assert(platform.ShowTerminalCall != null, "OpenTerminal should route through platform services");
         Assert(platform.ShowTerminalCall!.Value.Machine == "shell-box", "terminal call should carry the machine name");
@@ -849,7 +849,7 @@ internal static class Program
 
     static void TestDashboardControllerSendUserMessageDropsBlankPrompt()
     {
-        var engine = new ServerEngine(noBroadcast: true, logFile: null);
+        var engine = new ServerEngine(noBroadcast: true);
         var platform = new FakeServerPlatformServices { PromptUserMessageReturn = "  " };
         var controller = new ServerDashboardController(engine, platform);
         controller.SendUserMessage("box");
@@ -863,7 +863,7 @@ internal static class Program
     static void TestDashboardControllerSetOfflineMacRoutesPromptToEngine()
     {
         var platform = new FakeServerPlatformServices();
-        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true, logFile: null), platform);
+        var controller = new ServerDashboardController(new ServerEngine(noBroadcast: true), platform);
         controller.RequestSetOfflineMac("offline-box");
         Assert(platform.LastPrompt != null, "RequestSetOfflineMac should route prompt through platform services");
         Assert(platform.LastPrompt!.Value.Title == "Set MAC", "prompt should be titled Set MAC");
@@ -1919,8 +1919,7 @@ internal static class Program
         using var td = new TempDir();
         using var engine = new ServerEngine(noBroadcast: true,
             store: new ApprovedClientStore(Path.Combine(td.Path, "approved.json")),
-            alerts: new AlertService(new CLog(), Path.Combine(td.Path, "alerts.json")),
-            logFile: null);
+            alerts: new AlertService(new CLog(), Path.Combine(td.Path, "alerts.json")));
         var platform = new FakeServerPlatformServices();
         var controller = new ServerDashboardController(engine, platform);
         var opts = new WebStartupOptions
@@ -2560,7 +2559,7 @@ internal static class Program
             RateLimit  = new RateLimiter();
             Alerts     = new AlertService(new CLog(), Path.Combine(_td.Path, "alerts.json"));
             var store  = new ApprovedClientStore(Path.Combine(_td.Path, "approved_clients.json"));
-            Engine     = new ServerEngine(noBroadcast: true, store: store, alerts: Alerts, logFile: null);
+            Engine     = new ServerEngine(noBroadcast: true, store: store, alerts: Alerts);
             Controller = new ServerDashboardController(Engine, new FakeServerPlatformServices());
             Snapshots  = new SnapshotCache(Engine);
             Terminals  = new WebTerminalStore(Engine);
