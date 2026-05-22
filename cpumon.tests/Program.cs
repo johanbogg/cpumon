@@ -138,6 +138,7 @@ internal static class Program
             TestWebFilesUploadStreamsChunksToEngine();
             TestWebFilesChunkRoutesBySessionCmdIdNotJustTransferId();
             TestWebFilesChunkRoutingFallsBackWhenCmdIdMissing();
+            TestWebFilesPruneRemovesIdleSessions();
             TestSnapshotEndpointsRequireAuth();
             TestSnapshotReturns204AndTriggersFetchWhenEmpty();
             TestSnapshotReturnsCachedAndDoesNotTriggerWhenFresh();
@@ -2562,6 +2563,22 @@ internal static class Program
         Assert(!transferA.Complete, "chunk routed by cmdId must NOT touch the sibling session's transfer");
     }
 
+    static void TestWebFilesPruneRemovesIdleSessions()
+    {
+        using var engine = new ServerEngine(noBroadcast: true);
+        using var store  = new WebFileBrowserStore(engine, startPruner: false) { IdleSessionTtl = TimeSpan.FromMilliseconds(150) };
+        var keep = store.Create("box-a");
+        var drop = store.Create("box-b");
+        Thread.Sleep(60);
+        keep.Touch();              // refresh the survivor mid-window
+        Thread.Sleep(140);
+        int removed = store.Prune();
+        Assert(removed == 1, "Prune should evict exactly the idle session");
+        Assert(store.Count == 1, "active session must survive a sweep");
+        Assert(store.Get("box-b", drop.SessionId) == null, "idle session must be unreachable after prune");
+        Assert(store.Get("box-a", keep.SessionId) != null, "active session must still be reachable");
+    }
+
     static void TestWebFilesChunkRoutingFallsBackWhenCmdIdMissing()
     {
         using var h = new WebApiTestHost();
@@ -2612,7 +2629,7 @@ internal static class Program
             Controller = new ServerDashboardController(Engine, new FakeServerPlatformServices());
             Snapshots  = new SnapshotCache(Engine);
             Terminals  = new WebTerminalStore(Engine);
-            Files      = new WebFileBrowserStore(Engine);
+            Files      = new WebFileBrowserStore(Engine, startPruner: false);
             Links      = new InstallLinkStore();
             Host       = new WebHost();
             Host.StartAsync(new WebHostOptions

@@ -19,16 +19,22 @@ using Microsoft.AspNetCore.Routing;
 // filters and buffers them for HTTP polling.
 public sealed class WebFileBrowserStore : IDisposable
 {
-    static readonly TimeSpan IdleSessionTtl = TimeSpan.FromMinutes(30);
     public const long MaxTransferBytes = 200L * 1024 * 1024;   // 200 MB cap for first slice
     public const int  UploadChunkBytes  = Proto.FileChunkSize;  // matches agent ReceiveChunk
 
     readonly ServerEngine _engine;
     readonly ConcurrentDictionary<string, Session> _sessions = new(StringComparer.Ordinal);
     readonly string _stagingRoot;
+    readonly Timer? _pruner;
     volatile bool _disposed;
 
-    public WebFileBrowserStore(ServerEngine engine)
+    /// <summary>How long a session may sit untouched before the background sweep removes it.</summary>
+    public TimeSpan IdleSessionTtl { get; init; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>How often the background sweep checks for idle sessions.</summary>
+    public TimeSpan PruneInterval { get; init; } = TimeSpan.FromMinutes(5);
+
+    public WebFileBrowserStore(ServerEngine engine, bool startPruner = true)
     {
         _engine = engine;
         _stagingRoot = AppPaths.DataFile("webdl");
@@ -41,11 +47,12 @@ public sealed class WebFileBrowserStore : IDisposable
         _engine.FileListingUpdated += OnListing;
         _engine.FileChunkUpdated   += OnChunk;
         _engine.FileResultUpdated  += OnResult;
+        if (startPruner)
+            _pruner = new Timer(_ => Prune(), null, PruneInterval, PruneInterval);
     }
 
     public Session Create(string machine)
     {
-        SweepIdle();
         var sessionId = "web-" + Guid.NewGuid().ToString("N")[..12];
         var session = new Session(machine, sessionId, _stagingRoot);
         _sessions[sessionId] = session;
@@ -67,14 +74,19 @@ public sealed class WebFileBrowserStore : IDisposable
         return true;
     }
 
-    void SweepIdle()
+    public int Count => _sessions.Count;
+
+    /// <summary>Drops every session whose LastTouched is older than IdleSessionTtl. Returns the number removed.</summary>
+    public int Prune()
     {
         var cutoff = DateTime.UtcNow - IdleSessionTtl;
+        int removed = 0;
         foreach (var kv in _sessions)
             if (kv.Value.LastTouched < cutoff)
             {
-                if (_sessions.TryRemove(kv.Key, out var s)) s.Dispose();
+                if (_sessions.TryRemove(kv.Key, out var s)) { s.Dispose(); removed++; }
             }
+        return removed;
     }
 
     void OnListing(RemoteClient cl, string? cmdId, FileListing listing)
@@ -118,6 +130,7 @@ public sealed class WebFileBrowserStore : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _pruner?.Dispose();
         _engine.FileListingUpdated -= OnListing;
         _engine.FileChunkUpdated   -= OnChunk;
         _engine.FileResultUpdated  -= OnResult;
