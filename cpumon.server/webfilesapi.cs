@@ -497,12 +497,27 @@ public static class WebFilesApi
             if (session == null) return NotFound(ctx, sessionId);
             var t = session.GetTransfer(transferId);
             if (t == null) return NotFound(ctx, transferId);
-            if (t.Capped)   { session.RemoveTransfer(transferId); return Error(ctx, 409, "too_large", $"Transfer exceeds {WebFileBrowserStore.MaxTransferBytes / (1024 * 1024)} MB cap."); }
-            if (t.HasError) { var snap = t.Snapshot(); session.RemoveTransfer(transferId); return Error(ctx, 409, "transfer_error", snap.Error); }
-            if (!t.Complete) return Results.StatusCode(204);
-            var stream = t.OpenReadAndConsume();
-            session.RemoveTransfer(transferId);
-            return Results.File(stream, "application/octet-stream", t.FileName);
+            // Single snapshot under the lock so a chunk landing mid-handler cannot
+            // make us read inconsistent state across the Capped/HasError/Complete
+            // properties (each one re-takes the transfer lock separately).
+            var snap = t.Snapshot();
+            switch (snap.State)
+            {
+                case "capped":
+                    session.RemoveTransfer(transferId);
+                    return Error(ctx, 409, "too_large", $"Transfer exceeds {WebFileBrowserStore.MaxTransferBytes / (1024 * 1024)} MB cap.");
+                case "error":
+                    session.RemoveTransfer(transferId);
+                    return Error(ctx, 409, "transfer_error", snap.Error);
+                case "active":
+                    return Results.StatusCode(204);
+                case "complete":
+                    var stream = t.OpenReadAndConsume();
+                    session.RemoveTransfer(transferId);
+                    return Results.File(stream, "application/octet-stream", snap.FileName);
+                default:
+                    return Error(ctx, 500, "unknown_state", snap.State);
+            }
         });
 
         app.MapPost("/api/clients/{machine}/files/{sessionId}/upload", async (HttpContext ctx, string machine, string sessionId) =>
