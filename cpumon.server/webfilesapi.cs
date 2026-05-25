@@ -445,7 +445,7 @@ public static class WebFilesApi
             var body = await TryRead<PathRequest>(ctx);
             if (string.IsNullOrEmpty(body?.Path)) return Error(ctx, 400, "missing_path", "Path is required.");
             if (!engine.RequestFileMkdir(machine, sessionId, body.Path)) return NotFound(ctx, machine);
-            apiCtx.Log?.Add($"Web files: mkdir {machine}:{body.Path}", Th.Yel);
+            apiCtx.Log?.Add($"Web files: mkdir {machine}:{LogPath(body.Path)}", Th.Yel);
             return Results.NoContent();
         });
 
@@ -456,7 +456,7 @@ public static class WebFilesApi
             var body = await TryRead<DeleteRequest>(ctx);
             if (string.IsNullOrEmpty(body?.Path)) return Error(ctx, 400, "missing_path", "Path is required.");
             if (!engine.RequestFileDelete(machine, sessionId, body.Path, body.Recursive)) return NotFound(ctx, machine);
-            apiCtx.Log?.Add($"Web files: delete {machine}:{body.Path}", Th.Org);
+            apiCtx.Log?.Add($"Web files: delete {machine}:{LogPath(body.Path)}", Th.Org);
             return Results.NoContent();
         });
 
@@ -468,7 +468,7 @@ public static class WebFilesApi
             if (string.IsNullOrEmpty(body?.Path) || string.IsNullOrEmpty(body.NewName))
                 return Error(ctx, 400, "missing_field", "Path and newName are required.");
             if (!engine.RequestFileRename(machine, sessionId, body.Path, body.NewName)) return NotFound(ctx, machine);
-            apiCtx.Log?.Add($"Web files: rename {machine}:{body.Path} → {body.NewName}", Th.Yel);
+            apiCtx.Log?.Add($"Web files: rename {machine}:{LogPath(body.Path)} → {LogPath(body.NewName)}", Th.Yel);
             return Results.NoContent();
         });
 
@@ -486,7 +486,7 @@ public static class WebFilesApi
                 session.RemoveTransfer(transferId);
                 return NotFound(ctx, machine);
             }
-            apiCtx.Log?.Add($"Web files: download {machine}:{body.Path}", Th.Cyan);
+            apiCtx.Log?.Add($"Web files: download {machine}:{LogPath(body.Path)}", Th.Cyan);
             return Results.Json(new { transferId, fileName = Path.GetFileName(body.Path) }, JsonOpts);
         });
 
@@ -580,7 +580,7 @@ public static class WebFilesApi
                     if (clientStillConnected) engine.RequestFileUploadAbort(machine, sessionId, transferId);
                     return Error(ctx, 400, "short_read", "Upload body was shorter than Content-Length.");
                 }
-                apiCtx.Log?.Add($"Web files: upload {machine}:{destPath}/{fileName} ({total}B)", Th.Cyan);
+                apiCtx.Log?.Add($"Web files: upload {machine}:{LogPath(destPath)}/{fileName} ({total}B)", Th.Cyan);
                 return Results.NoContent();
             }
             catch (OperationCanceledException)
@@ -601,6 +601,15 @@ public static class WebFilesApi
             return JsonSerializer.Deserialize<T>(text, JsonOpts);
         }
         catch { return null; }
+    }
+
+    // Echoes paths into the operator log have already passed through agent-side
+    // IsPathUnder traversal checks at the receiving end; this just keeps the log
+    // line tidy when an oversized or accidental path comes through.
+    static string LogPath(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        return s.Length > 200 ? s[..200] + "…" : s;
     }
 
     static IResult NotFound(HttpContext ctx, string what)
