@@ -290,6 +290,13 @@ public sealed class ServerEngine : IDisposable
         return true;
     }
 
+    public bool RequestFileUploadAbort(string machine, string cmdId, string transferId)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "file_upload_abort", CmdId = cmdId, TransferId = transferId });
+        return true;
+    }
+
     string NewSnapshotCmdId(bool notifyUi, string kind)
     {
         string cmdId = Guid.NewGuid().ToString("N")[..8];

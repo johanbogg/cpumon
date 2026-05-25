@@ -693,6 +693,11 @@ class Client:
                 if result:
                     self._res(cid, not result.startswith("Upload error"), result)
 
+        elif c == "file_upload_abort":
+            tid = cmd.get("transferId")
+            if tid and tid in self._uploads:
+                self._uploads.pop(tid).discard()
+
         elif c == "file_delete":
             path      = cmd.get("path")
             recursive = cmd.get("recursive", False)

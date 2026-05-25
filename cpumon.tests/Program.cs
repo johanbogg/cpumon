@@ -139,6 +139,7 @@ internal static class Program
             TestWebFilesChunkRoutesBySessionCmdIdNotJustTransferId();
             TestWebFilesChunkRoutingFallsBackWhenCmdIdMissing();
             TestWebFilesPruneRemovesIdleSessions();
+            TestRequestFileUploadAbortRoutesToAgent();
             TestSnapshotEndpointsRequireAuth();
             TestSnapshotReturns204AndTriggersFetchWhenEmpty();
             TestSnapshotReturnsCachedAndDoesNotTriggerWhenFresh();
@@ -2563,17 +2564,41 @@ internal static class Program
         Assert(!transferA.Complete, "chunk routed by cmdId must NOT touch the sibling session's transfer");
     }
 
+    static void TestRequestFileUploadAbortRoutesToAgent()
+    {
+        using var engine = new ServerEngine(noBroadcast: true);
+        var cl = AddReportedClient(engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+
+        // Capture the JSON the engine writes to the agent.
+        var captured = new MemoryStream();
+        var capturedWriter = new StreamWriter(captured, new UTF8Encoding(false)) { AutoFlush = true };
+        var wrField = typeof(RemoteClient).GetField("_wr", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        wrField.SetValue(cl, capturedWriter);
+
+        bool sent = engine.RequestFileUploadAbort("box", "sess-1", "ul-xyz");
+        Assert(sent, "RequestFileUploadAbort should succeed against a connected client");
+
+        capturedWriter.Flush();
+        var text = Encoding.UTF8.GetString(captured.ToArray());
+        Assert(text.Contains("\"cmd\":\"file_upload_abort\""), "agent must see the file_upload_abort command name");
+        Assert(text.Contains("\"transferId\":\"ul-xyz\""),     "abort command must carry the transferId");
+        Assert(text.Contains("\"cmdId\":\"sess-1\""),          "abort command must echo the originating sessionId as cmdId");
+
+        Assert(!engine.RequestFileUploadAbort("nobody", "sess-1", "ul-xyz"),
+            "RequestFileUploadAbort against an unknown machine should return false");
+    }
+
     static void TestWebFilesPruneRemovesIdleSessions()
     {
         using var engine = new ServerEngine(noBroadcast: true);
-        using var store  = new WebFileBrowserStore(engine, startPruner: false) { IdleSessionTtl = TimeSpan.FromMilliseconds(150) };
+        using var store  = new WebFileBrowserStore(engine, startPruner: false) { IdleSessionTtl = TimeSpan.FromMilliseconds(300) };
         var keep = store.Create("box-a");
         var drop = store.Create("box-b");
-        Thread.Sleep(60);
-        keep.Touch();              // refresh the survivor mid-window
-        Thread.Sleep(140);
+        Thread.Sleep(200);              // both sessions now ~200ms old
+        keep.Touch();                    // keep restamps to ~0ms old
+        Thread.Sleep(200);              // drop is now ~400ms (> TTL), keep is ~200ms (< TTL)
         int removed = store.Prune();
-        Assert(removed == 1, "Prune should evict exactly the idle session");
+        Assert(removed == 1, $"Prune should evict exactly the idle session (got {removed})");
         Assert(store.Count == 1, "active session must survive a sweep");
         Assert(store.Get("box-b", drop.SessionId) == null, "idle session must be unreachable after prune");
         Assert(store.Get("box-a", keep.SessionId) != null, "active session must still be reachable");

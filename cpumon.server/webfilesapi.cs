@@ -540,36 +540,54 @@ public static class WebFilesApi
             var buf = new byte[WebFileBrowserStore.UploadChunkBytes];
             long offset = 0;
             var input = ctx.Request.Body;
-            while (offset < total)
+            bool clientStillConnected = true;
+            try
             {
-                int want = (int)Math.Min(buf.Length, total - offset);
-                int got = 0;
-                while (got < want)
+                while (offset < total)
                 {
-                    int n = await input.ReadAsync(buf.AsMemory(got, want - got), ctx.RequestAborted);
-                    if (n == 0) break;
-                    got += n;
+                    int want = (int)Math.Min(buf.Length, total - offset);
+                    int got = 0;
+                    while (got < want)
+                    {
+                        int n = await input.ReadAsync(buf.AsMemory(got, want - got), ctx.RequestAborted);
+                        if (n == 0) break;
+                        got += n;
+                    }
+                    if (got == 0) break;
+                    bool last = offset + got >= total;
+                    var chunk = new FileChunkData
+                    {
+                        TransferId = transferId,
+                        FileName   = fileName,
+                        Data       = Convert.ToBase64String(buf, 0, got),
+                        Offset     = offset,
+                        TotalSize  = total,
+                        IsLast     = last,
+                    };
+                    if (!engine.RequestFileUploadChunk(machine, sessionId, destPath, chunk))
+                    {
+                        clientStillConnected = false;
+                        return NotFound(ctx, machine);
+                    }
+                    offset += got;
+                    if (last) break;
                 }
-                if (got == 0) break;
-                bool last = offset + got >= total;
-                var chunk = new FileChunkData
+                if (offset != total)
                 {
-                    TransferId = transferId,
-                    FileName   = fileName,
-                    Data       = Convert.ToBase64String(buf, 0, got),
-                    Offset     = offset,
-                    TotalSize  = total,
-                    IsLast     = last,
-                };
-                if (!engine.RequestFileUploadChunk(machine, sessionId, destPath, chunk))
-                    return NotFound(ctx, machine);
-                offset += got;
-                if (last) break;
+                    // Browser cut the request mid-stream. Tell the agent to drop the
+                    // partial .tmp so it does not linger until the next ActiveUploads
+                    // sweep on disconnect.
+                    if (clientStillConnected) engine.RequestFileUploadAbort(machine, sessionId, transferId);
+                    return Error(ctx, 400, "short_read", "Upload body was shorter than Content-Length.");
+                }
+                apiCtx.Log?.Add($"Web files: upload {machine}:{destPath}/{fileName} ({total}B)", Th.Cyan);
+                return Results.NoContent();
             }
-            if (offset != total)
-                return Error(ctx, 400, "short_read", "Upload body was shorter than Content-Length.");
-            apiCtx.Log?.Add($"Web files: upload {machine}:{destPath}/{fileName} ({total}B)", Th.Cyan);
-            return Results.NoContent();
+            catch (OperationCanceledException)
+            {
+                if (clientStillConnected) engine.RequestFileUploadAbort(machine, sessionId, transferId);
+                throw;
+            }
         });
     }
 
