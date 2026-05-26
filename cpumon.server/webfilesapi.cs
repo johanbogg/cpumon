@@ -535,6 +535,9 @@ public static class WebFilesApi
             if (total < 0) return Error(ctx, 400, "missing_length", "Content-Length is required for upload.");
             if (total > WebFileBrowserStore.MaxTransferBytes)
                 return Error(ctx, 413, "too_large", $"Upload exceeds {WebFileBrowserStore.MaxTransferBytes / (1024 * 1024)} MB cap.");
+            // The read loop below uses `total` to cap each read; Kestrel additionally
+            // enforces Content-Length at the transport, so we cannot accidentally consume
+            // (or forward to the agent) more bytes than the client declared.
 
             string transferId = "ul-" + Guid.NewGuid().ToString("N")[..12];
             var buf = new byte[WebFileBrowserStore.UploadChunkBytes];
