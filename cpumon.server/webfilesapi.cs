@@ -173,11 +173,14 @@ public sealed class WebFileBrowserStore : IDisposable
         long _revision;
         long _cachedRevision = -1;
         WebFileBrowserState? _cachedSnap;
-        DateTime _lastTouched = DateTime.UtcNow;
+        // Read by the pruner and written by Touch/PutListing/PutResult. Stored as a
+        // long so reads and writes can be Interlocked and the per-session lock is
+        // never taken just for a timestamp.
+        long _lastTouchedTicks = DateTime.UtcNow.Ticks;
 
         public string Machine   { get; }
         public string SessionId { get; }
-        public DateTime LastTouched { get { lock (_lock) return _lastTouched; } }
+        public DateTime LastTouched => new DateTime(Interlocked.Read(ref _lastTouchedTicks), DateTimeKind.Utc);
 
         public Session(string machine, string sessionId, string stagingRoot)
         {
@@ -187,7 +190,7 @@ public sealed class WebFileBrowserStore : IDisposable
             try { Directory.CreateDirectory(_stagingDir); } catch { }
         }
 
-        public void Touch() { lock (_lock) _lastTouched = DateTime.UtcNow; }
+        public void Touch() => Interlocked.Exchange(ref _lastTouchedTicks, DateTime.UtcNow.Ticks);
 
         public void PutListing(FileListing listing)
         {
@@ -196,8 +199,8 @@ public sealed class WebFileBrowserStore : IDisposable
                 _listing = listing;
                 _listingSeq++;
                 _revision++;
-                _lastTouched = DateTime.UtcNow;
             }
+            Touch();
         }
 
         public void PutResult(bool ok, string message)
@@ -208,8 +211,8 @@ public sealed class WebFileBrowserStore : IDisposable
                 _result = message;
                 _resultSeq++;
                 _revision++;
-                _lastTouched = DateTime.UtcNow;
             }
+            Touch();
         }
 
         public WebFileBrowserState Snapshot()
