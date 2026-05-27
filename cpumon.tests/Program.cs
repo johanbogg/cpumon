@@ -140,6 +140,7 @@ internal static class Program
             TestWebFilesChunkRoutingFallsBackWhenCmdIdMissing();
             TestWebFilesPruneRemovesIdleSessions();
             TestRequestFileUploadAbortRoutesToAgent();
+            TestWebFilesSnapshotCachesIdleState();
             TestSnapshotEndpointsRequireAuth();
             TestSnapshotReturns204AndTriggersFetchWhenEmpty();
             TestSnapshotReturnsCachedAndDoesNotTriggerWhenFresh();
@@ -2562,6 +2563,32 @@ internal static class Program
 
         Assert(transferB.Complete,  "chunk routed by cmdId must complete the matching session's transfer");
         Assert(!transferA.Complete, "chunk routed by cmdId must NOT touch the sibling session's transfer");
+    }
+
+    static void TestWebFilesSnapshotCachesIdleState()
+    {
+        using var engine = new ServerEngine(noBroadcast: true);
+        using var store  = new WebFileBrowserStore(engine, startPruner: false);
+        var session = store.Create("box");
+
+        var first  = session.Snapshot();
+        var second = session.Snapshot();
+        Assert(ReferenceEquals(first, second), "two idle snapshots should return the same cached instance");
+
+        session.PutListing(new FileListing { Path = "/tmp" });
+        var third  = session.Snapshot();
+        Assert(!ReferenceEquals(third, first),
+            "mutation must invalidate the cached snapshot");
+        var fourth = session.Snapshot();
+        Assert(ReferenceEquals(fourth, third), "idle re-poll after a mutation should rebuild and cache once");
+
+        // With an active transfer, snapshots are always built fresh because
+        // chunk arrivals happen outside the session lock.
+        session.NewDownload("dl-1", "x.bin");
+        var fifth = session.Snapshot();
+        var sixth = session.Snapshot();
+        Assert(!ReferenceEquals(fifth, sixth),
+            "snapshots with active transfers should not be cached");
     }
 
     static void TestRequestFileUploadAbortRoutesToAgent()

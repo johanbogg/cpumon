@@ -167,6 +167,12 @@ public sealed class WebFileBrowserStore : IDisposable
         string _result = "";
         long _listingSeq;
         long _resultSeq;
+        // Bumped by every session-level mutation (PutListing, PutResult). Used to
+        // memoise the idle-state snapshot so repeated SPA polls return the same
+        // object without re-allocating the outer record + transfers array.
+        long _revision;
+        long _cachedRevision = -1;
+        WebFileBrowserState? _cachedSnap;
         DateTime _lastTouched = DateTime.UtcNow;
 
         public string Machine   { get; }
@@ -189,6 +195,7 @@ public sealed class WebFileBrowserStore : IDisposable
             {
                 _listing = listing;
                 _listingSeq++;
+                _revision++;
                 _lastTouched = DateTime.UtcNow;
             }
         }
@@ -200,6 +207,7 @@ public sealed class WebFileBrowserStore : IDisposable
                 _ok = ok;
                 _result = message;
                 _resultSeq++;
+                _revision++;
                 _lastTouched = DateTime.UtcNow;
             }
         }
@@ -208,14 +216,23 @@ public sealed class WebFileBrowserStore : IDisposable
         {
             lock (_lock)
             {
-                return new WebFileBrowserState(
-                    SessionId,
-                    _listingSeq,
-                    _listing,
-                    _resultSeq,
-                    _result,
-                    _ok,
-                    _downloads.Values.Select(t => t.Snapshot()).ToArray());
+                // With at least one transfer in flight, chunks land outside the
+                // session lock and the snapshot can change on every call — always
+                // build fresh. The cached fast path is for the much more common
+                // idle case (browser sitting on a directory listing, polling).
+                if (!_downloads.IsEmpty)
+                {
+                    return new WebFileBrowserState(
+                        SessionId, _listingSeq, _listing, _resultSeq, _result, _ok,
+                        _downloads.Values.Select(t => t.Snapshot()).ToArray());
+                }
+                if (_cachedSnap != null && _cachedRevision == _revision)
+                    return _cachedSnap;
+                _cachedSnap = new WebFileBrowserState(
+                    SessionId, _listingSeq, _listing, _resultSeq, _result, _ok,
+                    Array.Empty<WebFileBrowserTransfer>());
+                _cachedRevision = _revision;
+                return _cachedSnap;
             }
         }
 
