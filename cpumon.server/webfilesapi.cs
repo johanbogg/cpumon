@@ -643,8 +643,8 @@ public static class WebFilesApi
         ctx.Response.StatusCode = status;
         return Results.Json(new { error = code, message }, JsonOpts);
     }
-}
 
-public sealed class PathRequest   { public string? Path { get; set; } }
-public sealed class DeleteRequest { public string? Path { get; set; } public bool Recursive { get; set; } }
-public sealed class RenameRequest { public string? Path { get; set; } public string? NewName { get; set; } }
+    sealed class PathRequest   { public string? Path { get; set; } }
+    sealed class DeleteRequest { public string? Path { get; set; } public bool Recursive { get; set; } }
+    sealed class RenameRequest { public string? Path { get; set; } public string? NewName { get; set; } }
+}
