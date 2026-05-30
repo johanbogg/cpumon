@@ -81,6 +81,7 @@ internal static class Program
             TestSessionStoreTouchRefreshesLastUsed();
             TestSessionStoreInvalidateRemoves();
             TestSessionStoreInvalidateByUsername();
+            TestSessionStoreInvalidateByUsernameTrimsWhitespace();
             TestBootstrapTokenIssuerClearStopsAcceptance();
             TestSessionStorePruneRemovesExpiredEntries();
             TestWebHostStartsAndStopsCleanly();
@@ -92,6 +93,7 @@ internal static class Program
             TestAuthLoginRejectsBlankBody();
             TestAuthLoginRejectsWrongPassword();
             TestAuthLoginSuccessIssuesCookies();
+            TestAuthLoginCanonicalizesSessionUsername();
             TestAuthLogoutWithCsrfClearsCookies();
             TestAuthLogoutWithoutCsrfReturns403();
             TestAuthWhoamiReturnsUsername();
@@ -136,6 +138,7 @@ internal static class Program
             TestWebFilesMkdirRoutesResultBackThroughSession();
             TestWebFilesDownloadDeliversAggregatedChunks();
             TestWebFilesUploadStreamsChunksToEngine();
+            TestWebFilesUploadAcceptsEmptyFile();
             TestWebFilesChunkRoutesBySessionCmdIdNotJustTransferId();
             TestWebFilesChunkRoutingFallsBackWhenCmdIdMissing();
             TestWebFilesPruneRemovesIdleSessions();
@@ -1089,6 +1092,14 @@ internal static class Program
         Assert(store.InvalidateByUsername("")       == 0, "InvalidateByUsername must be a no-op for blank input");
     }
 
+    static void TestSessionStoreInvalidateByUsernameTrimsWhitespace()
+    {
+        using var store = new SessionStore(startPruner: false);
+        var s = store.Issue(" admin ", "::1", "");
+        Assert(store.InvalidateByUsername("admin") == 1, "InvalidateByUsername must trim stored session usernames");
+        Assert(store.Validate(s.Id) == null, "trim-matched session must be removed");
+    }
+
     static void TestBootstrapTokenIssuerClearStopsAcceptance()
     {
         using var issuer = new BootstrapTokenIssuer();
@@ -1253,6 +1264,16 @@ internal static class Program
         Assert(h.CookieValue("cpumon_csrf").Length > 0, "cpumon_csrf cookie should be set");
         Assert(h.CookieValue("cpumon_sess") != h.CookieValue("cpumon_csrf"), "session id and csrf must differ");
         Assert(h.Sessions.Count == 1, "session store should have one entry");
+    }
+
+    static void TestAuthLoginCanonicalizesSessionUsername()
+    {
+        using var h = new WebApiTestHost();
+        h.Operators.Create("Admin", "correctpassword12");
+        h.Login(" admin ");
+        var session = h.Sessions.Validate(h.CookieValue("cpumon_sess"));
+        Assert(session?.Username == "Admin", "login must store the canonical operator username in the session");
+        Assert(h.Sessions.InvalidateByUsername("Admin") == 1, "canonicalized login session must be invalidated by tray username");
     }
 
     static void TestAuthLogoutWithCsrfClearsCookies()
@@ -2477,7 +2498,7 @@ internal static class Program
         var sessionId = JsonDocument.Parse(h.Body(open)).RootElement.GetProperty("sessionId").GetString()!;
 
         using var dl = h.Post($"/api/clients/box/files/{sessionId}/download", new { path = @"C:\file.bin" }, csrfHeader: h.Csrf);
-        Assert((int)dl.StatusCode == 200, "download start should 200");
+        Assert((int)dl.StatusCode == 200, $"download start should 200, got {(int)dl.StatusCode}: {h.Body(dl)}");
         using var dlDoc = JsonDocument.Parse(h.Body(dl));
         var transferId = dlDoc.RootElement.GetProperty("transferId").GetString()!;
 
@@ -2535,6 +2556,29 @@ internal static class Program
         missingDest.Content.Headers.ContentLength = 0;
         using var bad = h.Client.SendAsync(missingDest).GetAwaiter().GetResult();
         Assert((int)bad.StatusCode == 400, "upload without dest should 400");
+    }
+
+    static void TestWebFilesUploadAcceptsEmptyFile()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        var cl = AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        var capture = CaptureClientWrites(cl);
+
+        using var open = h.Post("/api/clients/box/files/open", body: null, csrfHeader: h.Csrf);
+        var sessionId = JsonDocument.Parse(h.Body(open)).RootElement.GetProperty("sessionId").GetString()!;
+
+        var req = new HttpRequestMessage(HttpMethod.Post, $"/api/clients/box/files/{sessionId}/upload?dest=" + Uri.EscapeDataString(@"C:\dest") + "&name=empty.txt");
+        req.Headers.Add("X-CSRF-Token", h.Csrf);
+        req.Content = new ByteArrayContent(Array.Empty<byte>());
+        req.Content.Headers.ContentLength = 0;
+        using var resp = h.Client.SendAsync(req).GetAwaiter().GetResult();
+        Assert((int)resp.StatusCode == 204, "zero-byte upload should return 204");
+
+        capture.Position = 0;
+        var sent = new StreamReader(capture, Encoding.UTF8, leaveOpen: true).ReadToEnd();
+        Assert(sent.Contains("\"fileName\":\"empty.txt\"") && sent.Contains("\"isLast\":true"),
+            "zero-byte upload should send a final empty upload chunk");
     }
 
     static void TestWebFilesChunkRoutesBySessionCmdIdNotJustTransferId()
@@ -2872,6 +2916,15 @@ internal static class Program
         };
         engine.Clients[machineName] = client;
         return client;
+    }
+
+    static MemoryStream CaptureClientWrites(RemoteClient client)
+    {
+        var ms = new MemoryStream();
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        typeof(RemoteClient).GetField("_wr", flags)!.SetValue(client,
+            new StreamWriter(ms, new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true });
+        return ms;
     }
 
     static void Assert(bool condition, string message)

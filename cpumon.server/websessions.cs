@@ -87,8 +87,9 @@ public sealed class SessionStore : IDisposable
     public int InvalidateByUsername(string username)
     {
         if (string.IsNullOrWhiteSpace(username)) return 0;
+        var key = username.Trim();
         var matches = _sessions
-            .Where(kv => string.Equals(kv.Value.Username, username, StringComparison.OrdinalIgnoreCase))
+            .Where(kv => string.Equals(kv.Value.Username.Trim(), key, StringComparison.OrdinalIgnoreCase))
             .Select(kv => kv.Key)
             .ToList();
         int removed = 0;

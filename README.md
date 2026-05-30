@@ -87,10 +87,10 @@ When a client is granted PAW status the server relays every incoming report to i
 
 ### Web dashboard
 
-Started with `--web` (or by enabling the Web UI in Tray → Startup Options…). The host runs in-process on Kestrel and shares the same `ServerEngine` + `ServerDashboardController` as the WinForms console; the engine is the single source of truth. State updates are pushed over `/api/ws/state` and `/api/ws/log`. On-demand snapshots (process list, services, events, sysinfo, CPU detail, screenshot) are coalesced through `SnapshotCache` with per-kind TTLs so multiple browser tabs cannot saturate slow agents.
+Started with `--web` (or by enabling the Web UI in Tray → Startup Options…). The host runs in-process on Kestrel and shares the same `ServerEngine` + `ServerDashboardController` as the WinForms console; the engine is the single source of truth. State updates are pushed over `/ws/state` and `/ws/log`. On-demand snapshots (process list, services, events, sysinfo, CPU detail, screenshot) are coalesced through `SnapshotCache` with per-kind TTLs so multiple browser tabs cannot saturate slow agents.
 
 Authentication is operator-password based:
-- Argon2id-hashed credentials live in `operator.json` (one operator account, created via bootstrap URL).
+- Argon2id-hashed credentials live in `operator.json` (`{ accounts: [...] }`, with the first account created via bootstrap URL).
 - On first start with no operator, the server prints and surfaces a one-shot bootstrap URL containing a single-use token; visiting it opens the setup page to set a username and password.
 - Logins issue a session cookie and a CSRF token; mutating endpoints require both. Five failed logins from one IP rate-limits further attempts.
 

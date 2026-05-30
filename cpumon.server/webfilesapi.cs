@@ -38,7 +38,13 @@ public sealed class WebFileBrowserStore : IDisposable
     {
         _engine = engine;
         _stagingRoot = AppPaths.DataFile("webdl");
-        try { Directory.CreateDirectory(_stagingRoot); }
+        try
+        {
+            Directory.CreateDirectory(_stagingRoot);
+            var probe = Path.Combine(_stagingRoot, ".write-test-" + Guid.NewGuid().ToString("N"));
+            File.WriteAllText(probe, "");
+            File.Delete(probe);
+        }
         catch
         {
             _stagingRoot = Path.Combine(Path.GetTempPath(), "CpuMon", "webdl");
@@ -566,6 +572,11 @@ public static class WebFilesApi
             bool clientStillConnected = true;
             try
             {
+                if (total == 0)
+                {
+                    var empty = new FileChunkData { TransferId = transferId, FileName = fileName, Data = "", Offset = 0, TotalSize = 0, IsLast = true };
+                    if (!engine.RequestFileUploadChunk(machine, sessionId, destPath, empty)) return NotFound(ctx, machine);
+                }
                 while (offset < total)
                 {
                     int want = (int)Math.Min(buf.Length, total - offset);
@@ -607,6 +618,11 @@ public static class WebFilesApi
                 return Results.NoContent();
             }
             catch (OperationCanceledException)
+            {
+                if (clientStillConnected) engine.RequestFileUploadAbort(machine, sessionId, transferId);
+                throw;
+            }
+            catch (IOException)
             {
                 if (clientStillConnected) engine.RequestFileUploadAbort(machine, sessionId, transferId);
                 throw;

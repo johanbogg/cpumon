@@ -54,7 +54,7 @@ public sealed class ServerEngine : IDisposable
         "sysinfo", "list_services", "service_start", "service_stop", "service_restart",
         "list_events",
         "terminal_open", "terminal_input", "terminal_close",
-        "file_list", "file_download", "file_upload_chunk", "file_delete", "file_mkdir", "file_rename",
+        "file_list", "file_download", "file_upload_chunk", "file_upload_abort", "file_delete", "file_mkdir", "file_rename",
         "rdp_open", "rdp_close", "rdp_set_fps", "rdp_set_quality", "rdp_refresh", "rdp_input", "rdp_set_monitor", "rdp_set_bandwidth",
     };
 

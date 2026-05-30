@@ -52,12 +52,13 @@ public static class WebAuthApi
                 rateLimiter.RecordFailure(ip);
                 return Error(ctx, 401, "bootstrap_invalid", "Bootstrap token is invalid or expired.");
             }
-            try { operators.Create(body.Username.Trim(), body.Password); }
+            var username = body.Username.Trim();
+            try { operators.Create(username, body.Password); }
             catch (ArgumentException ex) { return Error(ctx, 400, "validation_failed", ex.Message); }
             catch (InvalidOperationException) { return Error(ctx, 409, "bootstrap_disabled", "Operator account already exists."); }
             rateLimiter.Reset(ip);
-            apiCtx.Log?.Add($"Web UI: operator created ({body.Username})", Th.Grn);
-            IssueSessionCookies(ctx, sessions.Issue(body.Username, ip, ctx.Request.Headers.UserAgent.ToString()), apiCtx.UseTls);
+            apiCtx.Log?.Add($"Web UI: operator created ({username})", Th.Grn);
+            IssueSessionCookies(ctx, sessions.Issue(username, ip, ctx.Request.Headers.UserAgent.ToString()), apiCtx.UseTls);
             return Results.NoContent();
         });
 
@@ -77,9 +78,10 @@ public static class WebAuthApi
                 return Error(ctx, 401, "invalid_credentials", "Username or password is incorrect.");
             }
             rateLimiter.Reset(ip);
-            var session = sessions.Issue(body.Username, ip, ctx.Request.Headers.UserAgent.ToString());
+            var username = operators.Find(body.Username)?.Username ?? body.Username.Trim();
+            var session = sessions.Issue(username, ip, ctx.Request.Headers.UserAgent.ToString());
             IssueSessionCookies(ctx, session, apiCtx.UseTls);
-            apiCtx.Log?.Add($"Web UI: login ok ({body.Username}) from {ip}", Th.Grn);
+            apiCtx.Log?.Add($"Web UI: login ok ({username}) from {ip}", Th.Grn);
             return Results.NoContent();
         });
 
