@@ -93,6 +93,15 @@ cpumon.server/
                              downloads to %ProgramData%\CpuMon\webdl\<sessionId>\, and
                              chunks browser-side uploads into file_upload_chunk sends.
                              200 MB cap per transfer.
+  activitytracker.cs       — ActivityTracker + RollingCounter feeding the side-panel
+                             sparklines: Conn (auth events / hr) and Push (update
+                             pushes / hr) at 12 × 5-min buckets; Alert (alerts fired
+                             / 24h) at 12 × 2-hr buckets. ServerEngine records auth
+                             paths + PushUpdate* entry points; AlertService.AlertFired
+                             fires only after the cooldown gate so suppressed alerts
+                             don't inflate the count. RollingCounter.NowProvider lets
+                             tests inject a clock; the window is anchored lazily on
+                             first Advance.
 
 cpumon.tests/
   Program.cs — smoke tests, run automatically by build.ps1 before publish; exit code 1 = fail

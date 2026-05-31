@@ -32,6 +32,7 @@
     <nav class="modeline">
       <button id="osFilter" class="pill"><span class="key">os</span><span id="osFilterValue" class="val">all</span><span class="caret">&#x25BE;</span></button>
       <button id="sortMode" class="pill"><span class="key">sort</span><span id="sortModeValue" class="val">name</span><span class="caret">&#x25BE;</span></button>
+      <button id="showFilter" class="pill"><span class="key">show</span><span id="showFilterValue" class="val">all</span><span class="caret">&#x25BE;</span></button>
       <span class="sep"></span>
       <button id="selectAll" class="pill">Select all visible</button>
       <button id="selectOutdated" class="pill">Select outdated</button>
@@ -63,11 +64,10 @@
         </section>
         <section class="side-section">
           <h3>Activity <span class="rule"></span></h3>
-          <div class="activity-panel">
-            <div class="row"><span class="k">auth</span><span id="authCount" class="v">0</span></div>
-            <div class="row"><span class="k">connections</span><span id="connectionCount" class="v">0</span></div>
-            <div class="row"><span class="k">broadcast</span><span id="broadcastState" class="v">?</span></div>
-            <div class="row"><span class="k">alerts</span><span id="alertsState" class="v">off</span></div>
+          <div class="activity-panel activity-panel-spark">
+            <div class="row spark-row"><span class="k">Conn</span><span id="sparkConn" class="spark"></span><span id="connTotal" class="v">0 / hr</span></div>
+            <div class="row spark-row"><span class="k">Push</span><span id="sparkPush" class="spark cyan"></span><span id="pushTotal" class="v">0 / hr</span></div>
+            <div class="row spark-row"><span class="k">Alert</span><span id="sparkAlert" class="spark yel"></span><span id="alertTotal" class="v">0 / 24h</span></div>
           </div>
         </section>
         <section class="side-section">

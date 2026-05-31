@@ -18,7 +18,18 @@ public sealed record ServerDashboardState(
     string OsFilter,
     string SortMode,
     IReadOnlyList<DashboardLogEntryState> LogEntries,
-    bool AlertsConfigured
+    bool AlertsConfigured,
+    string ShowFilter = "all",
+    ActivitySnapshot? Activity = null
+);
+
+public sealed record ActivitySnapshot(
+    IReadOnlyList<int> ConnectionsPerBucket,
+    IReadOnlyList<int> PushesPerBucket,
+    IReadOnlyList<int> AlertsPerBucket,
+    int ConnectionsLastHour,
+    int PushesLastHour,
+    int AlertsLast24h
 );
 
 public sealed record ClientCardState(
@@ -75,13 +86,19 @@ public sealed class ServerDashboardStateBuilder
 
     public ServerDashboardStateBuilder(ServerEngine engine) => _engine = engine;
 
-    public ServerDashboardState Build(IEnumerable<string> selectedMachineNames, string osFilter, string sortMode, int maxLogEntries = 50, IReadOnlySet<string>? expandedMachineNames = null)
+    public ServerDashboardState Build(IEnumerable<string> selectedMachineNames, string osFilter, string sortMode, int maxLogEntries = 50, IReadOnlySet<string>? expandedMachineNames = null, string showFilter = "all")
     {
         var selected = selectedMachineNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var expanded = expandedMachineNames ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var clients = VisibleClients(osFilter, sortMode)
             .Select(cl => BuildClient(cl, selected, expandedMachineNames == null ? null : expanded))
             .ToList();
+        clients = showFilter switch
+        {
+            "outdated" => clients.Where(c => c.IsOutdated).ToList(),
+            "selected" => clients.Where(c => selected.Contains(c.MachineName)).ToList(),
+            _ => clients
+        };
         var pendingApprovals = _engine.PendingApprovals.Values
             .OrderBy(p => p.MachineName, StringComparer.OrdinalIgnoreCase)
             .Select(p => new PendingApprovalState(p.MachineName, p.Ip, p.Remote, p.RequestedAt, p.ClientVersion))
@@ -120,7 +137,9 @@ public sealed class ServerDashboardStateBuilder
             osFilter,
             sortMode,
             logEntries,
-            _engine.Alerts.ThresholdsConfigured);
+            _engine.Alerts.ThresholdsConfigured,
+            showFilter,
+            _engine.Activity.Snapshot());
     }
 
     List<RemoteClient> VisibleClients(string osFilter, string sortMode)

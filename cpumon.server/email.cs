@@ -83,6 +83,8 @@ public sealed class AlertService
     readonly CLog _log;
     readonly string? _path;
 
+    public event Action? AlertFired;
+
     public AlertService(CLog log, string? path = null) { _log = log; _path = path; _cfg = AlertConfigStore.Load(_path); }
 
     public bool ThresholdsConfigured => _cfg.AlertRamPct.HasValue || _cfg.AlertDiskPct.HasValue || _cfg.AlertTempC.HasValue;
@@ -131,6 +133,7 @@ public sealed class AlertService
             return;
         _lastAlert[key] = now;
         _log.Add($"Alert: {subject}", Th.Org);
+        try { AlertFired?.Invoke(); } catch { }
         Task.Run(async () =>
         {
             try { await SendAsync(cfg, subject, body); _log.Add($"Alert sent: {subject}", Th.Grn); }

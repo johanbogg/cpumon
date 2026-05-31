@@ -192,5 +192,21 @@ Tradeoffs:
 
 Still deferred:
 - RDP — separate long-lived bidirectional channel; next slice.
-- `show` filter pill on the modeline.
-- Activity sparkline counters.
+
+## Slice 17: show filter pill + activity sparklines
+
+Status: pushed.
+
+Implemented:
+- **show pill** on the modeline cycles `all` → `outdated` → `selected`. State lives on `SessionState.ShowFilter` (per-session, alongside `OsFilter`/`SortMode`), normalized through `WebSessionDashboard.SetShowFilter`, posted via `POST /api/state/filter/show` with the same envelope shape as the OS/sort endpoints. `ServerDashboardStateBuilder.Build` takes an optional `showFilter` and applies it after the OS filter, narrowing the visible client list to outdated or selected entries. The WinForms path defaults `showFilter = "all"`, so the desktop UI is unaffected.
+- **Activity sparklines** replace the four static info rows in the side activity panel with three rolling counters from the mockup: `Conn` (auth/re-auth/approve events, per hour), `Push` (update pushes, per hour — counts machines, so a bulk push of N increments by N), `Alert` (alerts that cleared the cooldown gate, per 24h). Backing class `ActivityTracker` wraps three `RollingCounter` instances — Conn/Push at 12 × 5-minute buckets, Alert at 12 × 2-hour buckets. `ServerEngine` owns the tracker; `ApprovePending`, the two auth success paths in `HandleClient`, and the four `PushUpdate*` entry points call it directly. `AlertService` gains an `AlertFired` event that the engine forwards to `RecordAlert()`; this fires only after the cooldown check, so suppressed alerts don't inflate the count. `RollingCounter`'s window is initialised lazily on first `Advance()` so a test-injected `NowProvider` set after construction still anchors the buffer correctly.
+- DTO: `ActivitySnapshot` carries `connectionsPerBucket[]`, `pushesPerBucket[]`, `alertsPerBucket[]`, plus per-period totals. Frontend renders bars sized relative to the row's local max (so a single record per row visualises cleanly), with totals like `7 / hr`, `3 / hr`, `2 / 24h`. CSS reuses the existing `.activity-panel` substrate with a `.spark-row` grid variant and `.spark.cyan` / `.spark.yel` colour modifiers from the mockup.
+- Tests: show filter persist + normalize + applied client-list narrowing for `outdated` and `selected`; `RollingCounter` slide behaviour at one bucket-width and at a window-clearing jump; round-trip through `/api/state` proves `activity` makes it onto the wire.
+
+Tradeoffs:
+- Bars are scaled per row, not per panel. A row with one event looks like a row with many; the absolute count lives in the right-hand total. Sharing a panel-wide max would compress small-but-meaningful spikes (e.g. a single alert vanishes next to a connection burst).
+- Counters live entirely in-process. No persistence across server restarts; the panel is "events seen since startup", bucketed.
+- The show filter only narrows connected clients; offline clients and pending approvals stay visible regardless. They have their own sections and operators usually want them visible even when zooming in on outdated/selected. Easy to extend later if that's wrong.
+
+Still deferred:
+- RDP — separate long-lived bidirectional channel; next slice.

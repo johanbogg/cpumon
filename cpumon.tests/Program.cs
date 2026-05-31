@@ -105,6 +105,11 @@ internal static class Program
             TestDashboardSelectReplacesSelection();
             TestDashboardFilterOsSetsValue();
             TestDashboardFilterRequiresCsrf();
+            TestDashboardFilterShowSetsValue();
+            TestDashboardFilterShowAppliesToVisibleClients();
+            TestActivityTrackerBucketsSlideOverTime();
+            TestActivityTrackerLargeJumpClearsWindow();
+            TestDashboardStateExposesActivitySnapshot();
             TestDashboardWebStateIsSessionLocal();
             TestDashboardTokenRegenerateChangesToken();
             TestPerClientActionsRequireAuth();
@@ -1411,6 +1416,93 @@ internal static class Program
         Assert(h.Body(resp).Contains("\"error\":\"csrf_failed\""), "error code should be csrf_failed");
         using var state = h.Get("/api/state");
         Assert(h.Body(state).Contains("\"osFilter\":\"all\""), "filter should not change on failed csrf check");
+    }
+
+    static void TestDashboardFilterShowSetsValue()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        using var ok = h.Post("/api/state/filter/show", new { value = "outdated" }, csrfHeader: h.Csrf);
+        Assert((int)ok.StatusCode == 200, "show filter set should return 200");
+        Assert(h.Body(ok).Contains("\"value\":\"outdated\""), "response should echo new show filter value");
+        using var state = h.Get("/api/state");
+        Assert(h.Body(state).Contains("\"showFilter\":\"outdated\""), "session showFilter should be persisted");
+        using var bad = h.Post("/api/state/filter/show", new { value = "bogus" }, csrfHeader: h.Csrf);
+        Assert((int)bad.StatusCode == 400, "invalid show filter should return 400");
+    }
+
+    static void TestDashboardFilterShowAppliesToVisibleClients()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "current-box", "Microsoft Windows 11", Proto.AppVersion);
+        AddReportedClient(h.Engine, "old-box",     "Microsoft Windows 11", "0.0.1");
+        using var setOutdated = h.Post("/api/state/filter/show", new { value = "outdated" }, csrfHeader: h.Csrf);
+        Assert((int)setOutdated.StatusCode == 200, "set outdated should 200");
+        using var s1 = h.Get("/api/state");
+        var b1 = h.Body(s1);
+        Assert(b1.Contains("\"machineName\":\"old-box\""),     "outdated filter should keep old-box");
+        Assert(!b1.Contains("\"machineName\":\"current-box\""), "outdated filter should drop current-box");
+
+        using var setSelected = h.Post("/api/state/filter/show", new { value = "selected" }, csrfHeader: h.Csrf);
+        Assert((int)setSelected.StatusCode == 200, "set selected should 200");
+        h.Post("/api/state/select", new { machineNames = new[] { "current-box" } }, csrfHeader: h.Csrf).Dispose();
+        using var s2 = h.Get("/api/state");
+        var b2 = h.Body(s2);
+        Assert(b2.Contains("\"machineName\":\"current-box\""), "selected filter should show current-box (it is selected)");
+        Assert(!b2.Contains("\"machineName\":\"old-box\""),    "selected filter should hide old-box (not selected)");
+    }
+
+    static void TestActivityTrackerBucketsSlideOverTime()
+    {
+        var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var rc = new RollingCounter(4, TimeSpan.FromMinutes(5)) { NowProvider = () => now };
+        rc.Record();
+        rc.Record();
+        var snap0 = rc.Snapshot(out var total0);
+        Assert(total0 == 2, "two records in the newest bucket should sum to 2");
+        Assert(snap0[snap0.Count - 1] == 2 && snap0[0] == 0, "records should land in the newest (last) bucket");
+
+        now = now.AddMinutes(5);
+        rc.Record();
+        var snap1 = rc.Snapshot(out var total1);
+        Assert(total1 == 3, "all three records should still be in the 4-bucket window after one slide");
+        Assert(snap1[snap1.Count - 1] == 1, "newest bucket should hold the latest record");
+        Assert(snap1[snap1.Count - 2] == 2, "second-newest bucket should hold the prior two records");
+
+        now = now.AddMinutes(20);
+        var snap2 = rc.Snapshot(out var total2);
+        Assert(total2 == 0, "after sliding past the window length, totals should be zero");
+        foreach (var v in snap2) Assert(v == 0, "all buckets should be zero after the window slides past");
+    }
+
+    static void TestActivityTrackerLargeJumpClearsWindow()
+    {
+        var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var rc = new RollingCounter(6, TimeSpan.FromMinutes(5)) { NowProvider = () => now };
+        rc.Record(5);
+        Assert(rc.Snapshot(out var t1).Count == 6 && t1 == 5, "fixture: 5 records should be tracked");
+        now = now.AddHours(2);
+        var snap = rc.Snapshot(out var total);
+        Assert(total == 0, "jumping past the entire window should clear all buckets");
+        foreach (var v in snap) Assert(v == 0, "every bucket should be zero after a window-wide jump");
+        rc.Record();
+        Assert(rc.Snapshot(out var t3).Count == 6 && t3 == 1, "tracker should keep recording after a window-wide jump");
+    }
+
+    static void TestDashboardStateExposesActivitySnapshot()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        h.Engine.Activity.RecordConnection();
+        h.Engine.Activity.RecordPush(3);
+        h.Engine.Activity.RecordAlert();
+        using var state = h.Get("/api/state");
+        var body = h.Body(state);
+        Assert(body.Contains("\"activity\":"), "/api/state should expose the activity snapshot");
+        Assert(body.Contains("\"connectionsLastHour\":1"), "connection count should reflect the recorded auth");
+        Assert(body.Contains("\"pushesLastHour\":3"),       "push count should reflect bulk push of 3");
+        Assert(body.Contains("\"alertsLast24h\":1"),        "alert count should reflect the recorded alert");
     }
 
     static void TestDashboardWebStateIsSessionLocal()

@@ -629,6 +629,26 @@ button { cursor: pointer; }
 }
 .activity-panel .k { color: var(--dim); text-transform: uppercase; letter-spacing: 0.16em; font-size: 9.5px; }
 .activity-panel .v { color: var(--brter); font-weight: 500; font-size: 11px; }
+.activity-panel .row.spark-row {
+  display: grid;
+  grid-template-columns: 38px 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+.activity-panel .row.spark-row + .row.spark-row { margin-top: 6px; }
+.activity-panel .spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 16px;
+}
+.activity-panel .spark span {
+  flex: 1;
+  background: var(--grn-soft);
+  min-height: 1px;
+}
+.activity-panel .spark.cyan span { background: var(--cyan); opacity: 0.6; }
+.activity-panel .spark.yel  span { background: var(--yel);  opacity: 0.55; }
 .stage-panel.ready { color: var(--cyan); text-shadow: 0 0 6px var(--cyan-glow); }
 .stage-panel .meta { color: var(--dim); font-size: 10.5px; margin-top: 4px; line-height: 1.6; }
 

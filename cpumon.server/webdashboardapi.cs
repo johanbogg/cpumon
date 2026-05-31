@@ -68,6 +68,20 @@ public static class WebDashboardApi
             catch (ArgumentException ex) { return Error(ctx, 400, "validation_failed", ex.Message); }
         });
 
+        app.MapPost("/api/state/filter/show", async (HttpContext ctx) =>
+        {
+            if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out var session, out var fail)) return fail!;
+            var body = await TryRead<FilterValueRequest>(ctx);
+            if (body == null || string.IsNullOrWhiteSpace(body.Value))
+                return Error(ctx, 400, "validation_failed", "Body { value } required.");
+            try
+            {
+                var v = WebSessionDashboard.SetShowFilter(session!, body.Value);
+                return Results.Json(new { value = v }, JsonOpts);
+            }
+            catch (ArgumentException ex) { return Error(ctx, 400, "validation_failed", ex.Message); }
+        });
+
         app.MapPost("/api/token/regenerate", (HttpContext ctx) =>
         {
             if (!WebAuthApi.TryAuthenticate(ctx, sessions, requireCsrf: true, out _, out var fail)) return fail!;

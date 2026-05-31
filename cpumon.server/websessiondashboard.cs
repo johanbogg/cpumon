@@ -9,6 +9,7 @@ public static class WebSessionDashboard
         HashSet<string> expanded;
         string osFilter;
         string sortMode;
+        string showFilter;
         lock (session.UiLock)
         {
             selected = new string[session.SelectedMachineNames.Count];
@@ -16,8 +17,9 @@ public static class WebSessionDashboard
             expanded = new HashSet<string>(session.ExpandedMachineNames, StringComparer.OrdinalIgnoreCase);
             osFilter = session.OsFilter;
             sortMode = session.SortMode;
+            showFilter = session.ShowFilter;
         }
-        return builder.Build(selected, osFilter, sortMode, expandedMachineNames: expanded);
+        return builder.Build(selected, osFilter, sortMode, expandedMachineNames: expanded, showFilter: showFilter);
     }
 
     public static void SetSelection(SessionState session, IEnumerable<string> machineNames)
@@ -42,6 +44,13 @@ public static class WebSessionDashboard
     {
         var v = NormalizeSortMode(value);
         lock (session.UiLock) session.SortMode = v;
+        return v;
+    }
+
+    public static string SetShowFilter(SessionState session, string value)
+    {
+        var v = NormalizeShowFilter(value);
+        lock (session.UiLock) session.ShowFilter = v;
         return v;
     }
 
@@ -77,5 +86,12 @@ public static class WebSessionDashboard
         var v = value.Trim().ToLowerInvariant();
         if (v is "name" or "os") return v;
         throw new ArgumentException("Invalid sort mode.");
+    }
+
+    static string NormalizeShowFilter(string value)
+    {
+        var v = value.Trim().ToLowerInvariant();
+        if (v is "all" or "outdated" or "selected") return v;
+        throw new ArgumentException("Invalid show filter.");
     }
 }

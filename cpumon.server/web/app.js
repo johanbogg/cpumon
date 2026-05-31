@@ -116,12 +116,10 @@ function render(data) {
   $('offlineCount').textContent = offline.length;
   $('osFilterValue').textContent = data.osFilter || 'all';
   $('sortModeValue').textContent = data.sortMode || 'name';
-  $('authCount').textContent = data.authenticatedClientCount ?? clients.length;
-  $('connectionCount').textContent = data.connectionCount ?? 0;
-  $('broadcastState').textContent = data.broadcastDisabled ? 'off' : 'on';
-  $('alertsState').textContent = data.alertsConfigured ? 'configured' : 'off';
+  $('showFilterValue').textContent = data.showFilter || 'all';
   $('segBroadcast').textContent = data.broadcastDisabled ? 'off' : 'on';
   $('segAuthCount').textContent = data.authenticatedClientCount ?? clients.length;
+  renderActivity(data.activity);
 
   state.selected = new Set(data.selectedMachineNames || []);
   $('selectionCount').innerHTML = '';
@@ -539,6 +537,29 @@ function setBar(bar, pct) {
   bar.className = width >= 90 ? 'crit' : width >= 75 ? 'warn' : '';
 }
 
+function renderActivity(activity) {
+  const conn  = activity?.connectionsPerBucket || [];
+  const push  = activity?.pushesPerBucket      || [];
+  const alert = activity?.alertsPerBucket      || [];
+  renderSpark($('sparkConn'),  conn);
+  renderSpark($('sparkPush'),  push);
+  renderSpark($('sparkAlert'), alert);
+  $('connTotal').textContent  = `${activity?.connectionsLastHour ?? 0} / hr`;
+  $('pushTotal').textContent  = `${activity?.pushesLastHour      ?? 0} / hr`;
+  $('alertTotal').textContent = `${activity?.alertsLast24h       ?? 0} / 24h`;
+}
+
+function renderSpark(host, buckets) {
+  if (!host) return;
+  const max = buckets.reduce((m, v) => v > m ? v : m, 0);
+  host.replaceChildren(...buckets.map((v) => {
+    const bar = document.createElement('span');
+    const pct = max > 0 ? Math.max(4, Math.round((v / max) * 100)) : 0;
+    bar.style.height = `${pct}%`;
+    return bar;
+  }));
+}
+
 function kv(k, v) {
   const el = document.createElement('div');
   el.className = 'kv';
@@ -640,6 +661,11 @@ $('osFilter').addEventListener('click', async () => {
 $('sortMode').addEventListener('click', async () => {
   const cur = state.data?.sortMode || 'name';
   await post('/api/state/filter/sort', { value: cur === 'name' ? 'os' : 'name' });
+});
+$('showFilter').addEventListener('click', async () => {
+  const cur = state.data?.showFilter || 'all';
+  const next = cur === 'all' ? 'outdated' : cur === 'outdated' ? 'selected' : 'all';
+  await post('/api/state/filter/show', { value: next });
 });
 $('selectAll').addEventListener('click', () => post('/api/state/select', { machineNames: (state.data?.clients || []).map(c => c.machineName) }));
 $('selectOutdated').addEventListener('click', () => post('/api/state/select', { machineNames: (state.data?.clients || []).filter(c => c.isOutdated).map(c => c.machineName) }));

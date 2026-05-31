@@ -28,6 +28,7 @@ public sealed class ServerEngine : IDisposable
     readonly ConcurrentDictionary<string, long> _pawSeenNonces = new();
     readonly ConcurrentDictionary<string, (string Kind, long At)> _silentSnapshotCommands = new(StringComparer.Ordinal);
     readonly AlertService _alertSvc;
+    readonly ActivityTracker _activity = new();
     readonly UpdateChecker _updater = new();
     volatile ReleaseInfo? _availableUpdate;
     volatile string? _stagedReleaseDir;
@@ -63,6 +64,7 @@ public sealed class ServerEngine : IDisposable
         _nb = noBroadcast;
         _store = store ?? new ApprovedClientStore();
         _alertSvc = alerts ?? new AlertService(_log);
+        _alertSvc.AlertFired += () => _activity.RecordAlert();
         _tok = Security.GenToken();
         _tokAt = DateTime.UtcNow;
     }
@@ -75,6 +77,7 @@ public sealed class ServerEngine : IDisposable
     public ConcurrentDictionary<string, PendingClientApproval> PendingApprovals => _pendingApprovals;
     public ApprovedClientStore Store => _store;
     public AlertService Alerts => _alertSvc;
+    public ActivityTracker Activity => _activity;
     public CLog Log => _log;
     public ReleaseInfo? AvailableUpdate => _availableUpdate;
     public string? StagedReleaseDir => _stagedReleaseDir;
@@ -149,6 +152,7 @@ public sealed class ServerEngine : IDisposable
             AdoptPreviousClientState(prev, cl, disposePrevious: true);
         _cls[pending.MachineName] = cl;
         cl.FlushPending();
+        _activity.RecordConnection();
         _log.Add($"Approved pending client: {pending.MachineName}", Th.Grn);
         return true;
     }
@@ -395,18 +399,22 @@ public sealed class ServerEngine : IDisposable
         return Versioning.IsOlder(clientVersion, Proto.AppVersion);
     }
 
-    public void PushUpdate(RemoteClient cl, string exePath) => Task.Run(() => DoPushUpdate(cl, exePath));
+    public void PushUpdate(RemoteClient cl, string exePath) { _activity.RecordPush(); Task.Run(() => DoPushUpdate(cl, exePath)); }
 
-    public void PushLinuxUpdate(RemoteClient cl, string path) => Task.Run(() =>
+    public void PushLinuxUpdate(RemoteClient cl, string path)
     {
-        if (!LinuxUpdatePayload.TryRead(path, out var fileName, out var bytes, out var error))
+        _activity.RecordPush();
+        Task.Run(() =>
         {
-            _log.Add($"Linux update failed: {error}", Th.Red);
-            return;
-        }
-        string fileHash = Convert.ToBase64String(SHA256.HashData(bytes));
-        PushUpdateFromBytes(cl, fileName, bytes, fileHash);
-    });
+            if (!LinuxUpdatePayload.TryRead(path, out var fileName, out var bytes, out var error))
+            {
+                _log.Add($"Linux update failed: {error}", Th.Red);
+                return;
+            }
+            string fileHash = Convert.ToBase64String(SHA256.HashData(bytes));
+            PushUpdateFromBytes(cl, fileName, bytes, fileHash);
+        });
+    }
 
     void DoPushUpdate(RemoteClient cl, string exePath)
     {
@@ -444,22 +452,26 @@ public sealed class ServerEngine : IDisposable
         catch (Exception ex) { _log.Add($"Update failed: {ex.Message}", Th.Red); }
     }
 
-    public void PushUpdateMulti(IReadOnlyList<RemoteClient> clients, string exePath) => Task.Run(() => DoPushUpdateMulti(clients, exePath));
+    public void PushUpdateMulti(IReadOnlyList<RemoteClient> clients, string exePath) { _activity.RecordPush(clients.Count); Task.Run(() => DoPushUpdateMulti(clients, exePath)); }
 
-    public void PushLinuxUpdateMulti(IReadOnlyList<RemoteClient> clients, string path) => Task.Run(() =>
+    public void PushLinuxUpdateMulti(IReadOnlyList<RemoteClient> clients, string path)
     {
-        if (!LinuxUpdatePayload.TryRead(path, out var fileName, out var bytes, out var error))
+        _activity.RecordPush(clients.Count);
+        Task.Run(() =>
         {
-            _log.Add($"Linux update failed: {error}", Th.Red);
-            return;
-        }
-        string fileHash = Convert.ToBase64String(SHA256.HashData(bytes));
-        foreach (var cl in clients)
-        {
-            var capture = cl;
-            Task.Run(() => PushUpdateFromBytes(capture, fileName, bytes, fileHash));
-        }
-    });
+            if (!LinuxUpdatePayload.TryRead(path, out var fileName, out var bytes, out var error))
+            {
+                _log.Add($"Linux update failed: {error}", Th.Red);
+                return;
+            }
+            string fileHash = Convert.ToBase64String(SHA256.HashData(bytes));
+            foreach (var cl in clients)
+            {
+                var capture = cl;
+                Task.Run(() => PushUpdateFromBytes(capture, fileName, bytes, fileHash));
+            }
+        });
+    }
 
     void DoPushUpdateMulti(IReadOnlyList<RemoteClient> clients, string exePath)
     {
@@ -738,6 +750,7 @@ public sealed class ServerEngine : IDisposable
                                 AdoptPreviousClientState(prev1, cl, disposePrevious: true);
                             _cls[mn] = cl;
                             cl.FlushPending();
+                            _activity.RecordConnection();
                             continue;
                         }
 
@@ -755,6 +768,7 @@ public sealed class ServerEngine : IDisposable
                                 AdoptPreviousClientState(prev2, cl, disposePrevious: true);
                             _cls[mn] = cl;
                             cl.FlushPending();
+                            _activity.RecordConnection();
                             continue;
                         }
 

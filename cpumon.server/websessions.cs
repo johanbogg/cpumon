@@ -21,6 +21,7 @@ public sealed class SessionState
     public HashSet<string> ExpandedMachineNames { get; } = new(StringComparer.OrdinalIgnoreCase);
     public string OsFilter { get; set; } = "all";
     public string SortMode { get; set; } = "name";
+    public string ShowFilter { get; set; } = "all";
 }
 
 public sealed class SessionStore : IDisposable
