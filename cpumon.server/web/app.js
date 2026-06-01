@@ -278,6 +278,7 @@ function buildCardActions(client, selected) {
   if (client.canTerminal)  inspect.push(action('Terminal',   () => openTerminalDialog(client.machineName)));
   if (client.canScreenshot) inspect.push(action('Screenshot', () => openScreenshotDialog(client.machineName)));
   if (client.canCpuDetail) inspect.push(action('CPU detail', () => openCpuDetailDialog(client.machineName)));
+  if (client.canRdp) inspect.push(action('RDP', () => openRdpDialog(client.machineName)));
   inspect.push(action('Files', () => openFilesDialog(client.machineName)));
 
   const interact = [
@@ -1025,6 +1026,102 @@ function openEventsDialog(machine) {
       setTimeout(() => filter.focus(), 0);
     },
   });
+}
+
+// ── rdp dialog ─────────────────────────────────────────────────────
+function openRdpDialog(machine) {
+  openModal({
+    title: `RDP · ${machine}`,
+    size: 'full',
+    mount: (body, ctx) => {
+      body.classList.add('flush');
+      body.innerHTML = `
+        <div class="rdp-toolbar">
+          <label>FPS <input class="rdp-fps" type="range" min="1" max="30" value="5"></label>
+          <label>Quality <input class="rdp-quality" type="range" min="10" max="95" value="25"></label>
+          <label>KB/s <input class="rdp-bw" type="number" min="0" step="64" value="0"></label>
+          <button class="a-btn rdp-refresh">Refresh</button>
+          <span class="modal-status">Connecting…</span>
+        </div>
+        <div class="rdp-stage"><canvas class="rdp-canvas" tabindex="0"></canvas></div>`;
+      const status = body.querySelector('.modal-status');
+      const canvas = body.querySelector('.rdp-canvas');
+      const g = canvas.getContext('2d');
+      let remoteW = 0, remoteH = 0, lastSeq = -1, closed = false, pendingMove = null;
+      const ws = new WebSocket(wsUrl(`/ws/rdp/${encodeURIComponent(machine)}`));
+      const send = (msg) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); };
+      const flushMove = () => {
+        if (!pendingMove) return;
+        send({ type: 'input', input: { t: 'mouse_move', x: pendingMove.x, y: pendingMove.y, at: Date.now() } });
+        pendingMove = null;
+      };
+      const moveTimer = setInterval(flushMove, 50);
+      ctx.onClose(() => {
+        closed = true;
+        clearInterval(moveTimer);
+        try { send({ type: 'close' }); ws.close(); } catch {}
+      });
+      ws.onopen = () => { status.textContent = 'Opening…'; canvas.focus(); };
+      ws.onclose = () => { if (!closed) { status.textContent = 'Closed'; status.classList.add('err'); } };
+      ws.onerror = () => { status.textContent = 'RDP socket error'; status.classList.add('err'); };
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'open') { status.textContent = 'Live'; status.classList.remove('err'); return; }
+        if (msg.type === 'closed') { status.textContent = msg.reason || 'Closed'; status.classList.add('err'); return; }
+        if (msg.type === 'frame') drawRdpFrame(msg.frame, canvas, g, (w, h) => { remoteW = w; remoteH = h; }, (text) => { status.textContent = text; }, lastSeq, (seq) => { lastSeq = seq; });
+      };
+      body.querySelector('.rdp-fps').addEventListener('input', (e) => send({ type: 'set_fps', fps: Number(e.target.value) }));
+      body.querySelector('.rdp-quality').addEventListener('input', (e) => send({ type: 'set_quality', quality: Number(e.target.value) }));
+      body.querySelector('.rdp-bw').addEventListener('change', (e) => send({ type: 'set_bandwidth', bandwidthKbps: Number(e.target.value) }));
+      body.querySelector('.rdp-refresh').addEventListener('click', () => send({ type: 'refresh' }));
+      canvas.addEventListener('mousemove', (e) => { pendingMove = rdpPoint(e, canvas, remoteW, remoteH); });
+      canvas.addEventListener('mousedown', (e) => { canvas.focus(); flushMove(); send({ type: 'input', input: { t: 'mouse_down', ...rdpPoint(e, canvas, remoteW, remoteH), btn: rdpButton(e) } }); });
+      canvas.addEventListener('mouseup', (e) => { flushMove(); send({ type: 'input', input: { t: 'mouse_up', ...rdpPoint(e, canvas, remoteW, remoteH), btn: rdpButton(e) } }); });
+      canvas.addEventListener('wheel', (e) => { e.preventDefault(); flushMove(); send({ type: 'input', input: { t: 'mouse_wheel', ...rdpPoint(e, canvas, remoteW, remoteH), delta: Math.trunc(-e.deltaY) } }); }, { passive: false });
+      canvas.addEventListener('keydown', (e) => { e.preventDefault(); send({ type: 'input', input: { t: 'key_down', vk: e.keyCode || e.which || 0, scan: 0, ext: false } }); });
+      canvas.addEventListener('keyup', (e) => { e.preventDefault(); send({ type: 'input', input: { t: 'key_up', vk: e.keyCode || e.which || 0, scan: 0, ext: false } }); });
+    },
+  });
+}
+
+function drawRdpFrame(frame, canvas, g, setSize, setStatus, lastSeq, setSeq) {
+  if (!frame || (frame.seq <= lastSeq && !frame.full)) return;
+  setSeq(frame.seq);
+  if (canvas.width !== frame.screenW || canvas.height !== frame.screenH) {
+    canvas.width = frame.screenW || 1;
+    canvas.height = frame.screenH || 1;
+    g.fillStyle = '#05070b';
+    g.fillRect(0, 0, canvas.width, canvas.height);
+    setSize(canvas.width, canvas.height);
+  }
+  for (const tile of frame.tiles || []) {
+    const img = new Image();
+    img.onload = () => { g.drawImage(img, tile.x, tile.y, tile.w, tile.h); drawRdpCursor(g, frame.curX, frame.curY); };
+    img.src = `data:image/jpeg;base64,${tile.d}`;
+  }
+  setStatus(`${frame.screenW}×${frame.screenH} · ${(frame.tiles || []).length} tiles`);
+}
+
+function drawRdpCursor(g, x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) return;
+  g.save();
+  g.strokeStyle = '#05070b'; g.lineWidth = 4;
+  g.beginPath(); g.moveTo(x, y); g.lineTo(x + 14, y + 6); g.lineTo(x + 7, y + 9); g.lineTo(x + 4, y + 18); g.closePath(); g.stroke();
+  g.fillStyle = 'rgba(48, 214, 255, .85)'; g.fill();
+  g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.stroke();
+  g.strokeStyle = 'rgba(255, 82, 82, .9)'; g.beginPath(); g.arc(x, y, 6, 0, Math.PI * 2); g.stroke();
+  g.restore();
+}
+
+function rdpPoint(e, canvas, remoteW, remoteH) {
+  const r = canvas.getBoundingClientRect();
+  const x = r.width > 0 ? Math.round((e.clientX - r.left) * (remoteW || canvas.width) / r.width) : 0;
+  const y = r.height > 0 ? Math.round((e.clientY - r.top) * (remoteH || canvas.height) / r.height) : 0;
+  return { x: Math.max(0, x), y: Math.max(0, y) };
+}
+
+function rdpButton(e) {
+  return e.button === 2 ? 1 : e.button === 1 ? 2 : 0;
 }
 function rowEvent(e) {
   const tr = document.createElement('tr');

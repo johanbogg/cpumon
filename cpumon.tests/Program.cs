@@ -149,6 +149,9 @@ internal static class Program
             TestWebFilesPruneRemovesIdleSessions();
             TestRequestFileUploadAbortRoutesToAgent();
             TestWebFilesSnapshotCachesIdleState();
+            TestWebRdpStoreRoutesFramesAndClose();
+            TestWebRdpRejectsLinuxClients();
+            TestWebRdpEndpointRequiresWebSocket();
             TestSnapshotEndpointsRequireAuth();
             TestSnapshotReturns204AndTriggersFetchWhenEmpty();
             TestSnapshotReturnsCachedAndDoesNotTriggerWhenFresh();
@@ -2751,6 +2754,44 @@ internal static class Program
             "RequestFileUploadAbort against an unknown machine should return false");
     }
 
+    static void TestWebRdpStoreRoutesFramesAndClose()
+    {
+        using var engine = new ServerEngine(noBroadcast: true);
+        var cl = AddReportedClient(engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        var capture = CaptureClientWrites(cl);
+        using var store = new WebRdpSessionStore(engine);
+        var session = store.Create("box", "rdp-test");
+
+        Assert(engine.RequestRdpOpen("box", "rdp-test", 5, 25), "RDP open should route to connected Windows client");
+        store.OnFrame(cl, "rdp-test", new RdpFrameData { Id = "rdp-test", Seq = 1, ScreenW = 800, ScreenH = 600 });
+        Assert(session.Reader.TryRead(out var frame) && frame.Seq == 1, "matching RDP frame should route to the web session");
+
+        store.OnFrame(cl, "other", new RdpFrameData { Id = "other", Seq = 2 });
+        Assert(!session.Reader.TryRead(out _), "non-matching RDP frame must not route to this web session");
+
+        store.Remove("box", "rdp-test");
+        capture.Position = 0;
+        var sent = new StreamReader(capture, Encoding.UTF8, leaveOpen: true).ReadToEnd();
+        Assert(sent.Contains("\"cmd\":\"rdp_open\"") && sent.Contains("\"cmd\":\"rdp_close\""),
+            "web RDP remove should close the target capture session");
+    }
+
+    static void TestWebRdpRejectsLinuxClients()
+    {
+        using var engine = new ServerEngine(noBroadcast: true);
+        AddReportedClient(engine, "lnx", "Linux Debian", "1.1.0-linux");
+        Assert(!engine.RequestRdpOpen("lnx", "rdp-linux", 5, 25), "RDP open must reject Linux clients");
+    }
+
+    static void TestWebRdpEndpointRequiresWebSocket()
+    {
+        using var h = new WebApiTestHost();
+        h.Login();
+        AddReportedClient(h.Engine, "box", "Microsoft Windows 11", Proto.AppVersion);
+        using var resp = h.Get("/ws/rdp/box");
+        Assert((int)resp.StatusCode == 400, "RDP endpoint should reject non-WebSocket requests");
+    }
+
     static void TestWebFilesPruneRemovesIdleSessions()
     {
         using var engine = new ServerEngine(noBroadcast: true);
@@ -2799,6 +2840,7 @@ internal static class Program
         public SnapshotCache             Snapshots  { get; }
         public WebTerminalStore          Terminals  { get; }
         public WebFileBrowserStore       Files      { get; }
+        public WebRdpSessionStore        Rdps       { get; }
         public AlertService              Alerts     { get; }
         public InstallLinkStore          Links      { get; }
         readonly TempDir _td;
@@ -2818,6 +2860,7 @@ internal static class Program
             Snapshots  = new SnapshotCache(Engine);
             Terminals  = new WebTerminalStore(Engine);
             Files      = new WebFileBrowserStore(Engine, startPruner: false);
+            Rdps       = new WebRdpSessionStore(Engine);
             Links      = new InstallLinkStore();
             Host       = new WebHost();
             Host.StartAsync(new WebHostOptions
@@ -2834,6 +2877,7 @@ internal static class Program
                     WebSnapshotApi.Map(app, Engine, Snapshots, Sessions, ctx);
                     WebTerminalApi.Map(app, Engine, Terminals, Sessions, ctx);
                     WebFilesApi.Map(app, Engine, Files, Sessions, ctx);
+                    WebRdpApi.Map(app, Engine, Rdps, Sessions, ctx);
                     WebOfflineApi.Map(app, Engine, Sessions, ctx);
                     WebApprovedApi.Map(app, Engine, Sessions, ctx);
                     WebAlertsApi.Map(app, Alerts, Sessions, ctx);
@@ -2927,6 +2971,7 @@ internal static class Program
             Client.Dispose();
             Terminals.Dispose();
             Files.Dispose();
+            Rdps.Dispose();
             Host.DisposeAsync().GetAwaiter().GetResult();
             Snapshots.Dispose();
             Sessions.Dispose();

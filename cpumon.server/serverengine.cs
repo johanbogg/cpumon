@@ -99,6 +99,7 @@ public sealed class ServerEngine : IDisposable
     public event Action<RemoteClient, string?, FileListing>? FileListingUpdated;
     public event Action<RemoteClient, string?, FileChunkData>? FileChunkUpdated;
     public event Action<RemoteClient, string, bool, string>? FileResultUpdated;
+    public event Action<RemoteClient, string, RdpFrameData>? RdpFrameUpdated;
     public event Action? UpdateAvailable;
     public event Action? ReleaseStaged;
 
@@ -298,6 +299,27 @@ public sealed class ServerEngine : IDisposable
     {
         if (!_cls.TryGetValue(machine, out var cl)) return false;
         cl.Send(new ServerCommand { Cmd = "file_upload_abort", CmdId = cmdId, TransferId = transferId });
+        return true;
+    }
+
+    public bool RequestRdpOpen(string machine, string rdpId, int fps, int quality)
+    {
+        if (!_cls.TryGetValue(machine, out var cl) || IsLinuxClient(cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "rdp_open", RdpId = rdpId, RdpFps = fps, RdpQuality = quality });
+        return true;
+    }
+
+    public bool RequestRdpClose(string machine, string rdpId)
+    {
+        if (!_cls.TryGetValue(machine, out var cl)) return false;
+        cl.Send(new ServerCommand { Cmd = "rdp_close", RdpId = rdpId }, queueOnFailure: false);
+        return true;
+    }
+
+    public bool RequestRdpCommand(string machine, ServerCommand cmd)
+    {
+        if (!_cls.TryGetValue(machine, out var cl) || cmd.RdpId == null) return false;
+        cl.Send(cmd, queueOnFailure: false);
         return true;
     }
 
@@ -921,6 +943,7 @@ public sealed class ServerEngine : IDisposable
                             break;
 
                         case "rdp_frame" when msg.RdpFrame != null && msg.RdpId != null:
+                            try { RdpFrameUpdated?.Invoke(cl, msg.RdpId, msg.RdpFrame); } catch { }
                             if (cl.PawRdpSessionOwners.TryGetValue(msg.RdpId, out var pawOwner) &&
                                 _cls.TryGetValue(pawOwner, out var pawCl))
                             {
