@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.IO;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -13,21 +13,34 @@ using Microsoft.AspNetCore.Routing;
 
 public sealed class WebRdpSessionStore : IDisposable
 {
+    static readonly TimeSpan DefaultIdleTtl = TimeSpan.FromMinutes(15);
+    static readonly TimeSpan DefaultSweepInterval = TimeSpan.FromMinutes(2);
+
     readonly ServerEngine _engine;
     readonly ConcurrentDictionary<string, Session> _sessions = new(StringComparer.Ordinal);
+    readonly Timer? _sweeper;
     volatile bool _disposed;
 
-    public WebRdpSessionStore(ServerEngine engine)
+    public TimeSpan IdleSessionTtl { get; init; } = DefaultIdleTtl;
+
+    public WebRdpSessionStore(ServerEngine engine, bool startSweeper = true)
     {
         _engine = engine;
         _engine.RdpFrameUpdated += OnFrame;
+        if (startSweeper)
+            _sweeper = new Timer(_ => Sweep(), null, DefaultSweepInterval, DefaultSweepInterval);
     }
 
     public Session Create(string machine, string rdpId)
     {
+        var key = Key(machine, rdpId);
+        if (_sessions.TryRemove(key, out var old))
+        {
+            old.Dispose();
+            try { _engine.RequestRdpClose(machine, rdpId); } catch { }
+        }
         var session = new Session(machine, rdpId);
-        if (_sessions.TryRemove(Key(machine, rdpId), out var old)) old.Dispose();
-        _sessions[Key(machine, rdpId)] = session;
+        _sessions[key] = session;
         return session;
     }
 
@@ -39,18 +52,35 @@ public sealed class WebRdpSessionStore : IDisposable
         return true;
     }
 
+    public int Sweep()
+    {
+        var cutoff = DateTime.UtcNow - IdleSessionTtl;
+        int removed = 0;
+        foreach (var kv in _sessions)
+        {
+            if (kv.Value.LastActivityUtc < cutoff && _sessions.TryRemove(kv.Key, out var stale))
+            {
+                stale.Dispose();
+                try { _engine.RequestRdpClose(stale.Machine, stale.RdpId); } catch { }
+                removed++;
+            }
+        }
+        return removed;
+    }
+
     public void OnFrame(RemoteClient cl, string rdpId, RdpFrameData frame)
     {
         if (_sessions.TryGetValue(Key(cl.MachineName, rdpId), out var session))
             session.TryWrite(frame);
     }
 
-    static string Key(string machine, string rdpId) => machine + "\n" + rdpId;
+    static string Key(string machine, string rdpId) => machine + "\u0001" + rdpId;
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        _sweeper?.Dispose();
         _engine.RdpFrameUpdated -= OnFrame;
         foreach (var s in _sessions.Values)
             try { _engine.RequestRdpClose(s.Machine, s.RdpId); } catch { }
@@ -66,19 +96,33 @@ public sealed class WebRdpSessionStore : IDisposable
             SingleWriter = false,
             FullMode = BoundedChannelFullMode.DropOldest,
         });
+        long _lastActivityTicks = DateTime.UtcNow.Ticks;
 
         public string Machine { get; }
         public string RdpId { get; }
         public ChannelReader<RdpFrameData> Reader => _frames.Reader;
+        public DateTime LastActivityUtc => new DateTime(Interlocked.Read(ref _lastActivityTicks), DateTimeKind.Utc);
 
         public Session(string machine, string rdpId) { Machine = machine; RdpId = rdpId; }
-        public bool TryWrite(RdpFrameData frame) => _frames.Writer.TryWrite(frame);
+
+        public bool TryWrite(RdpFrameData frame)
+        {
+            Touch();
+            return _frames.Writer.TryWrite(frame);
+        }
+
+        public void Touch() => Interlocked.Exchange(ref _lastActivityTicks, DateTime.UtcNow.Ticks);
+
         public void Dispose() => _frames.Writer.TryComplete();
     }
 }
 
 public static class WebRdpApi
 {
+    const int MaxBandwidthKBps = 100_000;
+    const int MaxMonitorIndex  = 15;
+    const int MaxRecvBytes     = 64 * 1024;
+
     static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -136,7 +180,8 @@ public static class WebRdpApi
         if (!engine.RequestRdpOpen(machine, rdpId, Proto.RdpFpsDefault, Proto.RdpJpegQuality))
         {
             rdps.Remove(machine, rdpId);
-            await SendJson(ws, new { type = "closed", reason = "open_failed" }, ct).ConfigureAwait(false);
+            try { await SendJson(ws, new { type = "closed", reason = "open_failed" }, ct).ConfigureAwait(false); } catch { }
+            try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "open failed", ct).ConfigureAwait(false); } catch { }
             return;
         }
 
@@ -145,37 +190,68 @@ public static class WebRdpApi
         {
             await SendJson(ws, new { type = "open", rdpId }, linked.Token).ConfigureAwait(false);
             var send = SendFrames(ws, session, linked.Token);
-            var recv = ReceiveCommands(ws, engine, machine, rdpId, linked.Token);
+            var recv = ReceiveCommands(ws, engine, session, machine, rdpId, linked.Token);
             await Task.WhenAny(send, recv).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) { }
+        catch (WebSocketException) { }
         finally
         {
             linked.Cancel();
             rdps.Remove(machine, rdpId);
+            if (ws.State == WebSocketState.Open)
+            {
+                try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "rdp end", CancellationToken.None).ConfigureAwait(false); } catch { }
+            }
         }
     }
 
     static async Task SendFrames(WebSocket ws, WebRdpSessionStore.Session session, CancellationToken ct)
     {
-        while (ws.State == WebSocketState.Open && await session.Reader.WaitToReadAsync(ct).ConfigureAwait(false))
-            while (session.Reader.TryRead(out var frame))
-                await SendJson(ws, new { type = "frame", frame }, ct).ConfigureAwait(false);
+        try
+        {
+            while (ws.State == WebSocketState.Open && await session.Reader.WaitToReadAsync(ct).ConfigureAwait(false))
+                while (session.Reader.TryRead(out var frame))
+                    await SendJson(ws, new { type = "frame", frame }, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (WebSocketException) { }
     }
 
-    static async Task ReceiveCommands(WebSocket ws, ServerEngine engine, string machine, string rdpId, CancellationToken ct)
+    static async Task ReceiveCommands(WebSocket ws, ServerEngine engine, WebRdpSessionStore.Session session, string machine, string rdpId, CancellationToken ct)
     {
         var buf = new byte[16 * 1024];
+        using var ms = new MemoryStream();
         while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
-            var result = await ws.ReceiveAsync(buf, ct).ConfigureAwait(false);
-            if (result.MessageType == WebSocketMessageType.Close) break;
-            if (result.MessageType != WebSocketMessageType.Text || !result.EndOfMessage) continue;
-            var msg = JsonSerializer.Deserialize<WebRdpMessage>(Encoding.UTF8.GetString(buf, 0, result.Count), JsonOpts);
+            ms.SetLength(0);
+            bool isText = true;
+            WebSocketReceiveResult result;
+            try
+            {
+                do
+                {
+                    result = await ws.ReceiveAsync(buf, ct).ConfigureAwait(false);
+                    if (result.MessageType == WebSocketMessageType.Close) return;
+                    if (result.MessageType != WebSocketMessageType.Text) { isText = false; }
+                    ms.Write(buf, 0, result.Count);
+                    if (ms.Length > MaxRecvBytes) return;
+                } while (!result.EndOfMessage);
+            }
+            catch (OperationCanceledException) { return; }
+            catch (WebSocketException) { return; }
+            if (!isText) continue;
+
+            WebRdpMessage? msg;
+            try { msg = JsonSerializer.Deserialize<WebRdpMessage>(new ReadOnlySpan<byte>(ms.GetBuffer(), 0, (int)ms.Length), JsonOpts); }
+            catch (JsonException) { continue; }
             if (msg == null) continue;
+            session.Touch();
+
             switch ((msg.Type ?? "").ToLowerInvariant())
             {
                 case "input" when msg.Input != null:
-                    msg.Input.SentAtUnixMs = msg.Input.SentAtUnixMs == 0 ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : msg.Input.SentAtUnixMs;
+                    msg.Input.SentAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     engine.RequestRdpCommand(machine, new ServerCommand { Cmd = "rdp_input", RdpId = rdpId, RdpInput = msg.Input });
                     break;
                 case "set_fps":
@@ -185,10 +261,10 @@ public static class WebRdpApi
                     engine.RequestRdpCommand(machine, new ServerCommand { Cmd = "rdp_set_quality", RdpId = rdpId, RdpQuality = Math.Clamp(msg.Quality, 10, 95) });
                     break;
                 case "set_bandwidth":
-                    engine.RequestRdpCommand(machine, new ServerCommand { Cmd = "rdp_set_bandwidth", RdpId = rdpId, RdpBandwidthKBps = Math.Max(0, msg.BandwidthKbps) });
+                    engine.RequestRdpCommand(machine, new ServerCommand { Cmd = "rdp_set_bandwidth", RdpId = rdpId, RdpBandwidthKBps = Math.Clamp(msg.BandwidthKbps, 0, MaxBandwidthKBps) });
                     break;
                 case "set_monitor":
-                    engine.RequestRdpCommand(machine, new ServerCommand { Cmd = "rdp_set_monitor", RdpId = rdpId, RdpMonitorIndex = Math.Max(0, msg.Monitor) });
+                    engine.RequestRdpCommand(machine, new ServerCommand { Cmd = "rdp_set_monitor", RdpId = rdpId, RdpMonitorIndex = Math.Clamp(msg.Monitor, 0, MaxMonitorIndex) });
                     break;
                 case "refresh":
                     engine.RequestRdpCommand(machine, new ServerCommand { Cmd = "rdp_refresh", RdpId = rdpId });
@@ -199,10 +275,13 @@ public static class WebRdpApi
         }
     }
 
+    // Browsers always send Origin on WS upgrades; missing Origin means a non-browser
+    // tool (curl, websocat) is connecting. The RDP endpoint grants full remote control,
+    // so missing Origin is rejected here even though /ws/state and /ws/log allow it.
     static bool IsOriginAllowed(HttpContext ctx)
     {
         var origin = ctx.Request.Headers["Origin"].ToString();
-        if (string.IsNullOrEmpty(origin)) return true;
+        if (string.IsNullOrEmpty(origin)) return false;
         if (!Uri.TryCreate(origin, UriKind.Absolute, out var o)) return false;
         var host = ctx.Request.Host;
         if (!string.Equals(o.Host, host.Host, StringComparison.OrdinalIgnoreCase)) return false;
@@ -213,7 +292,7 @@ public static class WebRdpApi
 
     static async Task SendJson(WebSocket ws, object payload, CancellationToken ct)
     {
-        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload, JsonOpts));
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOpts);
         await ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct).ConfigureAwait(false);
     }
 }

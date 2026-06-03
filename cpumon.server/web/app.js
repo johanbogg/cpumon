@@ -1048,6 +1048,7 @@ function openRdpDialog(machine) {
       const canvas = body.querySelector('.rdp-canvas');
       const g = canvas.getContext('2d');
       let remoteW = 0, remoteH = 0, lastSeq = -1, closed = false, pendingMove = null;
+      let drawChain = Promise.resolve();
       const ws = new WebSocket(wsUrl(`/ws/rdp/${encodeURIComponent(machine)}`));
       const send = (msg) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); };
       const flushMove = () => {
@@ -1065,10 +1066,17 @@ function openRdpDialog(machine) {
       ws.onclose = () => { if (!closed) { status.textContent = 'Closed'; status.classList.add('err'); } };
       ws.onerror = () => { status.textContent = 'RDP socket error'; status.classList.add('err'); };
       ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
         if (msg.type === 'open') { status.textContent = 'Live'; status.classList.remove('err'); return; }
         if (msg.type === 'closed') { status.textContent = msg.reason || 'Closed'; status.classList.add('err'); return; }
-        if (msg.type === 'frame') drawRdpFrame(msg.frame, canvas, g, (w, h) => { remoteW = w; remoteH = h; }, (text) => { status.textContent = text; }, lastSeq, (seq) => { lastSeq = seq; });
+        if (msg.type !== 'frame' || !msg.frame) return;
+        const f = msg.frame;
+        if (f.seq <= lastSeq && !f.full) return;
+        lastSeq = f.seq;
+        drawChain = drawChain
+          .then(() => drawRdpFrame(f, canvas, g, (w, h) => { remoteW = w; remoteH = h; }, (text) => { status.textContent = text; }))
+          .catch(() => {});
       };
       body.querySelector('.rdp-fps').addEventListener('input', (e) => send({ type: 'set_fps', fps: Number(e.target.value) }));
       body.querySelector('.rdp-quality').addEventListener('input', (e) => send({ type: 'set_quality', quality: Number(e.target.value) }));
@@ -1084,9 +1092,7 @@ function openRdpDialog(machine) {
   });
 }
 
-function drawRdpFrame(frame, canvas, g, setSize, setStatus, lastSeq, setSeq) {
-  if (!frame || (frame.seq <= lastSeq && !frame.full)) return;
-  setSeq(frame.seq);
+async function drawRdpFrame(frame, canvas, g, setSize, setStatus) {
   if (canvas.width !== frame.screenW || canvas.height !== frame.screenH) {
     canvas.width = frame.screenW || 1;
     canvas.height = frame.screenH || 1;
@@ -1094,12 +1100,21 @@ function drawRdpFrame(frame, canvas, g, setSize, setStatus, lastSeq, setSeq) {
     g.fillRect(0, 0, canvas.width, canvas.height);
     setSize(canvas.width, canvas.height);
   }
-  for (const tile of frame.tiles || []) {
-    const img = new Image();
-    img.onload = () => { g.drawImage(img, tile.x, tile.y, tile.w, tile.h); drawRdpCursor(g, frame.curX, frame.curY); };
-    img.src = `data:image/jpeg;base64,${tile.d}`;
+  const tiles = frame.tiles || [];
+  const decoded = await Promise.all(tiles.map(async (tile) => {
+    try {
+      const resp = await fetch(`data:image/jpeg;base64,${tile.d}`);
+      const blob = await resp.blob();
+      return { tile, bitmap: await createImageBitmap(blob) };
+    } catch { return null; }
+  }));
+  for (const item of decoded) {
+    if (!item) continue;
+    g.drawImage(item.bitmap, item.tile.x, item.tile.y, item.tile.w, item.tile.h);
+    item.bitmap.close?.();
   }
-  setStatus(`${frame.screenW}×${frame.screenH} · ${(frame.tiles || []).length} tiles`);
+  drawRdpCursor(g, frame.curX, frame.curY);
+  setStatus(`${frame.screenW}×${frame.screenH} · ${tiles.length} tiles`);
 }
 
 function drawRdpCursor(g, x, y) {
