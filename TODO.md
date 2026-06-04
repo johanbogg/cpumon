@@ -107,7 +107,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: SEC-006
   priority: high
-  status: open
+  status: done
   title: Web session has 30-day sliding lifetime and no rotation on password change
   files: [cpumon.server/websessions.cs:33, cpumon.server/webauth.cs:112]
   problem: |
@@ -120,7 +120,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: SEC-007
   priority: high
-  status: open
+  status: done
   title: Filename validation for upload relies on the agent for `..` traversal
   files: [cpumon.server/webfilesapi.cs:557]
   problem: |
@@ -134,7 +134,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: SEC-008
   priority: high
-  status: open
+  status: done
   title: SMTP password DPAPI scope is LocalMachine
   files: [cpumon.server/email.cs:70, cpumon.server/email.cs:74]
   problem: |
@@ -147,7 +147,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: SEC-009
   priority: high
-  status: open
+  status: done
   title: Linux state file write is not atomic
   files: [cpumon.linux/cpumon.py:69-73]
   problem: |
@@ -197,7 +197,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: SEC-013
   priority: medium
-  status: open
+  status: done
   title: Login form ships value="admin" as default username
   files: [cpumon.server/web/login.html:17]
   problem: |

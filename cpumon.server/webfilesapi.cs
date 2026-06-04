@@ -554,7 +554,7 @@ public static class WebFilesApi
             string  fileName = ctx.Request.Query["name"];
             if (string.IsNullOrEmpty(destPath)) return Error(ctx, 400, "missing_dest", "Query param 'dest' is required.");
             if (string.IsNullOrEmpty(fileName)) return Error(ctx, 400, "missing_name", "Query param 'name' is required.");
-            if (fileName != Path.GetFileName(fileName) || fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            if (!IsSafeUploadName(fileName))
                 return Error(ctx, 400, "bad_name", "Invalid filename.");
 
             long total = ctx.Request.ContentLength ?? -1;
@@ -631,6 +631,32 @@ public static class WebFilesApi
     }
 
     static Task<T?> TryRead<T>(HttpContext ctx) where T : class => WebJson.TryRead<T>(ctx);
+
+    static readonly HashSet<string> _reservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
+
+    // Server-side defence in depth; the agent's FileBrowserService.IsPathUnder
+    // also blocks traversal, but the trust boundary is here.
+    internal static bool IsSafeUploadName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return false;
+        if (fileName.Length > 240) return false;
+        if (fileName != Path.GetFileName(fileName)) return false;
+        if (fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return false;
+        if (fileName == "." || fileName == "..") return false;
+        if (fileName.StartsWith('.')) return false;
+        if (fileName.EndsWith(' ') || fileName.EndsWith('.')) return false;
+        var stem = fileName;
+        int dot = stem.IndexOf('.');
+        if (dot >= 0) stem = stem[..dot];
+        if (_reservedDeviceNames.Contains(stem)) return false;
+        foreach (var ch in fileName) if (ch < 0x20) return false;
+        return true;
+    }
 
     // Echoes paths into the operator log have already passed through agent-side
     // IsPathUnder traversal checks at the receiving end; this just keeps the log

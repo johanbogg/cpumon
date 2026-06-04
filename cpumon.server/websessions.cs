@@ -30,7 +30,11 @@ public sealed class SessionStore : IDisposable
     readonly Timer? _pruner;
     bool _disposed;
 
-    public TimeSpan SlidingExpiry { get; init; } = TimeSpan.FromDays(30);
+    public TimeSpan SlidingExpiry { get; init; } = TimeSpan.FromDays(7);
+
+    /// <summary>Hard ceiling on session age regardless of activity. A stolen cookie
+    /// cannot be refreshed past this point; the user has to sign in again.</summary>
+    public TimeSpan AbsoluteLifetime { get; init; } = TimeSpan.FromDays(14);
 
     /// <summary>How often the background sweep prunes expired entries.</summary>
     public TimeSpan PruneInterval { get; init; } = TimeSpan.FromMinutes(5);
@@ -70,7 +74,7 @@ public sealed class SessionStore : IDisposable
         if (string.IsNullOrEmpty(sessionId)) return null;
         if (!_sessions.TryGetValue(sessionId, out var s)) return null;
         var now = DateTime.UtcNow;
-        if (now - s.LastUsedAt > SlidingExpiry)
+        if (now - s.LastUsedAt > SlidingExpiry || now - s.CreatedAt > AbsoluteLifetime)
         {
             _sessions.TryRemove(sessionId, out _);
             return null;
@@ -113,12 +117,15 @@ public sealed class SessionStore : IDisposable
 
     public int Count => _sessions.Count;
 
-    /// <summary>Removes all sessions whose sliding expiry has passed. Returns the number removed.</summary>
+    /// <summary>Removes all sessions whose sliding expiry or absolute lifetime has passed.
+    /// Returns the number removed.</summary>
     public int Prune()
     {
-        var cutoff = DateTime.UtcNow - SlidingExpiry;
+        var now = DateTime.UtcNow;
+        var slidingCutoff = now - SlidingExpiry;
+        var absoluteCutoff = now - AbsoluteLifetime;
         var stale = _sessions
-            .Where(kv => kv.Value.LastUsedAt < cutoff)
+            .Where(kv => kv.Value.LastUsedAt < slidingCutoff || kv.Value.CreatedAt < absoluteCutoff)
             .Select(kv => kv.Key)
             .ToList();
         int removed = 0;

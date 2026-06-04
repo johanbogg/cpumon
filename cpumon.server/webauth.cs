@@ -47,6 +47,11 @@ public sealed class OperatorStore
         Load();
     }
 
+    /// <summary>Fires after a password change or operator removal so live web sessions
+    /// belonging to that username can be revoked. Wired up by WebStartup to
+    /// SessionStore.InvalidateByUsername.</summary>
+    public event Action<string>? CredentialsInvalidated;
+
     public bool Exists { get { lock (_l) return _accounts.Count > 0; } }
     public int  Count  { get { lock (_l) return _accounts.Count; } }
 
@@ -99,28 +104,34 @@ public sealed class OperatorStore
     public void Remove(string username)
     {
         if (string.IsNullOrWhiteSpace(username)) throw new ArgumentException("username required", nameof(username));
+        string actualUsername;
         lock (_l)
         {
             var key = Key(username);
-            if (!_accounts.ContainsKey(key)) throw new KeyNotFoundException("Unknown operator");
+            if (!_accounts.TryGetValue(key, out var acct)) throw new KeyNotFoundException("Unknown operator");
             if (_accounts.Count <= 1) throw new InvalidOperationException("Cannot remove the last operator");
+            actualUsername = acct.Username;
             _accounts.Remove(key);
             SaveLocked();
         }
+        try { CredentialsInvalidated?.Invoke(actualUsername); } catch { }
     }
 
     public void ChangePassword(string username, string newPassword)
     {
         if (string.IsNullOrWhiteSpace(username)) throw new ArgumentException("username required", nameof(username));
         ValidatePassword(newPassword);
+        string actualUsername;
         lock (_l)
         {
             if (!_accounts.TryGetValue(Key(username), out var acct))
                 throw new KeyNotFoundException("Unknown operator");
             acct.PasswordHash      = Argon2Helper.Hash(newPassword);
             acct.PasswordChangedAt = DateTime.UtcNow;
+            actualUsername         = acct.Username;
             SaveLocked();
         }
+        try { CredentialsInvalidated?.Invoke(actualUsername); } catch { }
     }
 
     public bool Verify(string username, string password)

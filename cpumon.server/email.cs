@@ -67,11 +67,19 @@ public static class AlertConfigStore
     }
 
     public static string Encrypt(string pw) =>
-        Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(pw), null, DataProtectionScope.LocalMachine));
+        Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(pw), null, DataProtectionScope.CurrentUser));
 
+    // Read-side migration: older builds protected the password with LocalMachine
+    // scope, which lets any local account decrypt it. Try CurrentUser first; fall
+    // back to LocalMachine for one-shot migration. Callers re-encrypt on next save.
     public static string Decrypt(string enc)
     {
-        try { return Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(enc), null, DataProtectionScope.LocalMachine)); }
+        byte[] blob;
+        try { blob = Convert.FromBase64String(enc); }
+        catch { return ""; }
+        try { return Encoding.UTF8.GetString(ProtectedData.Unprotect(blob, null, DataProtectionScope.CurrentUser)); }
+        catch { }
+        try { return Encoding.UTF8.GetString(ProtectedData.Unprotect(blob, null, DataProtectionScope.LocalMachine)); }
         catch { return ""; }
     }
 }

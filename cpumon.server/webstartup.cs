@@ -54,6 +54,11 @@ public sealed class WebStartup : IDisposable
         var operators = operatorsOverride
                         ?? new OperatorStore(opts.OperatorPath ?? AppPaths.DataFile("operator.json"));
         var sessions  = new SessionStore();
+        operators.CredentialsInvalidated += username =>
+        {
+            int removed = sessions.InvalidateByUsername(username);
+            if (removed > 0) engine.Log.Add($"Revoked {removed} session(s) for {username} after credential change", Th.Yel);
+        };
         var bootstrap = new BootstrapTokenIssuer();
         var rateLimit = new RateLimiter();
         var snapshots = new SnapshotCache(engine);

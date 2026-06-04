@@ -68,9 +68,15 @@ def load_state():
 
 def save_state(token, key, server_id):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        json.dump({"t": token, "k": key, "s": server_id}, f)
-    os.chmod(STATE_FILE, 0o600)
+    tmp = STATE_FILE + ".tmp"
+    payload = json.dumps({"t": token, "k": key, "s": server_id}).encode("utf-8")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, payload)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, STATE_FILE)
 
 def clear_state():
     try:
