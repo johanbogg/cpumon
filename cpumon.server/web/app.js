@@ -1103,8 +1103,10 @@ async function drawRdpFrame(frame, canvas, g, setSize, setStatus) {
   const tiles = frame.tiles || [];
   const decoded = await Promise.all(tiles.map(async (tile) => {
     try {
-      const resp = await fetch(`data:image/jpeg;base64,${tile.d}`);
-      const blob = await resp.blob();
+      const bin = atob(tile.d);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'image/jpeg' });
       return { tile, bitmap: await createImageBitmap(blob) };
     } catch { return null; }
   }));

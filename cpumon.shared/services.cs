@@ -695,6 +695,7 @@ public static class CmdExec
                                 "timeout /t 3 /nobreak > nul\r\n" +
                                 $"move /Y \"{updPath}\" \"{exePath}\" >> \"{logPath}\" 2>&1\r\n" +
                                 "if errorlevel 1 goto fail\r\n" +
+                                $"icacls \"{exePath}\" /reset >> \"{logPath}\" 2>&1\r\n" +
                                 $"start \"\" \"{exePath}\"\r\n" +
                                 "goto done\r\n" +
                                 ":fail\r\n" +
