@@ -6,6 +6,8 @@ using System.Text;
 
 public static class LinuxUpdatePayload
 {
+    public const long MaxPayloadBytes = 50L * 1024 * 1024;
+
     public static bool TryRead(string path, out string fileName, out byte[] bytes, out string error)
     {
         fileName = "cpumon.py";
@@ -13,6 +15,10 @@ public static class LinuxUpdatePayload
         error = "";
         try
         {
+            var info = new FileInfo(path);
+            if (!info.Exists) { error = "selected file does not exist"; return false; }
+            if (info.Length > MaxPayloadBytes) { error = $"selected file exceeds {MaxPayloadBytes / (1024 * 1024)} MB cap"; return false; }
+
             if (path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
             {
                 using var zip = ZipFile.OpenRead(path);
@@ -24,9 +30,16 @@ public static class LinuxUpdatePayload
                     error = "release zip did not contain cpumon.py";
                     return false;
                 }
+                if (entry.Length > MaxPayloadBytes) { error = $"cpumon.py inside zip exceeds {MaxPayloadBytes / (1024 * 1024)} MB cap"; return false; }
                 using var s = entry.Open();
-                using var ms = new MemoryStream();
-                s.CopyTo(ms);
+                using var ms = new MemoryStream((int)Math.Min(entry.Length, int.MaxValue));
+                var buf = new byte[64 * 1024];
+                int n;
+                while ((n = s.Read(buf, 0, buf.Length)) > 0)
+                {
+                    if (ms.Length + n > MaxPayloadBytes) { error = "cpumon.py inside zip expanded beyond cap"; return false; }
+                    ms.Write(buf, 0, n);
+                }
                 bytes = ms.ToArray();
             }
             else

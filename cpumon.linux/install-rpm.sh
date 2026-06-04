@@ -33,6 +33,38 @@ require_payload() {
     fi
 }
 
+verify_payload() {
+    local manifest="$SCRIPT_DIR/MANIFEST.sha256"
+    if [[ ! -f "$manifest" ]]; then return 2; fi
+    if ! command -v sha256sum >/dev/null 2>&1; then
+        red "sha256sum not available; cannot verify MANIFEST.sha256"
+        return 1
+    fi
+    if ( cd "$SCRIPT_DIR" && sha256sum --status --check MANIFEST.sha256 ); then
+        return 0
+    fi
+    return 1
+}
+
+require_verified_payload() {
+    case "$FORCE" in 1|true|yes) ;; *)
+        verify_payload
+        local rc=$?
+        if [[ $rc -eq 1 ]]; then
+            red "MANIFEST.sha256 verification failed: cpumon.py does not match the bundled hash."
+            echo "Refusing to install a tampered or corrupt payload."
+            echo "Pass --force to override (not recommended)."
+            exit 1
+        fi
+        if [[ $rc -eq 2 ]]; then
+            red "MANIFEST.sha256 is missing next to cpumon.py."
+            echo "Refusing to install an unverified payload."
+            echo "Pass --force to override (only safe if you trust this source)."
+            exit 1
+        fi
+    esac
+}
+
 detect_pkg_mgr() {
     if command -v dnf >/dev/null 2>&1; then
         PKG=dnf
@@ -285,6 +317,7 @@ install() {
 update() {
     require_root
     require_payload
+    require_verified_payload
     detect_pkg_mgr
     detect_distro
 
@@ -338,13 +371,22 @@ print_useful_commands() {
     echo "  rm $STATE_FILE   # clear stored auth key"
 }
 
-case "${1:-install}" in
+CMD="${1:-install}"
+shift || true
+FORCE=0
+for arg in "$@"; do
+    case "$arg" in
+        --force) FORCE=1 ;;
+    esac
+done
+
+case "$CMD" in
     uninstall|remove) uninstall ;;
     update|upgrade)   update ;;
     install)          install ;;
     *)
-        red "Unknown command: $1"
-        echo "Usage: sudo bash install-rpm.sh [install|update|uninstall]"
+        red "Unknown command: $CMD"
+        echo "Usage: sudo bash install-rpm.sh [install|update|uninstall] [--force]"
         exit 1
         ;;
 esac

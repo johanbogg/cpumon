@@ -63,6 +63,14 @@ function Copy-LinuxClient([string]$src, [string]$out, [string]$ver) {
         $content = $content -replace '(?m)^VERSION\s*=\s*"[^"]*"', "VERSION     = `"$ver-linux`""
         $content = $content -replace "`r`n", "`n"
         [System.IO.File]::WriteAllText($py, $content, [System.Text.UTF8Encoding]::new($false))
+
+        # Bundle a manifest with cpumon.py's sha256 so install.sh can verify the
+        # payload it is about to copy into /opt has not been tampered with between
+        # GitHub download and execution.
+        $hash = (Get-FileHash -LiteralPath $py -Algorithm SHA256).Hash.ToLowerInvariant()
+        $manifest = "$hash  cpumon.py`n"
+        $manifestBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($manifest)
+        [System.IO.File]::WriteAllBytes((Join-Path $out 'MANIFEST.sha256'), $manifestBytes)
     }
 }
 

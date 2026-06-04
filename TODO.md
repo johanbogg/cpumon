@@ -173,7 +173,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: SEC-011
   priority: medium
-  status: open
+  status: done
   title: install.sh update performs no SHA verification on the release zip
   files: [cpumon.linux/install.sh:228-269]
   problem: |
@@ -185,7 +185,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: SEC-012
   priority: medium
-  status: open
+  status: done
   title: Login rate limit is per-IP only; Reset(ip) clears the count on success
   files: [cpumon.server/webratelimit.cs, cpumon.server/webauthapi.cs:80]
   problem: |
@@ -221,7 +221,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: STAB-001
   priority: high
-  status: open
+  status: done
   title: UpdateModes catches and swallows all exceptions
   files: [cpumon.server/serverengine.cs:548-604]
   fix: route exceptions through `LogSink.Warn` so silent stalls surface.
@@ -277,7 +277,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: STAB-009
   priority: medium
-  status: open
+  status: done
   title: LinuxUpdatePayload.TryRead has no size cap
   files: [cpumon.server/linuxupdatepayload.cs:34]
   fix: Reject inputs >50 MB before reading.
@@ -291,7 +291,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: STAB-011
   priority: low
-  status: open
+  status: done
   title: ApprovedClientStore.Load wipes store on corrupt JSON
   files: [cpumon.shared/protocol.cs:326-338]
   fix: On parse failure, refuse to save until manual recovery. Back up the

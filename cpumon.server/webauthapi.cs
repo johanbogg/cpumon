@@ -71,13 +71,18 @@ public static class WebAuthApi
                 return Error(ctx, 400, "validation_failed", "Username and password required.");
             if (!operators.Exists)
                 return Error(ctx, 401, "auth_required", "No operator configured. Use the bootstrap setup URL.");
+            var userKey = UserKey(body.Username);
+            if (rateLimiter.IsBlocked(userKey)) return RateLimited(ctx, rateLimiter);
             if (!operators.Verify(body.Username, body.Password))
             {
                 rateLimiter.RecordFailure(ip);
+                rateLimiter.RecordFailure(userKey);
                 apiCtx.Log?.Add($"Web UI: login failed ({body.Username}) from {ip}", Th.Org);
                 return Error(ctx, 401, "invalid_credentials", "Username or password is incorrect.");
             }
-            rateLimiter.Reset(ip);
+            // Deliberately do NOT clear the IP or user failure counter on success — a single
+            // lucky guess inside a credential-stuffing run should not reset the budget that
+            // throttles the rest of the run.
             var username = operators.Find(body.Username)?.Username ?? body.Username.Trim();
             var session = sessions.Issue(username, ip, ctx.Request.Headers.UserAgent.ToString());
             IssueSessionCookies(ctx, session, apiCtx.UseTls);
@@ -162,6 +167,8 @@ public static class WebAuthApi
         ctx.Response.Cookies.Delete(CookieSess, opts);
         ctx.Response.Cookies.Delete(CookieCsrf, opts);
     }
+
+    static string UserKey(string username) => "user:" + username.Trim().ToLowerInvariant();
 
     static IResult RateLimited(HttpContext ctx, RateLimiter rl)
     {

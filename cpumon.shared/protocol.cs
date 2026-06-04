@@ -353,7 +353,9 @@ public sealed class ApprovedClientStore
 {
     readonly string _path; readonly Dictionary<string, ApprovedClient> _c = new(); readonly object _l = new();
     static readonly JsonSerializerOptions _saveOpts = new() { WriteIndented = true };
+    bool _loadCorrupted;
     public ApprovedClientStore(string? path = null) { _path = path ?? AppPaths.DataFile("approved_clients.json"); Load(); }
+    public bool IsHealthy { get { lock (_l) return !_loadCorrupted; } }
     public bool IsOk(string n, string k) { lock (_l) { return _c.TryGetValue(n, out var c) && c.Key == k && !c.Revoked; } }
     public void Approve(string n, string k, string ip, string salt = "")
     {
@@ -389,19 +391,33 @@ public sealed class ApprovedClientStore
     public void Prune(int daysOld) { lock (_l) { var cutoff = DateTime.UtcNow.AddDays(-daysOld); var stale = _c.Values.Where(c => !c.Paw && !c.Revoked && c.Seen < cutoff).Select(c => c.Name).ToList(); foreach (var n in stale) _c.Remove(n); if (stale.Count > 0) Save(); } }
     void Load()
     {
+        TryMigrateLegacyFile("approved_clients.json");
+        if (!File.Exists(_path)) return;
         try
         {
-            TryMigrateLegacyFile("approved_clients.json");
-            if (File.Exists(_path))
-            {
-                var list = JsonSerializer.Deserialize<List<ApprovedClient>>(File.ReadAllText(_path));
-                if (list != null) foreach (var c in list) { c.Key = DecryptKey(c.Key); _c[c.Name] = c; }
-            }
+            var list = JsonSerializer.Deserialize<List<ApprovedClient>>(File.ReadAllText(_path));
+            if (list != null) foreach (var c in list) { c.Key = DecryptKey(c.Key); _c[c.Name] = c; }
         }
-        catch (Exception ex) { LogSink.Warn("ApprovedClientStore", $"Failed to load {_path}", ex); }
+        catch (Exception ex)
+        {
+            _loadCorrupted = true;
+            LogSink.Error("ApprovedClientStore", $"Failed to parse {_path}; refusing to overwrite", ex);
+            try
+            {
+                string backup = _path + ".corrupt-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+                File.Copy(_path, backup, overwrite: false);
+                LogSink.Info("ApprovedClientStore", $"Backed up corrupt store to {backup}");
+            }
+            catch (Exception copyEx) { LogSink.Warn("ApprovedClientStore", "Failed to back up corrupt store", copyEx); }
+        }
     }
     void Save()
     {
+        if (_loadCorrupted)
+        {
+            LogSink.Warn("ApprovedClientStore", $"Skipping save: in-memory state is incomplete because {_path} failed to parse");
+            return;
+        }
         try
         {
             var list = _c.Values.Select(c => new ApprovedClient { Name = c.Name, Key = EncryptKey(c.Key), At = c.At, Seen = c.Seen, Ip = c.Ip, Revoked = c.Revoked, Paw = c.Paw, Mac = c.Mac, Alias = c.Alias, Salt = c.Salt }).ToList();

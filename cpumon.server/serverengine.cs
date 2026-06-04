@@ -600,7 +600,7 @@ public sealed class ServerEngine : IDisposable
                 _lastPawClientsSentAt = DateTime.UtcNow;
             }
         }
-        catch { }
+        catch (Exception ex) { LogSink.Warn("Server.UpdateModes", "UpdateModes tick failed", ex); }
     }
 
     async Task BeaconLoop(CancellationToken ct)
