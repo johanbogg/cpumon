@@ -223,33 +223,37 @@ public static class ScreenshotService
 
     public static ScreenshotData Capture(string? cmdId, int quality = 80, int monitorIndex = 0)
     {
-        try
+        Exception? last = null;
+        for (int attempt = 0; attempt < 2; attempt++)
         {
-            var screens = Screen.AllScreens;
-            if (screens.Length == 0) return new ScreenshotData { CmdId = cmdId, Error = "No screens available" };
-            var screen = screens[Math.Clamp(monitorIndex, 0, screens.Length - 1)];
-            var bounds = screen.Bounds;
-            if (bounds.Width <= 0 || bounds.Height <= 0) return new ScreenshotData { CmdId = cmdId, Error = "Selected screen has invalid bounds" };
-            using var bmp = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
-            using (var g = Graphics.FromImage(bmp))
-                g.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
-
-            using var ms = new MemoryStream();
-            var encoder = JpegEncoder();
-            if (encoder != null)
-            {
-                using var ep = new EncoderParameters(1);
-                ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, Math.Clamp(quality, 20, 95));
-                bmp.Save(ms, encoder, ep);
-            }
-            else bmp.Save(ms, ImageFormat.Jpeg);
-
-            return new ScreenshotData { CmdId = cmdId, Width = bounds.Width, Height = bounds.Height, Data = Convert.ToBase64String(ms.GetBuffer(), 0, (int)ms.Length) };
+            try { return CaptureOnce(cmdId, quality, monitorIndex); }
+            catch (Exception ex) { last = ex; Thread.Sleep(50); }
         }
-        catch (Exception ex)
+        return new ScreenshotData { CmdId = cmdId, Error = last?.Message ?? "Screenshot failed" };
+    }
+
+    static ScreenshotData CaptureOnce(string? cmdId, int quality, int monitorIndex)
+    {
+        var screens = Screen.AllScreens;
+        if (screens.Length == 0) return new ScreenshotData { CmdId = cmdId, Error = "No screens available" };
+        var screen = screens[Math.Clamp(monitorIndex, 0, screens.Length - 1)];
+        var bounds = screen.Bounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0) return new ScreenshotData { CmdId = cmdId, Error = "Selected screen has invalid bounds" };
+        using var bmp = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
+        using (var g = Graphics.FromImage(bmp))
+            g.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
+
+        using var ms = new MemoryStream();
+        var encoder = JpegEncoder();
+        if (encoder != null)
         {
-            return new ScreenshotData { CmdId = cmdId, Error = ex.Message };
+            using var ep = new EncoderParameters(1);
+            ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, Math.Clamp(quality, 20, 95));
+            bmp.Save(ms, encoder, ep);
         }
+        else bmp.Save(ms, ImageFormat.Jpeg);
+
+        return new ScreenshotData { CmdId = cmdId, Width = bounds.Width, Height = bounds.Height, Data = Convert.ToBase64String(ms.GetBuffer(), 0, (int)ms.Length) };
     }
 
     static ImageCodecInfo? JpegEncoder()

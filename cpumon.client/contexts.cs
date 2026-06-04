@@ -308,15 +308,9 @@ sealed class AgentContext : ApplicationContext
 
                             case "screenshot":
                             {
-                                var tcs = new TaskCompletionSource<ScreenshotData>();
-                                _uiCtx.Post(_ =>
-                                {
-                                    try { tcs.TrySetResult(ScreenshotService.Capture(msg.CmdId, msg.Quality > 0 ? msg.Quality : 80, msg.Fps)); }
-                                    catch (Exception ex) { tcs.TrySetResult(new ScreenshotData { CmdId = msg.CmdId, Error = ex.Message }); }
-                                }, null);
-                                var shot = tcs.Task.Wait(TimeSpan.FromSeconds(10))
-                                    ? tcs.Task.Result
-                                    : new ScreenshotData { CmdId = msg.CmdId, Error = "Screenshot timed out" };
+                                ScreenshotData shot;
+                                try { shot = ScreenshotService.Capture(msg.CmdId, msg.Quality > 0 ? msg.Quality : 80, msg.Fps); }
+                                catch (Exception ex) { shot = new ScreenshotData { CmdId = msg.CmdId, Error = ex.Message }; }
                                 var reply = new ClientMessage { Type = "screenshot", CmdId = msg.CmdId, Screenshot = shot };
                                 lock (_pipeLock) { try { _pipeWriter?.WriteLine(JsonSerializer.Serialize(reply, Proto.JsonOpts)); _pipeWriter?.Flush(); } catch (Exception ex) { LogSink.Warn("Agent.Pipe", "Failed to send screenshot to service", ex); } }
                                 break;
