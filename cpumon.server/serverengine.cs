@@ -753,10 +753,15 @@ public sealed class ServerEngine : IDisposable
                 {
                     var msg = JsonSerializer.Deserialize<ClientMessage>(line);
                     if (msg == null) continue;
+                    if (!Proto.IsSane(msg, out var insaneReason))
+                    {
+                        LogSink.Warn("Server.HandleClient", $"Dropping oversized message from {name ?? remote}: {insaneReason}");
+                        continue;
+                    }
 
                     if (msg.Type == "auth")
                     {
-                        if (cl.AuthResponseSent) continue;
+                        if (cl.Authenticated || cl.AuthResponseSent) continue;
                         string mn = msg.MachineName ?? "?";
                         name = mn;
 
@@ -961,7 +966,8 @@ public sealed class ServerEngine : IDisposable
                                 if (!PawAllowedCmds.Contains(pc.Cmd)) break;
                                 var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                                 if (nowMs - pc.IssuedAtMs > 60_000) break;
-                                if (pc.Nonce == null || !_pawSeenNonces.TryAdd(pc.Nonce, nowMs)) break;
+                                var nonceKey = pc.Nonce == null ? null : cl.MachineName + "\u0001" + pc.Nonce;
+                                if (nonceKey == null || !_pawSeenNonces.TryAdd(nonceKey, nowMs)) break;
                                 foreach (var kv in _pawSeenNonces.Where(kv => nowMs - kv.Value > 60_000).ToList())
                                     _pawSeenNonces.TryRemove(kv.Key, out _);
                                 if (pc.Cmd == "rdp_open" && pc.RdpId != null)

@@ -630,17 +630,7 @@ public static class WebFilesApi
         });
     }
 
-    static async Task<T?> TryRead<T>(HttpContext ctx) where T : class
-    {
-        try
-        {
-            using var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, leaveOpen: true);
-            var text = await reader.ReadToEndAsync();
-            if (string.IsNullOrWhiteSpace(text)) return null;
-            return JsonSerializer.Deserialize<T>(text, JsonOpts);
-        }
-        catch { return null; }
-    }
+    static Task<T?> TryRead<T>(HttpContext ctx) where T : class => WebJson.TryRead<T>(ctx);
 
     // Echoes paths into the operator log have already passed through agent-side
     // IsPathUnder traversal checks at the receiving end; this just keeps the log

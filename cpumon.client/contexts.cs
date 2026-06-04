@@ -582,6 +582,11 @@ sealed class DaemonContext : ApplicationContext
                 if (line != null)
                 {
                     var cmd = JsonSerializer.Deserialize<ServerCommand>(line);
+                    if (cmd != null && !Proto.IsSane(cmd, out var insaneReason))
+                    {
+                        LogSink.Warn("DaemonContext.Recv", $"Dropping oversized command from server: {insaneReason}");
+                        cmd = null;
+                    }
                     if (cmd != null)
                     {
                         if (cmd.Cmd == "auth_response")

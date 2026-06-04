@@ -283,6 +283,11 @@ sealed class ClientForm : BorderlessForm
                 if (line != null)
                 {
                     var cmd = JsonSerializer.Deserialize<ServerCommand>(line);
+                    if (cmd != null && !Proto.IsSane(cmd, out var insaneReason))
+                    {
+                        LogSink.Warn("ClientForm.Recv", $"Dropping oversized command from server: {insaneReason}");
+                        cmd = null;
+                    }
                     if (cmd != null)
                     {
                         if (cmd.Cmd == "auth_response")

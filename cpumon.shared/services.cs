@@ -634,6 +634,20 @@ public static class CmdExec
 
     public static void Run(ServerCommand cmd, object lk, ref StreamWriter? wr)
     {
+        try
+        {
+            RunInner(cmd, lk, ref wr);
+        }
+        catch (Exception ex)
+        {
+            LogSink.Warn("CmdExec.Run", $"Dispatch failed for cmd={cmd.Cmd ?? "<null>"}: {ex.Message}", ex);
+            if (!string.IsNullOrEmpty(cmd.CmdId))
+                try { Res(cmd.CmdId, false, ex.Message, lk, wr); } catch { }
+        }
+    }
+
+    static void RunInner(ServerCommand cmd, object lk, ref StreamWriter? wr)
+    {
         switch (cmd.Cmd)
         {
             case "update_push":

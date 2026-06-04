@@ -175,18 +175,7 @@ public static class WebAuthApi
         return Results.Json(new { error = code, message }, JsonOpts);
     }
 
-    static async Task<T?> TryRead<T>(HttpContext ctx) where T : class
-    {
-        try
-        {
-            ctx.Request.EnableBuffering();
-            using var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, leaveOpen: true);
-            var text = await reader.ReadToEndAsync();
-            if (string.IsNullOrWhiteSpace(text)) return null;
-            return JsonSerializer.Deserialize<T>(text, JsonOpts);
-        }
-        catch { return null; }
-    }
+    static Task<T?> TryRead<T>(HttpContext ctx) where T : class => WebJson.TryRead<T>(ctx);
 
     static bool ConstantTimeEquals(string a, string b)
     {

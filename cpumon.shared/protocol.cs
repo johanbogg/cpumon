@@ -48,6 +48,70 @@ public static class Proto
     public static readonly string AppVersion =
         System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "1.0.0";
     public static readonly JsonSerializerOptions JsonOpts = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+
+    public const int MaxProcesses   = 10_000;
+    public const int MaxServices    = 10_000;
+    public const int MaxEvents      = 5_000;
+    public const int MaxCores       = 1_024;
+    public const int MaxDrives      = 256;
+    public const int MaxIpAddrs     = 64;
+    public const int MaxMacAddrs    = 64;
+    public const int MaxDisks       = 64;
+    public const int MaxRdpTiles    = 8_192;
+    public const int MaxFileEntries = 50_000;
+    public const int MaxPawClients  = 1_000;
+    public const int MaxPawOffline  = 10_000;
+
+    public static bool IsSane(ClientMessage m, out string reason)
+    {
+        reason = "";
+        if (m.Processes   != null && m.Processes.Count   > MaxProcesses) { reason = $"processes={m.Processes.Count}"; return false; }
+        if (m.ServiceList != null && m.ServiceList.Count > MaxServices)  { reason = $"services={m.ServiceList.Count}"; return false; }
+        if (m.Events      != null && m.Events.Count      > MaxEvents)    { reason = $"events={m.Events.Count}"; return false; }
+        if (m.RdpFrame    != null && m.RdpFrame.Tiles.Count > MaxRdpTiles) { reason = $"tiles={m.RdpFrame.Tiles.Count}"; return false; }
+        if (m.FileListing != null)
+        {
+            if (m.FileListing.Entries.Count > MaxFileEntries) { reason = $"file-entries={m.FileListing.Entries.Count}"; return false; }
+            if (m.FileListing.Drives != null && m.FileListing.Drives.Count > MaxDrives) { reason = $"file-drives={m.FileListing.Drives.Count}"; return false; }
+        }
+        if (m.Report != null)
+        {
+            if (m.Report.Cores.Count  > MaxCores)  { reason = $"cores={m.Report.Cores.Count}"; return false; }
+            if (m.Report.Drives.Count > MaxDrives) { reason = $"drives={m.Report.Drives.Count}"; return false; }
+        }
+        if (m.SysInfo != null)
+        {
+            if (m.SysInfo.IpAddresses.Count  > MaxIpAddrs)  { reason = $"ip={m.SysInfo.IpAddresses.Count}"; return false; }
+            if (m.SysInfo.MacAddresses.Count > MaxMacAddrs) { reason = $"mac={m.SysInfo.MacAddresses.Count}"; return false; }
+            if (m.SysInfo.Disks.Count        > MaxDisks)    { reason = $"disks={m.SysInfo.Disks.Count}"; return false; }
+        }
+        return true;
+    }
+
+    public static bool IsSane(ServerCommand c, out string reason)
+    {
+        reason = "";
+        if (c.PawClientList     != null && c.PawClientList.Count     > MaxPawClients) { reason = $"paw-clients={c.PawClientList.Count}"; return false; }
+        if (c.PawOfflineClients != null && c.PawOfflineClients.Count > MaxPawOffline) { reason = $"paw-offline={c.PawOfflineClients.Count}"; return false; }
+        if (c.PawProcesses      != null && c.PawProcesses.Count      > MaxProcesses)  { reason = $"paw-proc={c.PawProcesses.Count}"; return false; }
+        if (c.PawServices       != null && c.PawServices.Count       > MaxServices)   { reason = $"paw-svc={c.PawServices.Count}"; return false; }
+        if (c.PawEvents         != null && c.PawEvents.Count         > MaxEvents)     { reason = $"paw-events={c.PawEvents.Count}"; return false; }
+        if (c.RdpFrame          != null && c.RdpFrame.Tiles.Count    > MaxRdpTiles)   { reason = $"tiles={c.RdpFrame.Tiles.Count}"; return false; }
+        if (c.PawReport != null)
+        {
+            if (c.PawReport.Cores.Count  > MaxCores)  { reason = $"paw-cores={c.PawReport.Cores.Count}"; return false; }
+            if (c.PawReport.Drives.Count > MaxDrives) { reason = $"paw-drives={c.PawReport.Drives.Count}"; return false; }
+        }
+        if (c.PawSysInfo != null)
+        {
+            if (c.PawSysInfo.IpAddresses.Count  > MaxIpAddrs)  { reason = $"paw-ip={c.PawSysInfo.IpAddresses.Count}"; return false; }
+            if (c.PawSysInfo.MacAddresses.Count > MaxMacAddrs) { reason = $"paw-mac={c.PawSysInfo.MacAddresses.Count}"; return false; }
+            if (c.PawSysInfo.Disks.Count        > MaxDisks)    { reason = $"paw-disks={c.PawSysInfo.Disks.Count}"; return false; }
+        }
+        if (c.PawFileListing != null && c.PawFileListing.Entries.Count > MaxFileEntries)
+            { reason = $"paw-file-entries={c.PawFileListing.Entries.Count}"; return false; }
+        return true;
+    }
 }
 public static class AppState
 {

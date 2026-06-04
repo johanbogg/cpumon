@@ -979,6 +979,11 @@ sealed class CpuMonService : ServiceBase
                 }
                 var cmd = JsonSerializer.Deserialize<ServerCommand>(line);
                 if (cmd == null) continue;
+                if (!Proto.IsSane(cmd, out var insaneReason))
+                {
+                    LogSink.Warn("Service.Recv", $"Dropping oversized command from server: {insaneReason}");
+                    continue;
+                }
 
                 if (cmd.Cmd == "auth_response")
                 {

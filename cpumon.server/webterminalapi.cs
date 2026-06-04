@@ -246,17 +246,7 @@ public static class WebTerminalApi
         return "cmd";
     }
 
-    static async Task<T?> TryRead<T>(HttpContext ctx) where T : class
-    {
-        try
-        {
-            using var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, leaveOpen: true);
-            var text = await reader.ReadToEndAsync();
-            if (string.IsNullOrWhiteSpace(text)) return null;
-            return JsonSerializer.Deserialize<T>(text, JsonOpts);
-        }
-        catch { return null; }
-    }
+    static Task<T?> TryRead<T>(HttpContext ctx) where T : class => WebJson.TryRead<T>(ctx);
 
     static IResult NotFound(HttpContext ctx, string machine)
         => Error(ctx, 404, "not_found", $"Machine '{machine}' is not connected.");
