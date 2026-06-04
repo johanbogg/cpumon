@@ -68,7 +68,7 @@ public sealed class ServerStartupSettingsDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(390, 300);
+        ClientSize = new Size(390, 340);
         BackColor = Th.Bg;
         ForeColor = Th.Brt;
         Font = new Font("Segoe UI", 9f);
@@ -105,8 +105,9 @@ public sealed class ServerStartupSettingsDialog : Form
         };
         Controls.Add(note);
 
-        var ok = new Button { Text = "Save", DialogResult = DialogResult.OK, Location = new Point(202, 255), Size = new Size(78, 28) };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(292, 255), Size = new Size(78, 28) };
+        int btnY = note.Bottom + 10;
+        var ok = new Button { Text = "Save", DialogResult = DialogResult.OK, Location = new Point(202, btnY), Size = new Size(78, 28) };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(292, btnY), Size = new Size(78, 28) };
         StyleButton(ok, Th.Grn);
         StyleButton(cancel, Th.Dim, subtle: true);
         Controls.Add(ok);
