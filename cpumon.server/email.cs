@@ -50,11 +50,11 @@ public static class AlertConfigStore
     {
         var p = path ?? _defaultPath;
         try { if (File.Exists(p)) return JsonSerializer.Deserialize<AlertConfig>(File.ReadAllText(p), _jso) ?? new(); }
-        catch { }
+        catch (Exception ex) { LogSink.Warn("AlertConfigStore", $"Failed to load {p}; returning defaults", ex); }
         return new AlertConfig();
     }
 
-    public static void Save(AlertConfig cfg, string? path = null)
+    public static bool Save(AlertConfig cfg, string? path = null)
     {
         var p = path ?? _defaultPath;
         try
@@ -62,8 +62,9 @@ public static class AlertConfigStore
             string tmp = p + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(cfg, _jso));
             File.Move(tmp, p, overwrite: true);
+            return true;
         }
-        catch { }
+        catch (Exception ex) { LogSink.Error("AlertConfigStore", $"Failed to save {p}", ex); return false; }
     }
 
     public static string Encrypt(string pw) =>

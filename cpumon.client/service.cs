@@ -740,14 +740,20 @@ sealed class CpuMonService : ServiceBase
                 File.AppendAllText(logPath, $"{DateTime.Now:u} {label}: failed to start {fileName}\r\n");
                 return false;
             }
+            // Drain stdout/stderr concurrently — if the child writes more than the
+            // pipe buffer (~4 KB) before exit, ReadToEnd after WaitForExit would
+            // deadlock the child against a full pipe.
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
             if (!p.WaitForExit(10000))
             {
                 try { p.Kill(); } catch { }
                 File.AppendAllText(logPath, $"{DateTime.Now:u} {label}: timed out {fileName} {arguments}\r\n");
                 return false;
             }
-            string stdout = p.StandardOutput.ReadToEnd();
-            string stderr = p.StandardError.ReadToEnd();
+            string stdout = ""; string stderr = "";
+            try { stdout = stdoutTask.GetAwaiter().GetResult(); } catch { }
+            try { stderr = stderrTask.GetAwaiter().GetResult(); } catch { }
             File.AppendAllText(logPath,
                 $"{DateTime.Now:u} {label}: {fileName} {arguments}\r\n" +
                 $"exit={p.ExitCode}\r\n{stdout}{stderr}\r\n");
@@ -876,6 +882,7 @@ sealed class CpuMonService : ServiceBase
         u.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         u.Client.Bind(new IPEndPoint(IPAddress.Any, Proto.DiscPort));
         u.EnableBroadcast = true;
+        var backoff = new BackoffTimer(3000, 60000);
         while (!ct.IsCancellationRequested)
         {
             try
@@ -904,14 +911,16 @@ sealed class CpuMonService : ServiceBase
                         }
                     }
                 }
+                backoff.Reset();
             }
             catch (OperationCanceledException) { break; }
-            catch { await Task.Delay(3000, ct).ConfigureAwait(false); }
+            catch { await backoff.DelayAsync(ct); }
         }
     }
 
     async Task SendLoop(CancellationToken ct)
     {
+        var backoff = new BackoffTimer(1000, 60000);
         while (!ct.IsCancellationRequested)
         {
             try { _pacer.Wait(ct); } catch (OperationCanceledException) { break; }
@@ -944,6 +953,7 @@ sealed class CpuMonService : ServiceBase
                     lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m, Proto.JsonOpts)); _wr?.Flush(); }
                 }
                 _sc++; _ns = NetState.Connected;
+                backoff.Reset();
             }
             catch
             {
@@ -952,7 +962,7 @@ sealed class CpuMonService : ServiceBase
                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
                 _pacer.Wake();
                 CmdExec.DisposeAll();
-                try { await Task.Delay(1000, ct).ConfigureAwait(false); } catch { }
+                await backoff.DelayAsync(ct);
             }
         }
     }

@@ -19,6 +19,7 @@ import json
 import os
 import platform
 import py_compile
+import random
 import select
 import shutil
 import signal
@@ -972,6 +973,12 @@ class Client:
     def run(self):
         threading.Thread(target=self._send_loop, daemon=True).start()
 
+        # Exponential backoff with ±20% jitter, capped at 60 s. Reset on a clean
+        # connection so a stable session does not inherit a long delay after a
+        # later disconnect.
+        backoff_min, backoff_max = 3.0, 60.0
+        backoff = backoff_min
+
         while self._running:
             host = self._server_ip
             port = self._server_port
@@ -988,6 +995,7 @@ class Client:
             try:
                 self._connect(host, port)
                 self._send_auth()
+                backoff = backoff_min
 
                 while self._running:
                     try:
@@ -1018,7 +1026,9 @@ class Client:
             # If auth failed, prompt for a new token before retrying
             if not self._tok and not self._ak and not self._approval_request:
                 self._prompt_token()
-            time.sleep(3)
+            jitter = backoff * random.uniform(-0.2, 0.2)
+            time.sleep(max(backoff_min, backoff + jitter))
+            backoff = min(backoff * 2, backoff_max)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

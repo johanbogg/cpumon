@@ -228,14 +228,14 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: STAB-002
   priority: medium
-  status: open
+  status: done
   title: SendPacer.Wait races between reading _mode and Reset()
   files: [cpumon.shared/protocol.cs:238]
   fix: Reset before reading _mode, or use a sequence number.
 
 - id: STAB-003
   priority: medium
-  status: open
+  status: done
   title: RunUpdateProcess can deadlock on stdout pipe (>4KB child output)
   files: [cpumon.client/service.cs:743-754]
   fix: Read stdout/stderr concurrently, not after WaitForExit.
@@ -263,14 +263,14 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: STAB-007
   priority: low
-  status: open
+  status: done
   title: AlertConfigStore Save/Load swallow all exceptions
   files: [cpumon.server/email.cs:52-66]
   fix: At least log via LogSink.
 
 - id: STAB-008
   priority: medium
-  status: open
+  status: done
   title: Reconnect loops are fixed-interval, no exponential backoff or jitter
   files: [cpumon.client/clientform.cs:261, cpumon.client/contexts.cs:532, cpumon.client/contexts.cs:561, cpumon.client/service.cs:909, cpumon.client/service.cs:955, cpumon.linux/cpumon.py:1015]
   fix: Exponential backoff with jitter capped at e.g. 60s.
@@ -284,7 +284,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: STAB-010
   priority: low
-  status: open
+  status: done
   title: WS reconnect storm in browser
   files: [cpumon.server/web/app.js:50, cpumon.server/web/app.js:55, cpumon.server/web/app.js:65]
   fix: Exponential backoff with jitter.

@@ -200,6 +200,7 @@ sealed class ClientForm : BorderlessForm
     {
         using var u = new UdpClient(); u.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         u.Client.Bind(new IPEndPoint(IPAddress.Any, Proto.DiscPort)); u.EnableBroadcast = true;
+        var backoff = new BackoffTimer(3000, 60000);
         while (!ct.IsCancellationRequested)
         {
             try
@@ -220,14 +221,16 @@ sealed class ClientForm : BorderlessForm
                         { _ns = NetState.BeaconFound; _log.Add($"Server: {_sa}:{port}", Th.Grn); lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; } }
                     }
                 }
+                backoff.Reset();
             }
             catch (OperationCanceledException) { break; }
-            catch (Exception ex) { _log.Add($"Disc: {ex.Message}", Th.Red); await Task.Delay(3000, ct).ConfigureAwait(false); }
+            catch (Exception ex) { _log.Add($"Disc: {ex.Message}", Th.Red); await backoff.DelayAsync(ct); }
         }
     }
 
     async Task SendLoop(CancellationToken ct)
     {
+        var backoff = new BackoffTimer(1000, 60000);
         while (!ct.IsCancellationRequested)
         {
             try { _pacer.Wait(ct); } catch (OperationCanceledException) { break; }
@@ -250,6 +253,7 @@ sealed class ClientForm : BorderlessForm
                 if (_pacer.Mode == "keepalive") { var ka = new ClientMessage { Type = "keepalive", MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(ka, Proto.JsonOpts)); _wr?.Flush(); } }
                 else { var snap = _mon.GetSnapshot(); var m = new ClientMessage { Type = "report", Report = ReportBuilder.Build(snap, _cpu, _mon), MachineName = Environment.MachineName, AuthKey = _ak }; lock (_tl) { _wr?.WriteLine(JsonSerializer.Serialize(m, Proto.JsonOpts)); _wr?.Flush(); } }
                 _sc++; _ls = DateTime.Now; if (_ns != NetState.AuthFailed) _ns = NetState.Connected;
+                backoff.Reset();
             }
             catch (Exception ex)
             {
@@ -258,7 +262,7 @@ sealed class ClientForm : BorderlessForm
                 lock (_tl) { _wr?.Dispose(); _rd?.Dispose(); _ssl?.Dispose(); _tcp?.Dispose(); _wr = null; _rd = null; _ssl = null; _tcp = null; }
                 _pacer.Wake();
                 CmdExec.DisposeAll();
-                try { await Task.Delay(1000, ct).ConfigureAwait(false); } catch { }
+                await backoff.DelayAsync(ct);
             }
         }
     }

@@ -299,7 +299,36 @@ public sealed class SendPacer
     volatile string _mode = "full";
     public string Mode { get => _mode; set { if (_mode == value) return; _mode = value; _wake.Set(); } }
     public void Wake() => _wake.Set();
-    public void Wait(CancellationToken ct) { int ms = _mode == "keepalive" ? Proto.KAMs : _mode == "monitor" ? Proto.MonitorMs : Proto.FullMs; _wake.Reset(); _wake.Wait(ms, ct); }
+    public void Wait(CancellationToken ct)
+    {
+        // Reset BEFORE reading _mode so a concurrent Mode setter or Wake() that
+        // races with the read still wins (its Set lands after our Reset).
+        _wake.Reset();
+        int ms = _mode == "keepalive" ? Proto.KAMs : _mode == "monitor" ? Proto.MonitorMs : Proto.FullMs;
+        _wake.Wait(ms, ct);
+    }
+}
+
+// Exponential backoff with ±20% jitter, capped. Use one instance per retry loop;
+// call Reset() on a successful step, DelayAsync(ct) after each failure.
+public sealed class BackoffTimer
+{
+    readonly int _minMs;
+    readonly int _maxMs;
+    int _currentMs;
+
+    public BackoffTimer(int minMs, int maxMs) { _minMs = minMs; _maxMs = maxMs; _currentMs = minMs; }
+
+    public void Reset() => _currentMs = _minMs;
+
+    public async Task DelayAsync(CancellationToken ct)
+    {
+        int span = Math.Max(1, _currentMs / 5);
+        int jitter = Random.Shared.Next(-span, span + 1);
+        int wait = Math.Max(_minMs, _currentMs + jitter);
+        _currentMs = Math.Min(_currentMs * 2, _maxMs);
+        try { await Task.Delay(wait, ct).ConfigureAwait(false); } catch { }
+    }
 }
 
 public static class Security

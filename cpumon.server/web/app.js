@@ -47,12 +47,21 @@ async function loadState() {
   render(await response.json());
 }
 
-function reconnectDelay() { return 1000 + Math.floor(Math.random() * 1500); }
+// Exponential backoff with full-jitter, capped at 30 s. Resets to the floor on
+// every successful open so the next disconnect after a stable session does not
+// inherit a long delay.
+const wsBackoff = { state: 1000, log: 1000 };
+function reconnectDelay(kind) {
+  const base = wsBackoff[kind] || 1000;
+  const next = Math.min(base * 2, 30000);
+  wsBackoff[kind] = next;
+  return Math.floor(Math.random() * base);
+}
 
 function connectStateWs() {
   const ws = new WebSocket(wsUrl('/ws/state'));
-  ws.onopen = () => setWs('state', true);
-  ws.onclose = () => { setWs('state', false); setTimeout(connectStateWs, reconnectDelay()); };
+  ws.onopen = () => { wsBackoff.state = 1000; setWs('state', true); };
+  ws.onclose = () => { setWs('state', false); setTimeout(connectStateWs, reconnectDelay('state')); };
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
     if (msg.type === 'state') render(msg.state);
@@ -61,8 +70,8 @@ function connectStateWs() {
 
 function connectLogWs() {
   const ws = new WebSocket(wsUrl('/ws/log'));
-  ws.onopen = () => setWs('log', true);
-  ws.onclose = () => { setWs('log', false); setTimeout(connectLogWs, reconnectDelay()); };
+  ws.onopen = () => { wsBackoff.log = 1000; setWs('log', true); };
+  ws.onclose = () => { setWs('log', false); setTimeout(connectLogWs, reconnectDelay('log')); };
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
     if (msg.type === 'log') {
