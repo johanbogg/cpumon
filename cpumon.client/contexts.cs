@@ -564,9 +564,8 @@ sealed class DaemonContext : ApplicationContext
     {
         while (!ct.IsCancellationRequested)
         {
-            await Task.Delay(200, ct).ConfigureAwait(false);
             StreamReader? r; lock (_tl) { r = _rd; }
-            if (r == null) continue;
+            if (r == null) { try { await Task.Delay(200, ct).ConfigureAwait(false); } catch { } continue; }
             try
             {
                 string? line = await r.ReadLineAsync(ct);

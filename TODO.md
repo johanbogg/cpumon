@@ -242,21 +242,21 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: STAB-004
   priority: medium
-  status: open
+  status: done
   title: CmdLoop adds unconditional Task.Delay(200) per iteration
   files: [cpumon.client/clientform.cs:269, cpumon.client/contexts.cs:569, cpumon.client/service.cs:964]
   fix: Move the delay into the no-reader branch only.
 
 - id: STAB-005
   priority: medium
-  status: open
+  status: done
   title: AdoptPreviousClientState silently drops queued user commands
   files: [cpumon.server/serverengine.cs:1083-1092]
   fix: Either replay restart/shutdown, or log them as dropped.
 
 - id: STAB-006
   priority: medium
-  status: open
+  status: done
   title: Update batch directory ACL race
   files: [cpumon.client/service.cs:680-693]
   fix: Use DirectorySecurity at CreateDirectory time, not after.
@@ -359,7 +359,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: DOC-001
   priority: low
-  status: open
+  status: done
   title: CLAUDE.md says ReleaseStager proceeds without SHA256SUMS; code now throws
   files: [CLAUDE.md, cpumon.server/releasestager.cs:47-48]
   fix: Update CLAUDE.md to reflect strict behavior.

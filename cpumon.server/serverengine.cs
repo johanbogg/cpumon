@@ -1077,7 +1077,7 @@ public sealed class ServerEngine : IDisposable
         return true;
     }
 
-    static void AdoptPreviousClientState(RemoteClient previous, RemoteClient current, bool disposePrevious = false)
+    void AdoptPreviousClientState(RemoteClient previous, RemoteClient current, bool disposePrevious = false)
     {
         current.LastReport = previous.LastReport;
         current.LastProcessList = previous.LastProcessList;
@@ -1087,9 +1087,26 @@ public sealed class ServerEngine : IDisposable
         current.Expanded = previous.Expanded;
         current.IsPaw = previous.IsPaw;
         current.SendMode = "full";
+        int dropped = 0;
+        var droppedNames = new List<string>();
         while (previous.PendingCmds.TryDequeue(out var pc))
+        {
             if (IsReplaySafeCommand(pc.Cmd))
                 current.PendingCmds.Enqueue(pc);
+            else
+            {
+                dropped++;
+                if (droppedNames.Count < 4 && !string.IsNullOrEmpty(pc.Cmd)) droppedNames.Add(pc.Cmd);
+            }
+        }
+        if (dropped > 0)
+        {
+            string list = string.Join(",", droppedNames);
+            if (dropped > droppedNames.Count) list += $",+{dropped - droppedNames.Count} more";
+            _log.Add($"Dropped {dropped} queued cmd(s) on reconnect of {current.MachineName}: {list}", Th.Org);
+            LogSink.Info("Server.AdoptPreviousClientState",
+                $"Dropped {dropped} queued cmd(s) on reconnect of {current.MachineName}: {list}");
+        }
         if (disposePrevious)
             previous.Dispose();
     }

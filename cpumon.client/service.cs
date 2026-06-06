@@ -679,7 +679,6 @@ sealed class CpuMonService : ServiceBase
 
     static void EnsureHardenedDirectory(string path)
     {
-        Directory.CreateDirectory(path);
         var sec = new DirectorySecurity();
         sec.SetOwner(_adminsSid);
         sec.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
@@ -689,7 +688,15 @@ sealed class CpuMonService : ServiceBase
         sec.AddAccessRule(new FileSystemAccessRule(_adminsSid, FileSystemRights.FullControl,
             InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
             PropagationFlags.None, AccessControlType.Allow));
-        new DirectoryInfo(path).SetAccessControl(sec);
+        if (Directory.Exists(path))
+        {
+            // Existing directory: re-apply ACL in place.
+            new DirectoryInfo(path).SetAccessControl(sec);
+            return;
+        }
+        // Atomic create with the security descriptor — no window where the freshly
+        // created directory has the parent's (possibly weaker) inherited ACL.
+        sec.CreateDirectory(path);
     }
 
     static bool HasOnlyTrustedWriters(string path)
@@ -971,10 +978,9 @@ sealed class CpuMonService : ServiceBase
     {
         while (!ct.IsCancellationRequested)
         {
-            await Task.Delay(200, ct).ConfigureAwait(false);
             StreamReader? r;
             lock (_tl) { r = _rd; }
-            if (r == null) continue;
+            if (r == null) { try { await Task.Delay(200, ct).ConfigureAwait(false); } catch { } continue; }
             try
             {
                 string? line = await r.ReadLineAsync(ct);
