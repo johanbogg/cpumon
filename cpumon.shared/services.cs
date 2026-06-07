@@ -72,9 +72,10 @@ public sealed class RdpCaptureSession : IDisposable
             try
             {
                 var sw = Stopwatch.StartNew();
-                CaptureAndSend();
+                int throttleMs = CaptureAndSend();
                 sw.Stop();
                 int delay = Math.Max(1, (1000 / _fps) - (int)sw.ElapsedMilliseconds);
+                if (throttleMs > delay) delay = throttleMs;
                 await Task.Delay(delay, ct);
             }
             catch (OperationCanceledException) { break; }
@@ -82,9 +83,9 @@ public sealed class RdpCaptureSession : IDisposable
         }
     }
 
-    void CaptureAndSend()
+    int CaptureAndSend()
     {
-        if (_disposed) return;
+        if (_disposed) return 0;
 
         var screens = Screen.AllScreens; var screen = screens[Math.Clamp(_monitorIndex, 0, screens.Length - 1)];
         var bounds = screen.Bounds;
@@ -138,7 +139,7 @@ public sealed class RdpCaptureSession : IDisposable
         finally { bmp.UnlockBits(bmpData); }
 
         bool cursorMoved = cursorX != _lastCursorX || cursorY != _lastCursorY;
-        if (changed.Count == 0 && !cursorMoved) return;
+        if (changed.Count == 0 && !cursorMoved) return 0;
         _lastCursorX = cursorX;
         _lastCursorY = cursorY;
 
@@ -164,22 +165,24 @@ public sealed class RdpCaptureSession : IDisposable
 
         var json = JsonSerializer.Serialize(new ClientMessage { Type = "rdp_frame", RdpId = Id, RdpFrame = frame }, Proto.JsonOpts);
         lock (_netLock) { try { _netWriter?.WriteLine(json); _netWriter?.Flush(); } catch { } }
-        ThrottleBandwidth(json.Length);
+        return ThrottleBandwidth(json.Length);
     }
 
-    void ThrottleBandwidth(int bytesSent)
+    // Returns the number of ms the caller should wait before its next capture so
+    // the streaming rate stays under _maxKBps. The caller awaits this delay rather
+    // than blocking the threadpool worker with Thread.Sleep.
+    int ThrottleBandwidth(int bytesSent)
     {
-        if (_maxKBps <= 0) return;
+        if (_maxKBps <= 0) return 0;
         long now = DateTime.UtcNow.Ticks;
-        if (now - _bwSecTicks >= TimeSpan.TicksPerSecond) { _bwBytesThisSec = bytesSent; _bwSecTicks = now; return; }
+        if (now - _bwSecTicks >= TimeSpan.TicksPerSecond) { _bwBytesThisSec = bytesSent; _bwSecTicks = now; return 0; }
         _bwBytesThisSec += bytesSent;
         long cap = (long)_maxKBps * 1024;
-        if (_bwBytesThisSec >= cap)
-        {
-            long msLeft = (TimeSpan.TicksPerSecond - (now - _bwSecTicks)) / TimeSpan.TicksPerMillisecond;
-            if (msLeft > 0) Thread.Sleep((int)msLeft);
-            _bwBytesThisSec = 0; _bwSecTicks = DateTime.UtcNow.Ticks;
-        }
+        if (_bwBytesThisSec < cap) return 0;
+        long msLeft = (TimeSpan.TicksPerSecond - (now - _bwSecTicks)) / TimeSpan.TicksPerMillisecond;
+        _bwBytesThisSec = 0;
+        _bwSecTicks = DateTime.UtcNow.Ticks + TimeSpan.TicksPerMillisecond * Math.Max(0, msLeft);
+        return msLeft > 0 ? (int)msLeft : 0;
     }
 
     static ulong HashTile(nint scan0, int stride, int tx, int ty, int tw, int th)

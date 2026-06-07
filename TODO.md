@@ -322,7 +322,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: PERF-004
   priority: medium
-  status: open
+  status: done
   title: RdpCaptureSession.ThrottleBandwidth uses Thread.Sleep on threadpool task
   files: [cpumon.shared/services.cs:170-183]
   fix: await Task.Delay.
@@ -343,7 +343,7 @@ and (usually) fix. File:line references are agent-supplied — spot-verify befor
 
 - id: PERF-007
   priority: low
-  status: open
+  status: done
   title: ProcDialog.ApplyFilter rebuilds DataGridView on every keystroke
   files: [cpumon.server/serverdialogs.cs:265-281]
   fix: Use Rows.Remove for diffed rows or DataView filter.

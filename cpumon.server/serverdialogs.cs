@@ -191,6 +191,7 @@ sealed class ProcDialog : Form
     readonly DataGridView _grid;
     readonly TextBox _search;
     readonly Timer _timer;
+    readonly Timer _filterDebounce;
     List<ProcessInfo> _all = new();
 
     public ProcDialog(RemoteClient cl)
@@ -206,7 +207,10 @@ sealed class ProcDialog : Form
             BackColor = Th.Card, ForeColor = Th.Brt, BorderStyle = BorderStyle.FixedSingle
         };
         _search.PlaceholderText = "Filter processes...";
-        _search.TextChanged += (_, _) => ApplyFilter();
+        // Debounce keystrokes so each character doesn't trigger a full grid rebuild.
+        _filterDebounce = new Timer { Interval = 150 };
+        _filterDebounce.Tick += (_, _) => { _filterDebounce.Stop(); ApplyFilter(); };
+        _search.TextChanged += (_, _) => { _filterDebounce.Stop(); _filterDebounce.Start(); };
 
         _grid = new DataGridView
         {
@@ -247,7 +251,7 @@ sealed class ProcDialog : Form
         _timer.Tick += (_, _) => _cl.Send(new ServerCommand { Cmd = "listprocesses" });
         _timer.Start();
 
-        FormClosed += (_, _) => { _timer.Stop(); _timer.Dispose(); };
+        FormClosed += (_, _) => { _timer.Stop(); _timer.Dispose(); _filterDebounce.Stop(); _filterDebounce.Dispose(); };
 
         Controls.Add(_grid);
         Controls.Add(_search);
